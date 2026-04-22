@@ -1,0 +1,1092 @@
+/* ==========================================
+   Nivixsa Dashboard — Home Assistant Style CSS
+   ========================================== */
+
+:root {
+    /* HA-inspired color tokens */
+    --ha-primary: #03a9f4;
+    --ha-primary-dark: #0288d1;
+    --ha-accent: #ff9800;
+    --ha-bg: #1c1c1c;
+    --ha-surface: #1e1e1e;
+    --ha-card: #262626;
+    --ha-card-hover: #2e2e2e;
+    --ha-sidebar: #1a1a1a;
+    --ha-sidebar-selected: rgba(3,169,244,.12);
+    --ha-divider: #3a3a3a;
+    --ha-text: #e1e1e1;
+    --ha-text-secondary: #9e9e9e;
+    --ha-text-disabled: #666;
+    --ha-green: #4caf50;
+    --ha-red: #f44336;
+    --ha-yellow: #ff9800;
+    --ha-blue: #03a9f4;
+    --ha-on: #fdd835;
+    --ha-off: #9e9e9e;
+    --ha-radius: 12px;
+    --ha-radius-sm: 8px;
+    --ha-shadow: 0 2px 8px rgba(0,0,0,.3);
+    --ha-sidebar-width: 240px;
+    --ha-transition: .2s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+body {
+    font-family: 'Roboto', system-ui, -apple-system, sans-serif;
+    background: var(--ha-bg);
+    color: var(--ha-text);
+    min-height: 100vh;
+    overflow: hidden;
+}
+
+.hidden { display: none !important; }
+
+/* ===========================
+   Login
+   =========================== */
+.ha-login-overlay {
+    position: fixed; inset: 0;
+    background: var(--ha-bg);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 2000;
+}
+.ha-login-card {
+    background: var(--ha-card);
+    border-radius: var(--ha-radius);
+    padding: 40px 32px;
+    width: 100%; max-width: 400px;
+    text-align: center;
+    box-shadow: var(--ha-shadow);
+}
+.ha-login-icon {
+    margin-bottom: 8px;
+}
+.ha-login-icon .material-symbols-outlined {
+    font-size: 56px;
+    color: var(--ha-primary);
+}
+.ha-logo-img {
+    width: 72px;
+    height: 72px;
+    object-fit: contain;
+}
+.ha-login-card h1 {
+    font-size: 24px; font-weight: 500;
+    margin-bottom: 4px;
+}
+.ha-login-subtitle {
+    color: var(--ha-text-secondary);
+    font-size: 14px; margin-bottom: 24px;
+}
+.ha-error {
+    color: var(--ha-red); font-size: 13px;
+    margin-top: 12px;
+}
+
+/* Material-style floating label fields */
+.ha-field {
+    position: relative;
+    margin-bottom: 16px;
+}
+.ha-field input {
+    width: 100%;
+    padding: 16px 12px 6px;
+    font-size: 14px;
+    font-family: inherit;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    outline: none;
+    transition: border-color var(--ha-transition);
+}
+.ha-field input:focus { border-color: var(--ha-primary); }
+.ha-field label {
+    position: absolute; left: 12px; top: 12px;
+    color: var(--ha-text-secondary);
+    font-size: 14px;
+    pointer-events: none;
+    transition: all var(--ha-transition);
+}
+.ha-field input:focus + label,
+.ha-field input:not(:placeholder-shown) + label,
+.ha-field input[readonly] + label {
+    top: 4px; font-size: 10px;
+    color: var(--ha-primary);
+}
+
+/* Buttons */
+.ha-btn-primary {
+    width: 100%;
+    padding: 12px;
+    font-size: 14px; font-weight: 500;
+    font-family: inherit;
+    background: var(--ha-primary);
+    color: #fff;
+    border: none; border-radius: var(--ha-radius-sm);
+    cursor: pointer;
+    transition: background var(--ha-transition);
+}
+.ha-btn-primary:hover { background: var(--ha-primary-dark); }
+.ha-btn-secondary {
+    width: 100%;
+    padding: 12px;
+    font-size: 14px; font-weight: 500;
+    font-family: inherit;
+    background: transparent;
+    color: var(--ha-primary);
+    border: 1px solid var(--ha-primary); border-radius: var(--ha-radius-sm);
+    cursor: pointer;
+    transition: background var(--ha-transition);
+}
+.ha-btn-secondary:hover { background: rgba(3,169,244,.1); }
+.ha-btn-text {
+    background: none; border: none;
+    color: var(--ha-primary);
+    font-size: 13px; font-weight: 500;
+    cursor: pointer; padding: 6px 12px;
+    border-radius: var(--ha-radius-sm);
+    font-family: inherit;
+}
+.ha-btn-text:hover { background: rgba(3,169,244,.08); }
+
+/* ===========================
+   App Layout — sidebar + main
+   =========================== */
+.ha-app {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+}
+
+/* Sidebar */
+.ha-sidebar {
+    width: var(--ha-sidebar-width);
+    min-width: var(--ha-sidebar-width);
+    background: var(--ha-sidebar);
+    border-right: 1px solid var(--ha-divider);
+    display: flex; flex-direction: column;
+    z-index: 100;
+    overflow-y: auto;
+}
+.ha-sidebar-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 20px 16px 12px;
+}
+.ha-sidebar-logo {
+    font-size: 32px;
+    color: var(--ha-primary);
+}
+.ha-sidebar-logo-img {
+    width: 32px;
+    height: 32px;
+    object-fit: contain;
+}
+.ha-sidebar-title {
+    font-size: 18px; font-weight: 700;
+    letter-spacing: .5px;
+}
+.ha-sidebar-nav {
+    flex: 1;
+    display: flex; flex-direction: column;
+    padding: 4px 8px;
+    gap: 2px;
+}
+.ha-nav-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 12px;
+    background: none; border: none;
+    color: var(--ha-text-secondary);
+    font-size: 14px; font-weight: 400;
+    font-family: inherit;
+    border-radius: var(--ha-radius-sm);
+    cursor: pointer;
+    transition: background var(--ha-transition), color var(--ha-transition);
+    text-align: left;
+}
+.ha-nav-item:hover { background: rgba(255,255,255,.05); color: var(--ha-text); }
+.ha-nav-item.active {
+    background: var(--ha-sidebar-selected);
+    color: var(--ha-primary);
+    font-weight: 500;
+}
+.ha-nav-item .material-symbols-outlined { font-size: 22px; }
+
+.ha-sidebar-footer {
+    padding: 12px 16px;
+    border-top: 1px solid var(--ha-divider);
+    display: flex; flex-direction: column; gap: 6px;
+}
+.ha-connection-status {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--ha-text-secondary);
+}
+.ha-status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--ha-red);
+    display: inline-block;
+    flex-shrink: 0;
+}
+.ha-status-dot.connected { background: var(--ha-green); }
+.ha-device-badge {
+    font-size: 11px;
+    color: var(--ha-text-disabled);
+}
+.ha-logout-btn {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 4px;
+    padding: 8px 12px;
+    background: none; border: none;
+    color: var(--ha-red);
+    font-size: 13px; font-weight: 500;
+    font-family: inherit;
+    border-radius: var(--ha-radius-sm);
+    cursor: pointer;
+    transition: background var(--ha-transition);
+}
+.ha-logout-btn .material-symbols-outlined { font-size: 20px; }
+.ha-logout-btn:hover { background: rgba(244,67,54,.1); }
+
+/* Mobile top bar */
+.ha-mobile-bar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background: var(--ha-sidebar);
+    border-bottom: 1px solid var(--ha-divider);
+}
+.ha-mobile-title { font-size: 16px; font-weight: 700; }
+.ha-icon-btn {
+    background: none; border: none; color: var(--ha-text);
+    cursor: pointer; padding: 8px; border-radius: 50%;
+}
+.ha-icon-btn:hover { background: rgba(255,255,255,.08); }
+
+/* Main content */
+.ha-main {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0;
+}
+.ha-view {
+    display: none;
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+.ha-view.active { display: block; }
+.ha-view-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 20px;
+    flex-wrap: wrap; gap: 12px;
+}
+.ha-view-header h1 {
+    font-size: 22px; font-weight: 400;
+}
+.ha-view-actions {
+    display: flex; align-items: center; gap: 8px;
+}
+
+/* ===========================
+   Badges (HA status pills)
+   =========================== */
+.ha-badges-row {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 20px;
+}
+.ha-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--ha-card);
+    border: 1px solid var(--ha-divider);
+    border-radius: 20px;
+    padding: 6px 14px 6px 8px;
+    font-size: 13px;
+}
+.ha-badge .material-symbols-outlined { font-size: 18px; }
+.ha-badge-value { font-weight: 500; }
+.ha-badge.on .material-symbols-outlined { color: var(--ha-on); }
+.ha-badge.off .material-symbols-outlined { color: var(--ha-off); }
+
+/* ===========================
+   Cards (HA Lovelace style)
+   =========================== */
+.ha-masonry {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 16px;
+    align-items: start;
+}
+.ha-card {
+    background: var(--ha-card);
+    border-radius: var(--ha-radius);
+    overflow: hidden;
+    box-shadow: var(--ha-shadow);
+}
+.ha-card-full { grid-column: 1 / -1; }
+.ha-card-header {
+    display: flex; align-items: center; gap: 8px;
+    padding: 16px 16px 0;
+    font-size: 16px; font-weight: 500;
+    color: var(--ha-text);
+}
+.ha-card-header .material-symbols-outlined {
+    font-size: 20px; color: var(--ha-text-secondary);
+}
+.ha-device-subtitle {
+    padding: 2px 16px 0;
+    font-size: 11px;
+    color: var(--ha-text-disabled);
+}
+
+/* ===========================
+   Entity Rows (HA style)
+   =========================== */
+.ha-entity-rows {
+    padding: 0;
+}
+.ha-entity-row {
+    display: flex; align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+    gap: 12px;
+    transition: background var(--ha-transition);
+    min-height: 52px;
+}
+.ha-entity-row:last-child { border-bottom: none; }
+.ha-entity-row:hover { background: rgba(255,255,255,.03); }
+.ha-entity-row[data-eid] { cursor: pointer; }
+.ha-entity-row[data-eid]:hover { background: rgba(255,255,255,.06); }
+
+.ha-entity-icon {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,.05);
+    flex-shrink: 0;
+}
+.ha-entity-icon .material-symbols-outlined {
+    font-size: 22px;
+    color: var(--ha-off);
+}
+.ha-entity-icon.on .material-symbols-outlined { color: var(--ha-on); }
+.ha-entity-icon.available .material-symbols-outlined { color: var(--ha-green); }
+.ha-entity-icon.unavailable .material-symbols-outlined { color: var(--ha-red); }
+
+.ha-entity-info { flex: 1; min-width: 0; }
+.ha-entity-name {
+    font-size: 14px; font-weight: 400;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ha-entity-state-text {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* HA-style toggle switch */
+.ha-toggle {
+    position: relative;
+    width: 48px; height: 24px;
+    flex-shrink: 0;
+}
+.ha-toggle input { display: none; }
+.ha-toggle-track {
+    width: 48px; height: 24px;
+    border-radius: 12px;
+    background: var(--ha-off);
+    opacity: .38;
+    cursor: pointer;
+    transition: background var(--ha-transition), opacity var(--ha-transition);
+    display: block;
+}
+.ha-toggle input:checked + .ha-toggle-track {
+    background: var(--ha-primary);
+    opacity: 1;
+}
+.ha-toggle-thumb {
+    position: absolute;
+    top: 2px; left: 2px;
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: #fafafa;
+    box-shadow: 0 1px 3px rgba(0,0,0,.4);
+    transition: transform var(--ha-transition);
+    pointer-events: none;
+}
+.ha-toggle input:checked ~ .ha-toggle-thumb {
+    transform: translateX(24px);
+}
+
+/* Entity state value for sensors */
+.ha-entity-value {
+    font-size: 14px; font-weight: 500;
+    color: var(--ha-text);
+    text-align: right;
+    min-width: 60px;
+}
+.ha-entity-value.on { color: var(--ha-on); }
+
+.ha-empty-row {
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--ha-text-disabled);
+    font-size: 13px;
+}
+
+/* ===========================
+   Light controls (brightness / color)
+   =========================== */
+.ha-entity-row-wrap {
+    border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.ha-entity-row-wrap:last-child { border-bottom: none; }
+.ha-entity-row-wrap .ha-entity-row { border-bottom: none; }
+
+.ha-light-controls {
+    padding: 0 16px 12px 68px; /* align with entity info (icon 40px + gap 12px + padding 16px) */
+}
+.ha-slider-row {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 4px;
+}
+.ha-slider-icon {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    flex-shrink: 0;
+}
+.ha-slider-value {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    min-width: 40px;
+    text-align: right;
+    font-family: 'Roboto Mono', monospace;
+}
+
+/* Brightness slider — HA-style track */
+.ha-brightness-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    flex: 1;
+    height: 6px;
+    border-radius: 3px;
+    background: linear-gradient(to right, var(--ha-divider), var(--ha-on));
+    outline: none;
+    cursor: pointer;
+}
+.ha-brightness-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    cursor: pointer;
+}
+.ha-brightness-slider::-moz-range-thumb {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    cursor: pointer;
+    border: none;
+}
+
+/* Color picker */
+.ha-color-picker {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 36px; height: 28px;
+    border: 2px solid var(--ha-divider);
+    border-radius: 6px;
+    background: none;
+    cursor: pointer;
+    padding: 0;
+}
+.ha-color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+.ha-color-picker::-webkit-color-swatch {
+    border: none; border-radius: 4px;
+}
+.ha-color-picker::-moz-color-swatch {
+    border: none; border-radius: 4px;
+}
+
+/* ===========================
+   Charts (HA history style)
+   =========================== */
+.ha-charts-col {
+    display: flex; flex-direction: column;
+    gap: 16px;
+}
+.ha-chart-card {
+    background: var(--ha-card);
+    border-radius: var(--ha-radius);
+    padding: 16px;
+    box-shadow: var(--ha-shadow);
+}
+.ha-chart-card h4 {
+    font-size: 14px; font-weight: 400;
+    color: var(--ha-text-secondary);
+    margin-bottom: 12px;
+}
+.ha-chart-card canvas {
+    width: 100% !important;
+    max-height: 180px;
+}
+
+/* ===========================
+   Log table
+   =========================== */
+.ha-log-wrap {
+    max-height: 65vh;
+    overflow: auto;
+}
+.ha-log-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.ha-log-table th {
+    text-align: left;
+    padding: 10px 16px;
+    font-size: 12px; font-weight: 500;
+    color: var(--ha-text-secondary);
+    background: rgba(255,255,255,.03);
+    position: sticky; top: 0;
+    border-bottom: 1px solid var(--ha-divider);
+}
+.ha-log-table td {
+    padding: 8px 16px;
+    font-size: 12px;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+    vertical-align: top;
+    word-break: break-all;
+}
+.ha-log-table td:first-child {
+    white-space: nowrap;
+    color: var(--ha-text-secondary);
+    font-family: 'Roboto Mono', monospace;
+}
+.ha-log-table td:nth-child(2) { color: var(--ha-primary); }
+.ha-log-table td:nth-child(3) { font-family: 'Roboto Mono', monospace; }
+
+/* Inputs */
+.ha-input-sm {
+    padding: 6px 12px;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    outline: none;
+}
+.ha-input-sm:focus { border-color: var(--ha-primary); }
+
+/* Developer publish form */
+.ha-publish-form {
+    padding: 16px;
+}
+.ha-publish-form .ha-btn-primary,
+.ha-publish-form .ha-btn-secondary {
+    width: auto;
+    display: inline-block;
+    margin-right: 8px;
+    margin-top: 8px;
+}
+#publish-feedback { margin-top: 8px; font-size: 13px; }
+#publish-feedback.ok { color: var(--ha-green); }
+#publish-feedback.err { color: var(--ha-red); }
+
+/* Dev log direction badges */
+.ha-dir-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    font-family: 'Roboto Mono', monospace;
+    letter-spacing: .5px;
+}
+.ha-dir-badge.ha-dev-tx {
+    background: rgba(3, 169, 244, .15);
+    color: var(--ha-blue);
+}
+.ha-dir-badge.ha-dev-rx {
+    background: rgba(76, 175, 80, .15);
+    color: var(--ha-green);
+}
+tr.ha-dev-tx td:nth-child(3) { color: var(--ha-blue); }
+tr.ha-dev-rx td:nth-child(3) { color: var(--ha-green); }
+tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
+.ha-dir-badge.ha-dev-sub {
+    background: rgba(255, 183, 77, .15);
+    color: var(--ha-on);
+}
+
+/* ===========================
+   Responsive
+   =========================== */
+
+/* Sidebar overlay for mobile — click to close */
+.ha-sidebar-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.5);
+    z-index: 499;
+}
+
+@media (max-width: 768px) {
+    html { font-size: 13px; }
+
+    .ha-sidebar {
+        position: fixed;
+        left: -260px;
+        top: 0; bottom: 0;
+        z-index: 500;
+        transition: left var(--ha-transition);
+        box-shadow: 4px 0 24px rgba(0,0,0,.5);
+    }
+    .ha-sidebar.open { left: 0; }
+    .ha-sidebar.open ~ .ha-sidebar-overlay { display: block; }
+
+    .ha-app {
+        flex-direction: column;
+    }
+    .ha-mobile-bar { display: flex; }
+    .ha-main {
+        padding-top: 0;
+        flex: 1;
+        min-height: 0; /* allow flex shrink for scroll */
+    }
+
+    .ha-view {
+        padding: 12px;
+    }
+    .ha-view-header {
+        margin-bottom: 12px;
+    }
+    .ha-view-header h1 {
+        font-size: 18px;
+    }
+
+    /* Cards — single column */
+    .ha-masonry {
+        grid-template-columns: 1fr;
+        gap: 12px;
+    }
+
+    /* Badges wrap nicely */
+    .ha-badges-row {
+        gap: 6px;
+        margin-bottom: 12px;
+    }
+    .ha-badge {
+        padding: 5px 10px 5px 6px;
+        font-size: 12px;
+    }
+
+    /* Entity rows — tighter padding */
+    .ha-entity-row {
+        padding: 10px 12px;
+        gap: 10px;
+    }
+    .ha-entity-icon {
+        width: 36px; height: 36px;
+    }
+    .ha-entity-icon .material-symbols-outlined {
+        font-size: 20px;
+    }
+    .ha-entity-name { font-size: 13px; }
+
+    /* Light controls — less left padding on mobile */
+    .ha-light-controls {
+        padding: 0 12px 10px 58px;
+    }
+
+    /* Login card */
+    .ha-login-card {
+        margin: 16px;
+        padding: 32px 20px;
+    }
+
+    /* Log table horizontal scroll */
+    .ha-log-wrap {
+        max-height: 55vh;
+    }
+    .ha-log-table th,
+    .ha-log-table td {
+        padding: 6px 10px;
+        font-size: 11px;
+    }
+
+    /* Developer publish form */
+    .ha-publish-form {
+        padding: 12px;
+    }
+    .ha-publish-form .ha-input-sm {
+        width: 100%;
+    }
+
+    /* API sections */
+    .ha-api-section {
+        padding: 14px 12px;
+    }
+    .ha-api-code {
+        font-size: 11px;
+        padding: 12px;
+        max-height: 320px;
+    }
+
+    /* Detail panel — full width handled separately */
+    .ha-detail-panel { width: 100vw; }
+    .ha-detail-header { padding: 16px 14px 10px; }
+    .ha-detail-body { padding: 0 14px 14px; }
+    .ha-detail-code { font-size: 11px; padding: 10px; }
+
+    /* Card header */
+    .ha-card-header {
+        padding: 12px 12px 0;
+        font-size: 14px;
+    }
+
+    /* Chart cards */
+    .ha-chart-card {
+        padding: 12px;
+    }
+    .ha-chart-card canvas {
+        max-height: 140px;
+    }
+}
+
+/* Small phones */
+@media (max-width: 400px) {
+    .ha-view { padding: 8px; }
+    .ha-entity-row { padding: 8px 10px; gap: 8px; }
+    .ha-entity-icon { width: 32px; height: 32px; }
+    .ha-entity-icon .material-symbols-outlined { font-size: 18px; }
+    .ha-light-controls { padding: 0 10px 8px 50px; }
+    .ha-toggle { width: 42px; height: 22px; }
+    .ha-toggle-track { width: 42px; height: 22px; }
+    .ha-toggle-thumb { width: 18px; height: 18px; }
+    .ha-toggle input:checked ~ .ha-toggle-thumb { transform: translateX(20px); }
+    .ha-login-card { padding: 24px 16px; }
+    .ha-badge { font-size: 11px; padding: 4px 8px 4px 5px; }
+}
+.ha-detail-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.5);
+    z-index: 1000;
+    display: flex; justify-content: flex-end;
+    animation: fadeIn .15s ease;
+}
+.ha-detail-overlay.hidden { display: none; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+
+.ha-detail-panel {
+    width: 480px; max-width: 100vw;
+    height: 100vh;
+    background: var(--ha-card);
+    overflow-y: auto;
+    box-shadow: -4px 0 24px rgba(0,0,0,.5);
+    animation: slideIn .2s ease;
+    display: flex; flex-direction: column;
+}
+.ha-detail-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    padding: 20px 20px 12px;
+    border-bottom: 1px solid var(--ha-divider);
+    position: sticky; top: 0;
+    background: var(--ha-card);
+    z-index: 1;
+}
+.ha-detail-title-row {
+    display: flex; align-items: center; gap: 12px;
+}
+.ha-detail-icon {
+    font-size: 32px;
+    color: var(--ha-primary);
+}
+.ha-detail-header h2 {
+    font-size: 18px; font-weight: 500;
+    margin: 0;
+}
+.ha-detail-type {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    text-transform: capitalize;
+}
+.ha-detail-body {
+    flex: 1;
+    padding: 0 20px 20px;
+    overflow-y: auto;
+}
+.ha-detail-section {
+    margin-top: 20px;
+}
+.ha-detail-section h3 {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .8px;
+    color: var(--ha-text-secondary);
+    margin-bottom: 8px;
+}
+.ha-detail-code {
+    background: var(--ha-bg);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    padding: 12px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 12px;
+    color: var(--ha-text);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.ha-detail-config-code {
+    max-height: 300px;
+}
+.ha-detail-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.ha-detail-table td {
+    padding: 6px 0;
+    font-size: 13px;
+    vertical-align: top;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.ha-detail-table td:first-child {
+    color: var(--ha-text-secondary);
+    font-weight: 500;
+    width: 140px;
+    padding-right: 12px;
+}
+.ha-detail-table .ha-topic-val {
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11px;
+    word-break: break-all;
+    color: var(--ha-primary);
+    cursor: pointer;
+}
+.ha-detail-table .ha-topic-val:hover {
+    text-decoration: underline;
+}
+.ha-detail-commands {
+    display: flex; flex-direction: column; gap: 6px;
+}
+.ha-cmd-row {
+    display: flex; align-items: center; gap: 8px;
+}
+.ha-cmd-label {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    min-width: 90px;
+}
+.ha-cmd-code {
+    flex: 1;
+    background: var(--ha-bg);
+    border: 1px solid var(--ha-divider);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 11px;
+    color: var(--ha-text);
+    cursor: pointer;
+    word-break: break-all;
+}
+.ha-cmd-code:hover { border-color: var(--ha-primary); }
+.ha-cmd-send {
+    background: var(--ha-primary);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
+    font-family: inherit;
+    white-space: nowrap;
+}
+.ha-cmd-send:hover { background: var(--ha-primary-dark); }
+
+/* Topic subscribe buttons in detail panel */
+.ha-topic-sub {
+    background: transparent;
+    color: var(--ha-primary);
+    border: 1px solid var(--ha-primary);
+    border-radius: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+    font-size: 10px;
+    font-weight: 500;
+    font-family: inherit;
+    white-space: nowrap;
+    transition: all .15s ease;
+}
+.ha-topic-sub:hover { background: rgba(3,169,244,.15); }
+.ha-topic-sub.subscribed { background: var(--ha-green); color: #fff; border-color: var(--ha-green); }
+
+/* Quick access buttons row */
+.ha-detail-quick-btns {
+    display: flex; gap: 8px;
+}
+.ha-detail-quick-btns .ha-btn-primary,
+.ha-detail-quick-btns .ha-btn-secondary {
+    flex: 1;
+}
+
+.ha-detail-quick {
+    display: flex; flex-direction: column; gap: 10px;
+}
+.ha-copied-toast {
+    position: fixed;
+    bottom: 24px; left: 50%;
+    transform: translateX(-50%);
+    background: var(--ha-primary);
+    color: #fff;
+    padding: 8px 20px;
+    border-radius: 20px;
+    font-size: 13px;
+    z-index: 2000;
+    animation: fadeIn .15s ease;
+}
+
+/* ===========================
+   Offline entities (MQTT availability = NO)
+   =========================== */
+.ha-offline {
+    opacity: 0.45;
+    filter: grayscale(60%);
+}
+.ha-offline .ha-entity-state-text {
+    color: var(--ha-red);
+    font-weight: 500;
+}
+.ha-offline .ha-toggle input:disabled + .ha-toggle-track {
+    background: var(--ha-divider);
+    cursor: not-allowed;
+}
+
+/* ===========================
+   API Details Tab
+   =========================== */
+.ha-api-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px 0;
+}
+.ha-api-section {
+    background: var(--ha-card);
+    border-radius: var(--ha-radius);
+    padding: 20px 24px;
+    box-shadow: var(--ha-shadow);
+}
+.ha-api-section h4 {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ha-primary);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ha-api-section h4 .material-symbols-outlined {
+    font-size: 20px;
+}
+.ha-api-section table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.ha-api-section table th,
+.ha-api-section table td {
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--ha-divider);
+}
+.ha-api-section table th {
+    color: var(--ha-text-secondary);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+}
+.ha-api-section table td {
+    color: var(--ha-text);
+    font-family: 'Roboto Mono', monospace;
+    font-size: 12px;
+}
+.ha-api-section table tr:last-child td,
+.ha-api-section table tr:last-child th {
+    border-bottom: none;
+}
+.ha-api-section pre {
+    background: var(--ha-bg);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    padding: 14px 16px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow-x: auto;
+    color: var(--ha-text);
+    white-space: pre;
+    margin: 0;
+}
+
+/* Language selector tabs */
+.ha-lang-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+.ha-lang-tab {
+    background: var(--ha-bg);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all var(--ha-transition);
+}
+.ha-lang-tab:hover {
+    color: var(--ha-text);
+    border-color: var(--ha-text-secondary);
+}
+.ha-lang-tab.active {
+    background: var(--ha-primary);
+    color: #fff;
+    border-color: var(--ha-primary);
+}
+
+/* Code examples block */
+.ha-api-code {
+    background: var(--ha-bg);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    padding: 16px 18px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 12px;
+    line-height: 1.7;
+    overflow-x: auto;
+    max-height: 480px;
+    overflow-y: auto;
+    color: var(--ha-text);
+    white-space: pre;
+    margin: 0;
+    tab-size: 4;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--ha-divider); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ha-text-secondary); }

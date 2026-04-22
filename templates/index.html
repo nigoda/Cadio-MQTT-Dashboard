@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nivixsa — Home</title>
+    <link rel="stylesheet" href="/static/css/style.css?v={{ cache_bust }}">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
+    <link rel="icon" type="image/png" href="/static/Logo.png">
+</head>
+<body>
+
+<!-- ===== Login Overlay ===== -->
+<div id="login-overlay" class="ha-login-overlay">
+    <div class="ha-login-card">
+        <div class="ha-login-icon">
+            <img src="/static/Logo.png" alt="Nivixsa" class="ha-logo-img">
+        </div>
+        <h1>Nivixsa</h1>
+        <p class="ha-login-subtitle">Log in to your smart home</p>
+        <form id="login-form">
+            <div class="ha-field">
+                <input type="text" id="login-email" value="{{ mqtt_user }}" placeholder=" " required>
+                <label>Email</label>
+            </div>
+            <div class="ha-field">
+                <input type="password" id="login-password" placeholder=" " autofocus required>
+                <label>Password</label>
+            </div>
+            <button type="submit" class="ha-btn-primary">Log In</button>
+        </form>
+        <p id="login-error" class="ha-error hidden"></p>
+    </div>
+</div>
+
+<!-- ===== Main App ===== -->
+<div id="app" class="hidden ha-app">
+
+    <!-- Sidebar -->
+    <aside id="ha-sidebar" class="ha-sidebar">
+        <div class="ha-sidebar-header">
+            <img src="/static/Logo.png" alt="Nivixsa" class="ha-sidebar-logo-img">
+            <span class="ha-sidebar-title">Nivixsa</span>
+        </div>
+        <nav class="ha-sidebar-nav">
+            <button class="ha-nav-item active" data-tab="overview">
+                <span class="material-symbols-outlined">dashboard</span>
+                <span>Overview</span>
+            </button>
+            <button class="ha-nav-item" data-tab="lights">
+                <span class="material-symbols-outlined">lightbulb</span>
+                <span>Lights</span>
+            </button>
+            <button class="ha-nav-item" data-tab="switches">
+                <span class="material-symbols-outlined">toggle_on</span>
+                <span>Switches</span>
+            </button>
+            <button class="ha-nav-item" data-tab="sensors">
+                <span class="material-symbols-outlined">sensors</span>
+                <span>Sensors</span>
+            </button>
+            <button class="ha-nav-item" data-tab="history">
+                <span class="material-symbols-outlined">show_chart</span>
+                <span>History</span>
+            </button>
+            <button class="ha-nav-item" data-tab="log">
+                <span class="material-symbols-outlined">receipt_long</span>
+                <span>Logbook</span>
+            </button>
+            <button class="ha-nav-item" data-tab="developer">
+                <span class="material-symbols-outlined">code</span>
+                <span>Developer</span>
+            </button>
+            <button class="ha-nav-item" data-tab="api">
+                <span class="material-symbols-outlined">api</span>
+                <span>API Details</span>
+            </button>
+        </nav>
+        <div class="ha-sidebar-footer">
+            <div class="ha-connection-status">
+                <span id="status-indicator" class="ha-status-dot"></span>
+                <span id="status-text">Connecting…</span>
+            </div>
+            <span id="device-count" class="ha-device-badge">0 entities</span>
+            <button id="btn-logout" class="ha-logout-btn">
+                <span class="material-symbols-outlined">logout</span>
+                <span>Log out</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- Sidebar overlay (mobile — tap to close) -->
+    <div id="sidebar-overlay" class="ha-sidebar-overlay"></div>
+
+    <!-- Mobile top bar -->
+    <header class="ha-mobile-bar">
+        <button id="sidebar-toggle" class="ha-icon-btn">
+            <span class="material-symbols-outlined">menu</span>
+        </button>
+        <span class="ha-mobile-title">Nivixsa</span>
+        <div>
+            <span id="status-indicator-mobile" class="ha-status-dot"></span>
+        </div>
+    </header>
+
+    <!-- Main content area -->
+    <main class="ha-main">
+
+        <!-- ===== Overview Tab ===== -->
+        <section id="tab-overview" class="ha-view active">
+            <div class="ha-view-header"><h1>Overview</h1></div>
+            <div id="status-badges" class="ha-badges-row"></div>
+            <div id="overview-devices" class="ha-masonry">
+                <div class="ha-card"><div class="ha-empty-row">Waiting for devices…</div></div>
+            </div>
+        </section>
+
+        <!-- ===== Lights Tab ===== -->
+        <section id="tab-lights" class="ha-view">
+            <div class="ha-view-header"><h1>Lights</h1></div>
+            <div id="lights-devices" class="ha-masonry">
+                <div class="ha-card"><div class="ha-empty-row">No lights discovered yet…</div></div>
+            </div>
+        </section>
+
+        <!-- ===== Switches Tab ===== -->
+        <section id="tab-switches" class="ha-view">
+            <div class="ha-view-header"><h1>Switches</h1></div>
+            <div id="switches-devices" class="ha-masonry">
+                <div class="ha-card"><div class="ha-empty-row">No switches discovered yet…</div></div>
+            </div>
+        </section>
+
+        <!-- ===== Sensors Tab ===== -->
+        <section id="tab-sensors" class="ha-view">
+            <div class="ha-view-header"><h1>Sensors</h1></div>
+            <div id="sensors-badges" class="ha-badges-row"></div>
+            <div id="sensors-devices" class="ha-masonry">
+                <div class="ha-card"><div class="ha-empty-row">No sensors discovered yet…</div></div>
+            </div>
+        </section>
+
+        <!-- ===== History Tab ===== -->
+        <section id="tab-history" class="ha-view">
+            <div class="ha-view-header"><h1>History</h1></div>
+            <div id="sensor-charts" class="ha-charts-col">
+                <div class="ha-card"><div class="ha-empty-row">No history data yet…</div></div>
+            </div>
+        </section>
+
+        <!-- ===== Logbook Tab ===== -->
+        <section id="tab-log" class="ha-view">
+            <div class="ha-view-header">
+                <h1>Logbook</h1>
+                <div class="ha-view-actions">
+                    <input type="text" id="log-filter" class="ha-input-sm" placeholder="Filter…">
+                    <button id="btn-clear-log" class="ha-btn-text">Clear</button>
+                </div>
+            </div>
+            <div class="ha-card">
+                <div id="log-container" class="ha-log-wrap">
+                    <table class="ha-log-table">
+                        <thead><tr><th>Time</th><th>Entity</th><th>State</th></tr></thead>
+                        <tbody id="log-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== Developer Tab ===== -->
+        <section id="tab-developer" class="ha-view">
+            <div class="ha-view-header"><h1>Developer Tools</h1></div>
+            <div class="ha-masonry">
+                <div class="ha-card">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">send</span> MQTT Publish
+                    </div>
+                    <div class="ha-publish-form">
+                        <div class="ha-field">
+                            <input type="text" id="pub-topic" placeholder=" " list="topic-list">
+                            <label>Topic</label>
+                            <datalist id="topic-list"></datalist>
+                        </div>
+                        <div class="ha-field">
+                            <input type="text" id="pub-payload" placeholder=" ">
+                            <label>Payload</label>
+                        </div>
+                        <button id="btn-publish" class="ha-btn-primary">Publish</button>
+                        <button id="btn-subscribe" class="ha-btn-secondary">Subscribe</button>
+                        <p id="publish-feedback" class="hidden"></p>
+                    </div>
+                </div>
+                <div class="ha-card ha-card-full">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">terminal</span> Live MQTT Messages
+                        <button id="btn-clear-dev-log" class="ha-btn-text" style="margin-left:auto">Clear</button>
+                    </div>
+                    <div class="ha-log-wrap" style="max-height:300px">
+                        <table class="ha-log-table">
+                            <thead><tr><th>Time</th><th>Direction</th><th>Topic</th><th>Payload</th></tr></thead>
+                            <tbody id="dev-log-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="ha-card">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">list</span> All Entities
+                    </div>
+                    <div id="all-entities-list" class="ha-entity-rows"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== API Details Tab ===== -->
+        <section id="tab-api" class="ha-view">
+            <div class="ha-view-header"><h1>API Details</h1></div>
+
+            <div class="ha-api-stack">
+
+                <!-- Connection Info -->
+                <div class="ha-card">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">link</span> Connection Info
+                    </div>
+                    <div class="ha-api-section">
+                        <table class="ha-detail-table">
+                            <tr><td>Login API</td><td class="ha-topic-val">POST https://egycad.com/apis/cadio/login</td></tr>
+                            <tr><td>MQTT Broker</td><td id="api-broker">—</td></tr>
+                            <tr><td>MQTT Port</td><td id="api-port">—</td></tr>
+                            <tr><td>Discovery Prefix</td><td id="api-prefix">—</td></tr>
+                            <tr><td>Protocol</td><td>MQTT v3.1.1</td></tr>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Topic Structure -->
+                <div class="ha-card">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">account_tree</span> Topic Structure
+                    </div>
+                    <div class="ha-api-section">
+                        <pre class="ha-detail-code">{prefix}/{type}/{account_id}/{serial_channel}/{action}
+
+Examples:
+  homeassistant/light/d11cdb3057224ee6/2CF4327CA967_6/set      → Send command
+  homeassistant/light/d11cdb3057224ee6/2CF4327CA967_6/state    → Read state
+  homeassistant/light/d11cdb3057224ee6/2CF4327CA967_6/config   → Discovery config
+  homeassistant/switch/d11cdb3057224ee6/A4CF12F03246_0/set     → Send command
+
+Actions:
+  /config         Discovery config (auto-detected)
+  /state          Current state (read-only, published by device)
+  /set            Send commands (write)
+  /availability   Online status (YES / NO)</pre>
+                    </div>
+                </div>
+
+                <!-- Payloads -->
+                <div class="ha-card">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">data_object</span> Payload Reference
+                    </div>
+                    <div class="ha-api-section">
+                        <h4>Switch — Command (/set)</h4>
+                        <pre class="ha-detail-code">{"state":"ON"}
+{"state":"OFF"}</pre>
+                        <h4>Switch — State (/state, read-only)</h4>
+                        <pre class="ha-detail-code">{"state":"ON"}
+{"state":"OFF"}</pre>
+                        <h4>Dimmer Light — Command (/set)</h4>
+                        <pre class="ha-detail-code">{"state":"ON","brightness":75}
+{"state":"OFF"}</pre>
+                        <h4>Dimmer Light — State (/state, read-only)</h4>
+                        <pre class="ha-detail-code">{"state":"ON","brightness":100}</pre>
+                        <h4>RGB Light — Command (/set)</h4>
+                        <pre class="ha-detail-code">{"state":"ON","brightness":80,"color":{"r":255,"g":0,"b":128}}
+{"state":"OFF"}</pre>
+                        <h4>RGB Light — State (/state, read-only)</h4>
+                        <pre class="ha-detail-code">{"state":"ON","brightness":40,"color_mode":"rgb","color":{"r":71,"g":5,"b":5}}</pre>
+                        <h4>Availability (/availability, read-only)</h4>
+                        <pre class="ha-detail-code">YES    → Device is online
+NO     → Device is offline (Last Will message from broker)</pre>
+                    </div>
+                </div>
+
+                <!-- Language selector -->
+                <div class="ha-card ha-card-full">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">integration_instructions</span> Code Examples
+                    </div>
+                    <div class="ha-api-section">
+                        <div class="ha-lang-tabs">
+                            <button class="ha-lang-tab active" data-lang="python">Python</button>
+                            <button class="ha-lang-tab" data-lang="javascript">JavaScript</button>
+                            <button class="ha-lang-tab" data-lang="java">Java</button>
+                            <button class="ha-lang-tab" data-lang="csharp">C#</button>
+                            <button class="ha-lang-tab" data-lang="curl">cURL</button>
+                            <button class="ha-lang-tab" data-lang="go">Go</button>
+                        </div>
+                        <div id="api-code-examples"></div>
+                    </div>
+                </div>
+
+                <!-- Your Entities -->
+                <div class="ha-card ha-card-full">
+                    <div class="ha-card-header">
+                        <span class="material-symbols-outlined">devices</span> Your Entities
+                    </div>
+                    <div class="ha-api-section">
+                        <p style="color:var(--ha-text-secondary);font-size:13px;margin-bottom:12px">Click any entity above to see its specific topics and commands. Below is a summary of all command topics:</p>
+                        <div id="api-entities-table"></div>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ===== Entity Detail Panel ===== -->
+    <div id="detail-overlay" class="ha-detail-overlay hidden">
+        <div id="detail-panel" class="ha-detail-panel">
+            <div class="ha-detail-header">
+                <div class="ha-detail-title-row">
+                    <span id="detail-icon" class="material-symbols-outlined ha-detail-icon"></span>
+                    <div>
+                        <h2 id="detail-name"></h2>
+                        <span id="detail-type" class="ha-detail-type"></span>
+                    </div>
+                </div>
+                <button id="detail-close" class="ha-icon-btn">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div class="ha-detail-body">
+                <!-- State -->
+                <div class="ha-detail-section">
+                    <h3>Current State</h3>
+                    <pre id="detail-state" class="ha-detail-code"></pre>
+                </div>
+                <!-- Device Info -->
+                <div class="ha-detail-section">
+                    <h3>Device</h3>
+                    <table id="detail-device" class="ha-detail-table"></table>
+                </div>
+                <!-- Topics / API -->
+                <div class="ha-detail-section">
+                    <h3>MQTT Topics</h3>
+                    <table id="detail-topics" class="ha-detail-table"></table>
+                </div>
+                <!-- Commands -->
+                <div id="detail-commands-section" class="ha-detail-section">
+                    <h3>Available Commands</h3>
+                    <div id="detail-commands" class="ha-detail-commands"></div>
+                </div>
+                <!-- Quick Access -->
+                <div id="detail-quick-section" class="ha-detail-section">
+                    <h3>Quick Access</h3>
+                    <div class="ha-detail-quick">
+                        <div class="ha-field">
+                            <input type="text" id="detail-pub-topic" placeholder=" ">
+                            <label>Topic</label>
+                        </div>
+                        <div class="ha-field">
+                            <input type="text" id="detail-pub-payload" placeholder=" " value='{"state":"ON"}'>
+                            <label>Payload</label>
+                        </div>
+                        <div class="ha-detail-quick-btns">
+                            <button id="detail-pub-btn" class="ha-btn-primary">Publish</button>
+                            <button id="detail-sub-btn" class="ha-btn-secondary">Subscribe</button>
+                        </div>
+                        <p id="detail-pub-feedback" class="hidden"></p>
+                    </div>
+                </div>
+                <!-- Full Config -->
+                <div class="ha-detail-section">
+                    <h3>Discovery Config</h3>
+                    <pre id="detail-config" class="ha-detail-code ha-detail-config-code"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="/static/js/dashboard.js?v={{ cache_bust }}"></script>
+</body>
+</html>
