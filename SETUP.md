@@ -35,6 +35,34 @@ Open **http://localhost:5000** in your browser.
 
 ---
 
+---
+
+## Ngrok - public host
+
+```bash
+#Step 1: Install ngrok (if not already installed)
+npm install -g ngrok
+# or if using apt:
+# curl https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.zip -o ngrok.zip
+# unzip ngrok.zip && sudo mv ngrok /usr/local/bin/
+
+
+#Step 2: Start your Flask app
+cd /workspaces/Cadio-MQTT-Dashboard
+python app.py
+
+
+#Create a free ngrok account → https://dashboard.ngrok.com/signup
+
+#Get your authtoken → https://dashboard.ngrok.com/get-started/your-authtoken
+
+#Configure ngrok with your token:
+#Step 3: Open another terminal and expose it with ngrok
+ngrok config add-authtoken YOUR_TOKEN_HERE
+ngrok http 5000
+```
+---
+
 ## What Happens on Startup
 
 1. The app calls the Nivixsa login API (`https://egycad.com/apis/cadio/login`) to get MQTT broker details
