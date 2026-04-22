@@ -28,6 +28,7 @@ pip install -r requirements.txt
 
 # 5. Run the dashboard
 python app.py
+Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force; cd $path$; .venv\Scripts\python.exe app.py
 ```
 
 Open **http://localhost:5000** in your browser.
