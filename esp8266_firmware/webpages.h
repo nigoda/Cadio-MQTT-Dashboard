@@ -282,22 +282,85 @@ function renderDevices(devs){
     if(d.type==='sensor'||d.type==='binary_sensor'){
       h+="<div class='dev-val'>"+stateLabel(curState)+"</div>";
     } else {
+
+      // STATE BADGE
       var bc=badgeClass(curState);
-      h+="<span class='badge "+(hasState?bc:'warn')+"' id='badge-"+btoa(d.cmd).replace(/=/g,'')+'>'+stateLabel(curState)+"</span>";
+
+      h+="<span class='badge "+(hasState?bc:'warn')+"' ";
+      h+="id='badge-"+btoa(d.cmd).replace(/=/g,'')+"'>";
+      h+=stateLabel(curState);
+      h+="</span>";
+
+      // TOGGLE
       if(canCtrl){
-        var chk=isOn?'checked':'';
-        var dis=cached.pending?'disabled':'';
+
+        var chk=isOn ? 'checked' : '';
+        var dis=cached.pending ? 'disabled' : '';
+
         h+="<div class='toggle-row'>";
-        h+="<span class='toggle-lbl'>"+(hasState?(isOn?'ON':'OFF'):'--')+"</span>";
-        h+="<label class='toggle'><input type='checkbox' "+chk+' '+dis+" onchange=\"toggleCmd(this,'"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"')\">"
-          +"<span class='slider'></span></label>";
+
+        h+="<span class='toggle-lbl'>";
+        h+=hasState ? (isOn ? 'ON':'OFF') : '--';
+        h+="</span>";
+
+        h+="<label class='toggle'>";
+
+        h+="<input type='checkbox' ";
+        h+=chk+' '+dis;
+
+        h+=" onchange=\"toggleCmd(this,'";
+        h+=key.replace(/"/g,'&quot;');
+        h+="','";
+        h+=safeCmd;
+        h+="')\">";
+
+        h+="<span class='slider'></span>";
+
+        h+="</label>";
+
         h+="</div>";
       }
+
+      // BRIGHTNESS INSIDE LIGHT CARD
       if(canBrightness){
-        var bri=(typeof d.brightness==='number'&&d.brightness>=0)?d.brightness:0;
-        h+="<div class='light-wrap'>";
-        h+="<div class='light-meta'><span>Brightness</span><span id='bri-val-"+btoa(d.cmd).replace(/=/g,'')+"'>"+bri+"%</span></div>";
-        h+="<input class='light-range' type='range' min='0' max='100' value='"+bri+"' oninput=\"this.previousElementSibling.querySelector('span:last-child').textContent=this.value+'%'\" onchange=\"sendBrightness('"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"',this.value)\">";
+
+        var bri=
+          (typeof d.brightness==='number' && d.brightness>=0)
+          ? d.brightness
+          : 0;
+
+        var briId='bri-val-'+btoa(d.cmd).replace(/=/g,'');
+
+        h+="<div style='margin-top:10px'>";
+
+        h+="<div style='display:flex;";
+        h+="justify-content:space-between;";
+        h+="font-size:.72rem;";
+        h+="color:#94a3b8;";
+        h+="margin-bottom:4px'>";
+
+        h+="<span>Brightness</span>";
+        h+="<span id='"+briId+"'>"+bri+"%</span>";
+
+        h+="</div>";
+
+        h+="<input ";
+        h+="class='light-range' ";
+        h+="type='range' ";
+        h+="min='0' ";
+        h+="max='100' ";
+        h+="value='"+bri+"' ";
+
+        h+="oninput=\"document.getElementById('";
+        h+=briId;
+        h+="').textContent=this.value+'%'\" ";
+
+        h+="onchange=\"sendBrightness('";
+        h+=key.replace(/"/g,'&quot;');
+        h+="','";
+        h+=safeCmd;
+        h+="',this.value)\">";
+
         h+="</div>";
       }
     }
