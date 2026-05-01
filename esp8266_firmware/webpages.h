@@ -272,6 +272,9 @@ function renderDevices(devs){
     if(d.device_id){
       h+="<div class='dev-id'>ID: "+d.device_id+"</div>";
     }
+    if(d.serial){
+      h+="<div class='dev-id'>Serial: "+d.serial+"</div>";
+    }
     if(d.type==='sensor'||d.type==='binary_sensor'){
       h+="<div class='dev-val'>"+stateLabel(curState)+"</div>";
     } else {

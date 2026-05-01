@@ -45,6 +45,7 @@ int msgBufHead = 0;
 #define MAX_DEVICES     20
 #define DEV_NAME_LEN    48
 #define DEV_ID_LEN      48
+#define DEV_SERIAL_LEN  48
 #define DEV_TYPE_LEN    16
 #define DEV_TOPIC_LEN   96
 #define DEV_STATE_LEN   48
@@ -53,6 +54,7 @@ struct IoTDevice {
   bool   active;
   char   name[DEV_NAME_LEN];
   char   deviceId[DEV_ID_LEN];
+  char   serialId[DEV_SERIAL_LEN];
   char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
@@ -191,6 +193,7 @@ void handleApiData() {
     firstDev = false;
       String id    = String(devices[i].stateTopic);
       String deviceId = String(devices[i].deviceId); deviceId.replace("\\", "\\\\"); deviceId.replace("\"", "\\\"");
+      String serial = String(devices[i].serialId); serial.replace("\\", "\\\\"); serial.replace("\"", "\\\"");
       String name  = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
       String type  = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
       String state = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
@@ -199,6 +202,7 @@ void handleApiData() {
     json += "{";
       json += "\"id\":\"" + id + "\",";
       json += "\"device_id\":\"" + deviceId + "\",";
+      json += "\"serial\":\"" + serial + "\",";
     json += "\"name\":\"" + name + "\",";
       json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
@@ -325,8 +329,11 @@ void parseConfigMsg(const String &topic, const String &payload) {
   if (s2 < 0) return;
   int s3 = topic.indexOf('/', s2 + 1);
   if (s3 < 0) return;
+  int s4 = topic.indexOf('/', s3 + 1);
+  if (s4 < 0) return;
   String entityType = topic.substring(s1 + 1, s2);
   String deviceId = topic.substring(s2 + 1, s3);
+  String serialId = topic.substring(s3 + 1, s4);
 
   // Only handle controllable / displayable types
   if (entityType != "switch" && entityType != "light" &&
@@ -355,11 +362,13 @@ void parseConfigMsg(const String &topic, const String &payload) {
   devices[slot].active = true;
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
   strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
+  strncpy(devices[slot].serialId,   serialId.c_str(),                      DEV_SERIAL_LEN - 1);
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
   devices[slot].name[DEV_NAME_LEN - 1]       = '\0';
   devices[slot].deviceId[DEV_ID_LEN - 1]     = '\0';
+  devices[slot].serialId[DEV_SERIAL_LEN - 1] = '\0';
   devices[slot].type[DEV_TYPE_LEN - 1]       = '\0';
   devices[slot].stateTopic[DEV_TOPIC_LEN - 1] = '\0';
   devices[slot].cmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
