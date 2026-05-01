@@ -234,6 +234,10 @@ function isOnState(s){
   return s==='ON'||s==='1'||s==='TRUE'||s==='OPEN'||s==='LOCKED';
 }
 
+function devKey(d){
+  return d.id || d.cmd || d.name || '';
+}
+
 function renderDevices(devs){
   var g=$('dev-grid');
   if(!devs||devs.length===0){
@@ -241,11 +245,16 @@ function renderDevices(devs){
     return;
   }
   // Merge incoming states into cache (skip if optimistic pending)
-  devs.forEach(function(d){ if(!devCache[d.cmd]||!devCache[d.cmd].pending) devCache[d.cmd]={state:d.state,pending:false}; });
+  devs.forEach(function(d){
+    var key=devKey(d);
+    if(!key) return;
+    if(!devCache[key]||!devCache[key].pending) devCache[key]={state:d.state,pending:false};
+  });
 
   var h='';
   devs.forEach(function(d){
-    var cached=devCache[d.cmd]||{state:d.state,pending:false};
+    var key=devKey(d);
+    var cached=devCache[key]||{state:d.state,pending:false};
     var curState=cached.state||d.state||'';
     var isOn=isOnState(curState);
     var canCtrl=d.cmd&&(d.type==='switch'||d.type==='light'||d.type==='lock'||d.type==='fan'||d.type==='cover');
@@ -264,7 +273,7 @@ function renderDevices(devs){
         var dis=cached.pending?'disabled':'';
         h+="<div class='toggle-row'>";
         h+="<span class='toggle-lbl'>"+(isOn?'ON':'OFF')+"</span>";
-        h+="<label class='toggle'><input type='checkbox' "+chk+' '+dis+" onchange=\"toggleCmd(this,'"+safeCmd+"')\">"
+        h+="<label class='toggle'><input type='checkbox' "+chk+' '+dis+" onchange=\"toggleCmd(this,'"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"')\">"
           +"<span class='slider'></span></label>";
         h+="</div>";
       }
@@ -308,22 +317,22 @@ function refresh(){
     .catch(function(){dot.classList.remove('pulse');});
 }
 
-function toggleCmd(checkbox, topic){
+function toggleCmd(checkbox, key, topic){
   var newState = checkbox.checked ? 'ON' : 'OFF';
   // Optimistic update
-  if(!devCache[topic]) devCache[topic]={state:newState,pending:true};
-  devCache[topic].state   = newState;
-  devCache[topic].pending = true;
+  if(!devCache[key]) devCache[key]={state:newState,pending:true};
+  devCache[key].state   = newState;
+  devCache[key].pending = true;
   checkbox.disabled = true;
 
   fetch('/cmd?topic='+encodeURIComponent(topic)+'&payload='+encodeURIComponent(newState))
     .then(function(r){return r.json();})
     .then(function(d){
-      if(!d.ok){ alert('Command failed: '+(d.msg||'error')); devCache[topic].pending=false; }
+      if(!d.ok){ alert('Command failed: '+(d.msg||'error')); devCache[key].pending=false; }
       // Refresh quickly to get real broker state
-      setTimeout(function(){ devCache[topic].pending=false; refresh(); }, 1200);
+      setTimeout(function(){ if(devCache[key]) devCache[key].pending=false; refresh(); }, 1200);
     })
-    .catch(function(){ devCache[topic].pending=false; setTimeout(refresh,1200); });
+    .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,1200); });
 }
 
 // Populate static fields from placeholders baked in at serve time
@@ -333,7 +342,7 @@ $('d-broker').textContent = BROKER+':'+BROKER_PORT;
 $('d-email').textContent  = EMAIL;
 
 refresh();
-setInterval(refresh, 10000);
+setInterval(refresh, 2000);
 </script>
 </body>
 </html>

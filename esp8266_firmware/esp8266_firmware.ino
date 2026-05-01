@@ -187,12 +187,16 @@ void handleApiData() {
     if (!devices[i].active) continue;
     if (!firstDev) json += ",";
     firstDev = false;
-    String name  = String(devices[i].name);  name.replace("\"", "'");
-    String state = String(devices[i].state); state.replace("\"", "'");
-    String cmd   = String(devices[i].cmdTopic);
+      String id    = String(devices[i].stateTopic);
+      String name  = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
+      String type  = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
+      String state = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
+      String cmd   = String(devices[i].cmdTopic); cmd.replace("\\", "\\\\"); cmd.replace("\"", "\\\"");
+      id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
+      json += "\"id\":\"" + id + "\",";
     json += "\"name\":\"" + name + "\",";
-    json += "\"type\":\"" + String(devices[i].type) + "\",";
+      json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
     json += "\"cmd\":\"" + cmd + "\"";
     json += "}";
@@ -216,6 +220,17 @@ void handleCmd() {
   String payload = server.arg("payload");
   String json    = "{\"state\":\"" + payload + "\"}";
   mqttClient.publish(topic.c_str(), json.c_str(), false);
+
+  // Reflect the new state immediately in the local device cache so the UI
+  // updates without waiting for the entity to publish a separate state echo.
+  for (int i = 0; i < deviceCount; i++) {
+    if (!devices[i].active) continue;
+    if (topic != String(devices[i].cmdTopic)) continue;
+    strncpy(devices[i].state, payload.c_str(), DEV_STATE_LEN - 1);
+    devices[i].state[DEV_STATE_LEN - 1] = '\0';
+    break;
+  }
+
   Serial.printf("[CMD] %s -> %s\n", topic.c_str(), json.c_str());
   server.send(200, "application/json", "{\"ok\":true}");
 }
