@@ -154,7 +154,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .btn{display:inline-block;margin-top:14px;margin-right:8px;padding:7px 16px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.82rem}
   .btn:hover{background:#1d4ed8}
   .btn.danger{background:#7f1d1d;color:#fca5a5}
-  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-top:6px}
+  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:6px}
   .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s}
   .dev-card.on{border-color:#16a34a}
   .dev-card.off{border-color:#dc2626}
