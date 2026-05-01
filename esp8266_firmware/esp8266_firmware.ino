@@ -32,6 +32,8 @@ bool mqttConnected = false;
 bool pinUnlocked = false;
 unsigned long msgCount = 0;
 unsigned long lastMqttRetry = 0;
+unsigned long lastWiFiRetry = 0;
+unsigned long wifiLostSince = 0;
 unsigned long startupMs = 0;
 
 struct MqttMsg { String topic; String payload; };
@@ -744,6 +746,7 @@ void setup() {
   }
 
   WiFi.mode(WIFI_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.setAutoReconnect(true);
   WiFi.persistent(false);
   WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
@@ -781,10 +784,30 @@ void loop() {
     return;
   }
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.printf("[WiFi] Disconnected (status=%d). Restarting to recover.\n", WiFi.status());
-    delay(500);
-    ESP.restart();
+  wl_status_t wifiStatus = WiFi.status();
+  if (wifiStatus != WL_CONNECTED) {
+    mqttConnected = false;
+    unsigned long now = millis();
+
+    if (wifiLostSince == 0) {
+      wifiLostSince = now;
+      Serial.printf("[WiFi] Lost connection (status=%d). Starting reconnect loop.\n", wifiStatus);
+    }
+
+    if (now - lastWiFiRetry >= WIFI_RETRY_INTERVAL_MS) {
+      lastWiFiRetry = now;
+      Serial.printf("[WiFi] Reconnect attempt to %s\n", creds.wifiSSID.c_str());
+      WiFi.disconnect(false);
+      WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
+    }
+
+    server.handleClient();
+    return;
+  }
+
+  if (wifiLostSince != 0) {
+    Serial.printf("[WiFi] Recovered. IP: %s\n", WiFi.localIP().toString().c_str());
+    wifiLostSince = 0;
   }
 
   if (!mqttClient.connected()) {

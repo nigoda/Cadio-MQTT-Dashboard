@@ -29,6 +29,7 @@
 
 // ---------- Normal-mode timeouts --------------------------------------------
 #define WIFI_CONNECT_TIMEOUT_MS     30000
+#define WIFI_RETRY_INTERVAL_MS       5000
 #define MQTT_RECONNECT_INTERVAL_MS   5000
 #define SERVER_PORT                    80
 
