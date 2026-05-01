@@ -164,7 +164,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .dev-val{font-size:1rem;font-weight:700;color:#38bdf8}
   .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
   .toggle-lbl{font-size:.8rem;color:#94a3b8}
-  .light-wrap{border-top:1px solid #1e293b;background:#0f172a;padding-top:8px;margin-top:6px}
+  .light-wrap{border-top:1px solid #1e293b;background:#0c1220;padding:8px 12px 10px;margin:6px -12px -12px;border-radius:0 0 8px 8px}
   .light-meta{display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:#94a3b8;margin-bottom:4px}
   .light-range{display:block;width:100%;accent-color:#38bdf8}
   .toggle{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0}
