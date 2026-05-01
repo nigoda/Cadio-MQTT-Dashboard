@@ -613,33 +613,25 @@ void checkResetButton() {
 // ---------------------------------------------------------------------------
 //  Built-in LED status indicator (non-blocking)
 //  Active LOW: digitalWrite LOW = LED on, HIGH = LED off
-//  AP mode      : fast blink 150ms
-//  Wi-Fi only   : slow blink 1000ms
-//  Wi-Fi + MQTT : solid ON
+//  Wi-Fi disconnected (incl. AP/setup): blink
+//  Wi-Fi connected                     : solid ON
 // ---------------------------------------------------------------------------
 void updateLed() {
   static unsigned long lastToggle = 0;
   static bool ledState = false;
   unsigned long now = millis();
 
-  if (appMode == MODE_SETUP) {
-    // Fast blink — provisioning
-    if (now - lastToggle >= 150) {
+  if (WiFi.status() != WL_CONNECTED) {
+    if (now - lastToggle >= 250) {
       lastToggle = now;
       ledState = !ledState;
       digitalWrite(STATUS_LED_PIN, ledState ? LOW : HIGH);
     }
-  } else if (mqttConnected) {
-    // Solid ON
-    digitalWrite(STATUS_LED_PIN, LOW);
-  } else {
-    // Slow blink — Wi-Fi ok but MQTT not connected
-    if (now - lastToggle >= 1000) {
-      lastToggle = now;
-      ledState = !ledState;
-      digitalWrite(STATUS_LED_PIN, ledState ? LOW : HIGH);
-    }
+    return;
   }
+
+  // Wi-Fi connected: keep LED solid ON
+  digitalWrite(STATUS_LED_PIN, LOW);
 }
 
 void setup() {
