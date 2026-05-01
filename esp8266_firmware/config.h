@@ -7,7 +7,7 @@
 // Use the built-in FLASH button on NodeMCU: D3 (GPIO0).
 // NOTE: GPIO0 is a boot strap pin; do not keep it pressed while powering on.
 #define RESET_BTN_PIN      0
-#define RESET_HOLD_MS   3000
+#define RESET_HOLD_MS   5000
 
 // Built-in LED on NodeMCU: GPIO2 (D4), active LOW
 #define STATUS_LED_PIN     2
@@ -29,7 +29,6 @@
 
 // ---------- Normal-mode timeouts --------------------------------------------
 #define WIFI_CONNECT_TIMEOUT_MS     30000
-#define WIFI_RETRY_INTERVAL_MS       5000
 #define MQTT_RECONNECT_INTERVAL_MS   5000
 #define SERVER_PORT                    80
 
@@ -41,5 +40,5 @@
 #define DEFAULT_MQTT_PORT     1883
 #define DISCOVERY_PREFIX      "homeassistant"
 #define MQTT_CLIENT_ID_PREFIX "esp8266-nivixsa-"
-#define APP_MQTT_KEEPALIVE    60
+#define MQTT_KEEPALIVE        60
 #define MQTT_BUFFER_SIZE      2048

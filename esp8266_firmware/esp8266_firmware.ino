@@ -32,22 +32,7 @@ bool mqttConnected = false;
 bool pinUnlocked = false;
 unsigned long msgCount = 0;
 unsigned long lastMqttRetry = 0;
-unsigned long lastWiFiRetry = 0;
-unsigned long wifiLostSince = 0;
 unsigned long startupMs = 0;
-
-const char* wifiStatusName(wl_status_t s) {
-  switch (s) {
-    case WL_IDLE_STATUS:     return "IDLE";
-    case WL_NO_SSID_AVAIL:   return "NO_SSID";
-    case WL_SCAN_COMPLETED:  return "SCAN_DONE";
-    case WL_CONNECTED:       return "CONNECTED";
-    case WL_CONNECT_FAILED:  return "AUTH_FAILED";
-    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
-    case WL_DISCONNECTED:    return "DISCONNECTED";
-    default:                 return "UNKNOWN";
-  }
-}
 
 struct MqttMsg { String topic; String payload; };
 #define MSG_BUF_SIZE 20
@@ -59,7 +44,6 @@ int msgBufHead = 0;
 // ---------------------------------------------------------------------------
 #define MAX_DEVICES     20
 #define DEV_NAME_LEN    48
-#define DEV_ID_LEN      48
 #define DEV_TYPE_LEN    16
 #define DEV_TOPIC_LEN   96
 #define DEV_STATE_LEN   48
@@ -67,18 +51,10 @@ int msgBufHead = 0;
 struct IoTDevice {
   bool   active;
   char   name[DEV_NAME_LEN];
-  char   deviceId[DEV_ID_LEN];
-  char   entityId[DEV_ID_LEN];
   char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
-  char   brightnessStateTopic[DEV_TOPIC_LEN];
-  char   brightnessCmdTopic[DEV_TOPIC_LEN];
-  char   rgbStateTopic[DEV_TOPIC_LEN];
-  char   rgbCmdTopic[DEV_TOPIC_LEN];
   char   state[DEV_STATE_LEN];
-  int    brightness;
-  uint8_t rgb[3];
 };
 
 IoTDevice devices[MAX_DEVICES];
@@ -211,28 +187,18 @@ void handleApiData() {
     if (!devices[i].active) continue;
     if (!firstDev) json += ",";
     firstDev = false;
-    String id      = String(devices[i].stateTopic);
-    String deviceId = String(devices[i].deviceId); deviceId.replace("\\", "\\\\"); deviceId.replace("\"", "\\\"");
-    String entityId = String(devices[i].entityId); entityId.replace("\\", "\\\\"); entityId.replace("\"", "\\\"");
-    String name    = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
-    String type    = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
-    String state   = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
-    String cmd     = String(devices[i].cmdTopic); cmd.replace("\\", "\\\\"); cmd.replace("\"", "\\\"");
-    String briCmd  = String(devices[i].brightnessCmdTopic); briCmd.replace("\\", "\\\\"); briCmd.replace("\"", "\\\"");
-    String rgbCmd  = String(devices[i].rgbCmdTopic); rgbCmd.replace("\\", "\\\\"); rgbCmd.replace("\"", "\\\"");
-    id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
+      String id    = String(devices[i].stateTopic);
+      String name  = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
+      String type  = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
+      String state = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
+      String cmd   = String(devices[i].cmdTopic); cmd.replace("\\", "\\\\"); cmd.replace("\"", "\\\"");
+      id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
-    json += "\"id\":\"" + id + "\",";
+      json += "\"id\":\"" + id + "\",";
     json += "\"name\":\"" + name + "\",";
-    json += "\"device_id\":\"" + deviceId + "\",";
-    json += "\"entity_id\":\"" + entityId + "\",";
-    json += "\"type\":\"" + type + "\",";
+      json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
-    json += "\"cmd\":\"" + cmd + "\",";
-    json += "\"brightness\":" + String(devices[i].brightness) + ",";
-    json += "\"brightness_cmd\":\"" + briCmd + "\",";
-    json += "\"rgb_cmd\":\"" + rgbCmd + "\",";
-    json += "\"rgb\":[" + String(devices[i].rgb[0]) + "," + String(devices[i].rgb[1]) + "," + String(devices[i].rgb[2]) + "]";
+    json += "\"cmd\":\"" + cmd + "\"";
     json += "}";
   }
   json += "]}";
@@ -252,73 +218,21 @@ void handleCmd() {
   }
   String topic   = server.arg("topic");
   String payload = server.arg("payload");
-  bool rawPayload = server.hasArg("raw") && server.arg("raw") == "1";
-  String mqttPayload = rawPayload ? payload : "{\"state\":\"" + payload + "\"}";
-  mqttClient.publish(topic.c_str(), mqttPayload.c_str(), false);
+  String json    = "{\"state\":\"" + payload + "\"}";
+  mqttClient.publish(topic.c_str(), json.c_str(), false);
 
   // Reflect the new state immediately in the local device cache so the UI
   // updates without waiting for the entity to publish a separate state echo.
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
-    if (topic == String(devices[i].cmdTopic)) {
-      strncpy(devices[i].state, payload.c_str(), DEV_STATE_LEN - 1);
-      devices[i].state[DEV_STATE_LEN - 1] = '\0';
-      break;
-    }
-    if (topic == String(devices[i].brightnessCmdTopic)) {
-      devices[i].brightness = constrain(payload.toInt(), 0, 255);
-      break;
-    }
-    if (topic == String(devices[i].rgbCmdTopic)) {
-      int r = 0, g = 0, b = 0;
-      sscanf(payload.c_str(), "%d,%d,%d", &r, &g, &b);
-      devices[i].rgb[0] = constrain(r, 0, 255);
-      devices[i].rgb[1] = constrain(g, 0, 255);
-      devices[i].rgb[2] = constrain(b, 0, 255);
-      break;
-    }
+    if (topic != String(devices[i].cmdTopic)) continue;
+    strncpy(devices[i].state, payload.c_str(), DEV_STATE_LEN - 1);
+    devices[i].state[DEV_STATE_LEN - 1] = '\0';
+    break;
   }
 
-  Serial.printf("[CMD] %s -> %s\n", topic.c_str(), mqttPayload.c_str());
+  Serial.printf("[CMD] %s -> %s\n", topic.c_str(), json.c_str());
   server.send(200, "application/json", "{\"ok\":true}");
-}
-
-void updateRgbFromPayload(uint8_t rgbOut[3], const String &payload) {
-  JsonDocument doc;
-  if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-    if (doc["rgb"].is<JsonArray>()) {
-      JsonArray rgb = doc["rgb"].as<JsonArray>();
-      if (rgb.size() >= 3) {
-        rgbOut[0] = constrain(rgb[0].as<int>(), 0, 255);
-        rgbOut[1] = constrain(rgb[1].as<int>(), 0, 255);
-        rgbOut[2] = constrain(rgb[2].as<int>(), 0, 255);
-        return;
-      }
-    }
-    if (doc["rgb_color"].is<JsonArray>()) {
-      JsonArray rgb = doc["rgb_color"].as<JsonArray>();
-      if (rgb.size() >= 3) {
-        rgbOut[0] = constrain(rgb[0].as<int>(), 0, 255);
-        rgbOut[1] = constrain(rgb[1].as<int>(), 0, 255);
-        rgbOut[2] = constrain(rgb[2].as<int>(), 0, 255);
-        return;
-      }
-    }
-    if (doc["color"].is<JsonObject>()) {
-      JsonObject color = doc["color"].as<JsonObject>();
-      rgbOut[0] = constrain((int)(color["r"] | rgbOut[0]), 0, 255);
-      rgbOut[1] = constrain((int)(color["g"] | rgbOut[1]), 0, 255);
-      rgbOut[2] = constrain((int)(color["b"] | rgbOut[2]), 0, 255);
-      return;
-    }
-  }
-
-  int r = 0, g = 0, b = 0;
-  if (sscanf(payload.c_str(), "%d,%d,%d", &r, &g, &b) == 3) {
-    rgbOut[0] = constrain(r, 0, 255);
-    rgbOut[1] = constrain(g, 0, 255);
-    rgbOut[2] = constrain(b, 0, 255);
-  }
 }
 
 void handleDashboard() {
@@ -349,17 +263,10 @@ void handleCaptivePortalRedirect() {
 bool callLoginApi() {
   Serial.println("[API] Calling Nivixsa login API...");
 
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[API] Skipped: Wi-Fi not connected.");
-    return false;
-  }
-
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
-  secureClient.setTimeout(7000);
 
   HTTPClient https;
-  https.setTimeout(7000);
   if (!https.begin(secureClient, CADIO_LOGIN_URL)) {
     Serial.println("[API] Failed to begin HTTPS");
     return false;
@@ -373,17 +280,15 @@ bool callLoginApi() {
   String body;
   serializeJson(req, body);
 
-  unsigned long apiStart = millis();
   int code = https.POST(body);
   if (code != 200) {
-    Serial.printf("[API] HTTP %d, elapsed=%lums\n", code, millis() - apiStart);
+    Serial.printf("[API] HTTP %d\n", code);
     https.end();
     return false;
   }
 
   String response = https.getString();
   https.end();
-  Serial.printf("[API] Success, elapsed=%lums\n", millis() - apiStart);
 
   JsonDocument resp;
   DeserializationError err = deserializeJson(resp, response);
@@ -414,13 +319,7 @@ void parseConfigMsg(const String &topic, const String &payload) {
   if (s1 < 0) return;
   int s2 = topic.indexOf('/', s1 + 1);
   if (s2 < 0) return;
-  int s3 = topic.indexOf('/', s2 + 1);
-  if (s3 < 0) return;
-  int s4 = topic.indexOf('/', s3 + 1);
-  if (s4 < 0) return;
   String entityType = topic.substring(s1 + 1, s2);
-  String deviceId = topic.substring(s2 + 1, s3);
-  String entityId = topic.substring(s3 + 1, s4);
 
   // Only handle controllable / displayable types
   if (entityType != "switch" && entityType != "light" &&
@@ -434,10 +333,6 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *name       = doc["name"]          | "";
   const char *stateTopic = doc["state_topic"]   | "";
   const char *cmdTopic   = doc["command_topic"] | "";
-  const char *brightnessStateTopic = doc["brightness_state_topic"] | "";
-  const char *brightnessCmdTopic   = doc["brightness_command_topic"] | "";
-  const char *rgbStateTopic        = doc["rgb_state_topic"] | "";
-  const char *rgbCmdTopic          = doc["rgb_command_topic"] | "";
   if (strlen(stateTopic) == 0) return;
 
   // Find existing slot or allocate new one
@@ -452,39 +347,18 @@ void parseConfigMsg(const String &topic, const String &payload) {
 
   devices[slot].active = true;
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
-  strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
-  strncpy(devices[slot].entityId,   entityId.c_str(),                      DEV_ID_LEN - 1);
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
-  strncpy(devices[slot].brightnessStateTopic, brightnessStateTopic,         DEV_TOPIC_LEN - 1);
-  strncpy(devices[slot].brightnessCmdTopic,   brightnessCmdTopic,           DEV_TOPIC_LEN - 1);
-  strncpy(devices[slot].rgbStateTopic,        rgbStateTopic,                DEV_TOPIC_LEN - 1);
-  strncpy(devices[slot].rgbCmdTopic,          rgbCmdTopic,                  DEV_TOPIC_LEN - 1);
   devices[slot].name[DEV_NAME_LEN - 1]       = '\0';
-  devices[slot].deviceId[DEV_ID_LEN - 1]     = '\0';
-  devices[slot].entityId[DEV_ID_LEN - 1]     = '\0';
   devices[slot].type[DEV_TYPE_LEN - 1]       = '\0';
   devices[slot].stateTopic[DEV_TOPIC_LEN - 1] = '\0';
   devices[slot].cmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
-  devices[slot].brightnessStateTopic[DEV_TOPIC_LEN - 1] = '\0';
-  devices[slot].brightnessCmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
-  devices[slot].rgbStateTopic[DEV_TOPIC_LEN - 1]        = '\0';
-  devices[slot].rgbCmdTopic[DEV_TOPIC_LEN - 1]          = '\0';
-  if (devices[slot].brightness < 0 || devices[slot].brightness > 255) {
-    devices[slot].brightness = 255;
-  }
 
   if (mqttClient.connected()) {
     mqttClient.subscribe(devices[slot].stateTopic);
     if (strlen(devices[slot].cmdTopic) > 0) {
       mqttClient.subscribe(devices[slot].cmdTopic);
-    }
-    if (strlen(devices[slot].brightnessStateTopic) > 0) {
-      mqttClient.subscribe(devices[slot].brightnessStateTopic);
-    }
-    if (strlen(devices[slot].rgbStateTopic) > 0) {
-      mqttClient.subscribe(devices[slot].rgbStateTopic);
     }
   }
 
@@ -497,34 +371,15 @@ void parseConfigMsg(const String &topic, const String &payload) {
 void updateDeviceState(const String &topic, const String &payload) {
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
-
-    if (strlen(devices[i].brightnessStateTopic) > 0 && topic == String(devices[i].brightnessStateTopic)) {
-      devices[i].brightness = constrain(payload.toInt(), 0, 255);
-      break;
-    }
-
-    if (strlen(devices[i].rgbStateTopic) > 0 && topic == String(devices[i].rgbStateTopic)) {
-      updateRgbFromPayload(devices[i].rgb, payload);
-      break;
-    }
-
     if (topic != String(devices[i].stateTopic)) continue;
 
     String stateVal = payload;
     JsonDocument doc;
     if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-      if (doc.containsKey("state"))             stateVal = doc["state"].as<String>();
-      else if (doc.containsKey("temperature"))  stateVal = String(doc["temperature"].as<float>(), 1) + " C";
-      else if (doc.containsKey("humidity"))     stateVal = String(doc["humidity"].as<float>(), 1) + " %";
-      else if (doc.containsKey("value"))        stateVal = doc["value"].as<String>();
-
-      if (doc.containsKey("brightness")) {
-        devices[i].brightness = constrain(doc["brightness"].as<int>(), 0, 255);
-      } else if (doc.containsKey("brightness_pct")) {
-        devices[i].brightness = map(constrain(doc["brightness_pct"].as<int>(), 0, 100), 0, 100, 0, 255);
-      }
-
-      updateRgbFromPayload(devices[i].rgb, payload);
+      if (doc.containsKey("state"))       stateVal = doc["state"].as<String>();
+      else if (doc.containsKey("temperature")) stateVal = String(doc["temperature"].as<float>(), 1) + " C";
+      else if (doc.containsKey("humidity"))    stateVal = String(doc["humidity"].as<float>(), 1) + " %";
+      else if (doc.containsKey("value"))       stateVal = doc["value"].as<String>();
     }
     stateVal = stateVal.substring(0, DEV_STATE_LEN - 1);
     strncpy(devices[i].state, stateVal.c_str(), DEV_STATE_LEN - 1);
@@ -597,7 +452,7 @@ bool connectMqtt() {
   String clientId = String(MQTT_CLIENT_ID_PREFIX) + chipID();
   mqttClient.setServer(creds.mqttBroker.c_str(), creds.mqttPort);
   mqttClient.setCallback(mqttCallback);
-  mqttClient.setKeepAlive(APP_MQTT_KEEPALIVE);
+  mqttClient.setKeepAlive(MQTT_KEEPALIVE);
   mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
 
   Serial.printf("[MQTT] Connecting to %s:%d as %s\n", creds.mqttBroker.c_str(), creds.mqttPort, clientId.c_str());
@@ -695,26 +550,6 @@ void checkResetButton() {
   }
 }
 
-bool checkResetButtonAtBoot() {
-  if (digitalRead(RESET_BTN_PIN) != LOW) return false;
-
-  Serial.println("[BTN] FLASH pressed at boot. Hold 3s to clear credentials...");
-  unsigned long pressedAt = millis();
-  while (digitalRead(RESET_BTN_PIN) == LOW) {
-    if (millis() - pressedAt >= RESET_HOLD_MS) {
-      Serial.println("[BTN] Boot reset triggered. Clearing credentials.");
-      credStore.clear();
-      delay(250);
-      ESP.restart();
-      return true;
-    }
-    delay(50);
-  }
-
-  Serial.println("[BTN] Released before 3s. Reset cancelled.");
-  return false;
-}
-
 // ---------------------------------------------------------------------------
 //  Built-in LED status indicator (non-blocking)
 //  Active LOW: digitalWrite LOW = LED on, HIGH = LED off
@@ -757,10 +592,6 @@ void setup() {
   pinMode(STATUS_LED_PIN, OUTPUT);
   digitalWrite(STATUS_LED_PIN, HIGH); // OFF initially (active LOW)
 
-  if (checkResetButtonAtBoot()) {
-    return;
-  }
-
   bool hasCredentials = credStore.load(creds);
   if (!hasCredentials) {
     startAPMode();
@@ -768,39 +599,18 @@ void setup() {
   }
 
   WiFi.mode(WIFI_STA);
-  WiFi.setSleepMode(WIFI_NONE_SLEEP);
-  WiFi.setAutoReconnect(true);
-  WiFi.persistent(false);
-  bool wifiOk = false;
-  for (int attempt = 1; attempt <= 3; attempt++) {
-    Serial.printf("[WiFi] Attempt %d/3: connecting to %s\n", attempt, creds.wifiSSID.c_str());
-    WiFi.disconnect(true);
+  WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
+
+  Serial.printf("[WiFi] Connecting to %s", creds.wifiSSID.c_str());
+  unsigned long t0 = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
+      Serial.println("\n[WiFi] Timeout. Falling back to AP mode.");
+      startAPMode();
+      return;
+    }
+    Serial.print(".");
     delay(250);
-    WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
-
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED) {
-      checkResetButton();
-      if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
-        wl_status_t s = WiFi.status();
-        Serial.printf("[WiFi] Attempt %d timeout: %s (%d)\n", attempt, wifiStatusName(s), s);
-        break;
-      }
-      Serial.print(".");
-      delay(250);
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      wifiOk = true;
-      break;
-    }
-  }
-
-  if (!wifiOk) {
-    wl_status_t s = WiFi.status();
-    Serial.printf("\n[WiFi] Failed after retries: %s (%d). Falling back to AP mode.\n", wifiStatusName(s), s);
-    startAPMode();
-    return;
   }
 
   Serial.printf("\n[WiFi] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
@@ -823,30 +633,10 @@ void loop() {
     return;
   }
 
-  wl_status_t wifiStatus = WiFi.status();
-  if (wifiStatus != WL_CONNECTED) {
-    mqttConnected = false;
-    unsigned long now = millis();
-
-    if (wifiLostSince == 0) {
-      wifiLostSince = now;
-      Serial.printf("[WiFi] Lost connection: %s (%d). Starting reconnect loop.\n", wifiStatusName(wifiStatus), wifiStatus);
-    }
-
-    if (now - lastWiFiRetry >= WIFI_RETRY_INTERVAL_MS) {
-      lastWiFiRetry = now;
-      Serial.printf("[WiFi] Reconnect attempt to %s\n", creds.wifiSSID.c_str());
-      WiFi.disconnect(false);
-      WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
-    }
-
-    server.handleClient();
-    return;
-  }
-
-  if (wifiLostSince != 0) {
-    Serial.printf("[WiFi] Recovered. IP: %s\n", WiFi.localIP().toString().c_str());
-    wifiLostSince = 0;
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[WiFi] Disconnected. Restarting to recover.");
+    delay(500);
+    ESP.restart();
   }
 
   if (!mqttClient.connected()) {
