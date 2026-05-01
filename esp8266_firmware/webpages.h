@@ -164,8 +164,9 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .dev-val{font-size:1rem;font-weight:700;color:#38bdf8}
   .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
   .toggle-lbl{font-size:.8rem;color:#94a3b8}
-  .light-meta{display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:#94a3b8;margin-top:2px}
-  .light-range{width:100%;margin-top:6px;accent-color:#38bdf8}
+  .light-wrap{border-top:1px solid #334155;padding-top:8px;margin-top:6px}
+  .light-meta{display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:#94a3b8;margin-bottom:4px}
+  .light-range{display:block;width:100%;accent-color:#38bdf8}
   .toggle{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0}
   .toggle input{opacity:0;width:0;height:0}
   .slider{position:absolute;inset:0;background:#334155;border-radius:24px;cursor:pointer;transition:.25s}
@@ -294,8 +295,10 @@ function renderDevices(devs){
       }
       if(canBrightness){
         var bri=(typeof d.brightness==='number'&&d.brightness>=0)?d.brightness:0;
-        h+="<div class='light-meta'><span>Brightness</span><span>"+bri+"</span></div>";
-        h+="<input class='light-range' type='range' min='0' max='100' value='"+bri+"' onchange=\"sendBrightness('"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"',this.value)\">";
+        h+="<div class='light-wrap'>";
+        h+="<div class='light-meta'><span>Brightness</span><span id='bri-val-"+btoa(d.cmd).replace(/=/g,'')+"'>"+bri+"%</span></div>";
+        h+="<input class='light-range' type='range' min='0' max='100' value='"+bri+"' oninput=\"this.previousElementSibling.querySelector('span:last-child').textContent=this.value+'%'\" onchange=\"sendBrightness('"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"',this.value)\">";
+        h+="</div>";
       }
     }
     h+="</div>";
