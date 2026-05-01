@@ -39,6 +39,27 @@ struct MqttMsg { String topic; String payload; };
 MqttMsg msgBuf[MSG_BUF_SIZE];
 int msgBufHead = 0;
 
+// ---------------------------------------------------------------------------
+//  Device discovery — parsed from homeassistant MQTT config messages
+// ---------------------------------------------------------------------------
+#define MAX_DEVICES     20
+#define DEV_NAME_LEN    48
+#define DEV_TYPE_LEN    16
+#define DEV_TOPIC_LEN   96
+#define DEV_STATE_LEN   48
+
+struct IoTDevice {
+  bool   active;
+  char   name[DEV_NAME_LEN];
+  char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
+  char   stateTopic[DEV_TOPIC_LEN];
+  char   cmdTopic[DEV_TOPIC_LEN];
+  char   state[DEV_STATE_LEN];
+};
+
+IoTDevice devices[MAX_DEVICES];
+int deviceCount = 0;
+
 String chipID() {
   char id[9];
   snprintf(id, sizeof(id), "%08X", ESP.getChipId());
@@ -131,6 +152,23 @@ void handleSetupPage() {
   server.send(200, "text/html", FPSTR(SETUP_HTML));
 }
 
+void handleCmd() {
+  if (!server.hasArg("topic") || !server.hasArg("payload")) {
+    server.send(400, "application/json", "{\"ok\":false,\"msg\":\"Missing topic or payload\"}");
+    return;
+  }
+  if (!mqttClient.connected()) {
+    server.send(503, "application/json", "{\"ok\":false,\"msg\":\"MQTT not connected\"}");
+    return;
+  }
+  String topic   = server.arg("topic");
+  String payload = server.arg("payload");
+  String json    = "{\"state\":\"" + payload + "\"}";
+  mqttClient.publish(topic.c_str(), json.c_str(), /*retain=*/false);
+  Serial.printf("[CMD] %s -> %s\n", topic.c_str(), json.c_str());
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 void handleDashboard() {
   String msgs;
   for (int i = 0; i < MSG_BUF_SIZE; i++) {
@@ -140,23 +178,22 @@ void handleDashboard() {
     msgs += "<span class='topic'>" + msgBuf[idx].topic + "</span> -> ";
     msgs += msgBuf[idx].payload.substring(0, 120) + "</div>";
   }
-  if (msgs.isEmpty()) {
-    msgs = "<p style='color:#64748b;font-size:.8rem'>No messages yet.</p>";
-  }
+  if (msgs.isEmpty()) msgs = "<p style='color:#64748b;font-size:.8rem'>No messages yet.</p>";
 
   String html = FPSTR(DASHBOARD_HTML);
-  html.replace("__WIFI_SSID__", creds.wifiSSID);
-  html.replace("__IP__", WiFi.localIP().toString());
-  html.replace("__RSSI__", String(WiFi.RSSI()));
-  html.replace("__BROKER__", creds.mqttBroker);
-  html.replace("__PORT__", String(creds.mqttPort));
-  html.replace("__EMAIL__", creds.mqttEmail);
-  html.replace("__MQTT_CLASS__", mqttConnected ? "on" : "off");
+  html.replace("__WIFI_SSID__",   creds.wifiSSID);
+  html.replace("__IP__",          WiFi.localIP().toString());
+  html.replace("__RSSI__",        String(WiFi.RSSI()));
+  html.replace("__BROKER__",      creds.mqttBroker);
+  html.replace("__PORT__",        String(creds.mqttPort));
+  html.replace("__EMAIL__",       creds.mqttEmail);
+  html.replace("__MQTT_CLASS__",  mqttConnected ? "on" : "off");
   html.replace("__MQTT_STATUS__", mqttConnected ? "Connected" : "Disconnected");
-  html.replace("__MSG_COUNT__", String(msgCount));
-  html.replace("__UPTIME__", uptimeStr());
-  html.replace("__HEAP__", String(ESP.getFreeHeap() / 1024));
-  html.replace("__MESSAGES__", msgs);
+  html.replace("__MSG_COUNT__",   String(msgCount));
+  html.replace("__UPTIME__",      uptimeStr());
+  html.replace("__HEAP__",        String(ESP.getFreeHeap() / 1024));
+  html.replace("__MESSAGES__",    msgs);
+  html.replace("__DEVICES__",     buildDevicesHtml());
   server.send(200, "text/html", html);
 }
 
@@ -222,6 +259,116 @@ bool callLoginApi() {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+//  Parse a homeassistant /config message and register the device
+// ---------------------------------------------------------------------------
+void parseConfigMsg(const String &topic, const String &payload) {
+  // topic format: homeassistant/<type>/<device_id>/<entity_id>/config
+  int s1 = topic.indexOf('/');
+  if (s1 < 0) return;
+  int s2 = topic.indexOf('/', s1 + 1);
+  if (s2 < 0) return;
+  String entityType = topic.substring(s1 + 1, s2);
+
+  // Only handle controllable / displayable types
+  if (entityType != "switch" && entityType != "light" &&
+      entityType != "sensor"  && entityType != "binary_sensor" &&
+      entityType != "climate" && entityType != "cover" &&
+      entityType != "fan"     && entityType != "lock") return;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, payload) != DeserializationError::Ok) return;
+
+  const char *name       = doc["name"]          | "";
+  const char *stateTopic = doc["state_topic"]   | "";
+  const char *cmdTopic   = doc["command_topic"] | "";
+  if (strlen(stateTopic) == 0) return;
+
+  // Find existing slot or allocate new one
+  int slot = -1;
+  for (int i = 0; i < deviceCount; i++) {
+    if (devices[i].active && strncmp(devices[i].stateTopic, stateTopic, DEV_TOPIC_LEN) == 0) {
+      slot = i; break;
+    }
+  }
+  if (slot < 0 && deviceCount < MAX_DEVICES) slot = deviceCount++;
+  if (slot < 0) return;
+
+  devices[slot].active = true;
+  strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
+  strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
+  strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
+  strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
+  devices[slot].name[DEV_NAME_LEN - 1]       = '\0';
+  devices[slot].type[DEV_TYPE_LEN - 1]       = '\0';
+  devices[slot].stateTopic[DEV_TOPIC_LEN - 1] = '\0';
+  devices[slot].cmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
+
+  Serial.printf("[DEV] Registered: %s (%s)\n", devices[slot].name, devices[slot].type);
+}
+
+// ---------------------------------------------------------------------------
+//  Update device state when a state message arrives
+// ---------------------------------------------------------------------------
+void updateDeviceState(const String &topic, const String &payload) {
+  for (int i = 0; i < deviceCount; i++) {
+    if (!devices[i].active) continue;
+    if (topic != String(devices[i].stateTopic)) continue;
+
+    String stateVal = payload;
+    JsonDocument doc;
+    if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+      if (doc.containsKey("state"))       stateVal = doc["state"].as<String>();
+      else if (doc.containsKey("temperature")) stateVal = String(doc["temperature"].as<float>(), 1) + " C";
+      else if (doc.containsKey("humidity"))    stateVal = String(doc["humidity"].as<float>(), 1) + " %";
+      else if (doc.containsKey("value"))       stateVal = doc["value"].as<String>();
+    }
+    stateVal = stateVal.substring(0, DEV_STATE_LEN - 1);
+    strncpy(devices[i].state, stateVal.c_str(), DEV_STATE_LEN - 1);
+    devices[i].state[DEV_STATE_LEN - 1] = '\0';
+    break;
+  }
+}
+
+// ---------------------------------------------------------------------------
+//  Build HTML for all discovered device cards
+// ---------------------------------------------------------------------------
+String buildDevicesHtml() {
+  if (deviceCount == 0) {
+    return "<p style='color:#64748b;font-size:.8rem'>No devices discovered yet. Waiting for MQTT config messages...</p>";
+  }
+  String html;
+  for (int i = 0; i < deviceCount; i++) {
+    if (!devices[i].active) continue;
+    String type  = String(devices[i].type);
+    String state = String(devices[i].state);
+    bool isOn    = (state == "ON" || state == "on" || state == "1" || state == "true");
+    bool canCtrl = (strlen(devices[i].cmdTopic) > 0) &&
+                   (type == "switch" || type == "light" || type == "lock" ||
+                    type == "fan"    || type == "cover");
+
+    html += "<div class='dev-card'>";
+    html += "<div class='dev-type-lbl'>" + type + "</div>";
+    html += "<div class='dev-name'>" + String(devices[i].name) + "</div>";
+
+    if (type == "sensor" || type == "binary_sensor") {
+      html += "<div class='dev-val'>" + (state.isEmpty() ? "--" : state) + "</div>";
+    } else {
+      html += "<span class='badge " + String(isOn ? "on" : (state.isEmpty() ? "warn" : "off")) + "'>";
+      html += state.isEmpty() ? "?" : state;
+      html += "</span>";
+      if (canCtrl) {
+        String nextState = isOn ? "OFF" : "ON";
+        String cmdTopic  = String(devices[i].cmdTopic);
+        html += "<button class='dev-btn' onclick=\"sendCmd('" + cmdTopic + "','" + nextState + "')\">"
+                + (isOn ? "Turn OFF" : "Turn ON") + "</button>";
+      }
+    }
+    html += "</div>";
+  }
+  return html;
+}
+
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
   String t(topic);
   String p;
@@ -231,6 +378,14 @@ void mqttCallback(char *topic, byte *payload, unsigned int length) {
   }
   pushMsg(t, p);
   Serial.printf("[MQTT] %s -> %s\n", t.c_str(), p.substring(0, 80).c_str());
+
+  // Device discovery from config messages
+  if (t.endsWith("/config")) {
+    parseConfigMsg(t, p);
+  } else {
+    // Try to update state for any registered device
+    updateDeviceState(t, p);
+  }
 }
 
 bool connectMqtt() {
@@ -253,6 +408,8 @@ bool connectMqtt() {
   mqttConnected = true;
   Serial.println("[MQTT] Connected.");
 
+  // Use explicit sub-topic patterns — broker ACL rejects bare # wildcard.
+  // Mirrors exactly what app.py subscribes to (which is proven to work).
   const char *components[] = {
     "sensor", "binary_sensor", "switch", "light", "climate", "cover",
     "fan", "lock", "button", "number", "select", "text", "vacuum",
@@ -263,9 +420,13 @@ bool connectMqtt() {
 
   String prefix = creds.discoveryPrefix;
   for (int i = 0; components[i] != nullptr; i++) {
-    String topic = prefix + "/" + components[i] + "/+/+/#";
-    mqttClient.subscribe(topic.c_str());
+    String base = prefix + "/" + components[i] + "/+/+/";
+    mqttClient.subscribe((base + "config").c_str());
+    mqttClient.subscribe((base + "state").c_str());
+    mqttClient.subscribe((base + "set").c_str());
+    mqttClient.subscribe((base + "availability").c_str());
   }
+  mqttClient.subscribe((prefix + "/device/+/+/config").c_str());
   mqttClient.subscribe((prefix + "/status").c_str());
 
   return true;
@@ -307,7 +468,8 @@ void startNormalMode() {
   server.on("/scan", HTTP_GET, handleScan);
   server.on("/check_pin", HTTP_GET, handleCheckPin);
   server.on("/save", HTTP_POST, handleSave);
-  server.on("/reset", HTTP_GET, handleReset);
+  server.on("/reset",     HTTP_GET,  handleReset);
+  server.on("/cmd",       HTTP_GET,  handleCmd);
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
   server.begin();
 

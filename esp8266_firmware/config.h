@@ -34,4 +34,4 @@
 #define DISCOVERY_PREFIX      "homeassistant"
 #define MQTT_CLIENT_ID_PREFIX "esp8266-nivixsa-"
 #define MQTT_KEEPALIVE        60
-#define MQTT_BUFFER_SIZE      1024
+#define MQTT_BUFFER_SIZE      2048

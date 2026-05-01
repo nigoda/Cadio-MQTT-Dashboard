@@ -139,7 +139,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px}
   h1{color:#38bdf8;margin-bottom:4px;font-size:1.4rem}
   p.sub{color:#94a3b8;font-size:.85rem;margin-bottom:24px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
   .card{background:#1e293b;border-radius:10px;padding:20px}
   .card h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-bottom:12px}
   .stat{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
@@ -148,13 +148,23 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .badge{padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:700}
   .badge.on{background:#052e16;color:#86efac}
   .badge.off{background:#450a0a;color:#fca5a5}
-  .msg-list{max-height:220px;overflow-y:auto}
-  .msg-item{font-size:.78rem;padding:4px 0;border-bottom:1px solid #334155;word-break:break-all}
+  .badge.warn{background:#431407;color:#fdba74}
+  .msg-list{max-height:180px;overflow-y:auto}
+  .msg-item{font-size:.75rem;padding:3px 0;border-bottom:1px solid #334155;word-break:break-all}
   .msg-item .ts{color:#64748b;margin-right:6px}
   .msg-item .topic{color:#38bdf8}
-  a.btn{display:inline-block;margin-top:20px;padding:8px 20px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.85rem}
+  a.btn{display:inline-block;margin-top:16px;margin-right:8px;padding:8px 18px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.85rem}
   a.btn:hover{background:#1d4ed8}
   a.btn.danger{background:#7f1d1d;color:#fca5a5}
+  /* Device cards */
+  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:4px}
+  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:6px}
+  .dev-type-lbl{font-size:.65rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
+  .dev-name{font-size:.9rem;font-weight:700;color:#e2e8f0}
+  .dev-val{font-size:1.1rem;font-weight:700;color:#38bdf8;margin-top:2px}
+  .dev-btn{margin-top:6px;padding:6px 12px;background:#1e40af;color:#bfdbfe;border:none;border-radius:6px;font-size:.8rem;cursor:pointer;width:100%}
+  .dev-btn:hover{background:#1d4ed8}
+  .dev-card .badge{margin-top:2px;align-self:flex-start}
 </style>
 </head>
 <body>
@@ -163,7 +173,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
 <div class="grid">
   <div class="card">
     <h2>Network</h2>
-    <div class="stat"><span class="lbl">Wi-Fi</span><span class="val" id="wifi_ssid">__WIFI_SSID__</span></div>
+    <div class="stat"><span class="lbl">Wi-Fi</span><span class="val">__WIFI_SSID__</span></div>
     <div class="stat"><span class="lbl">IP Address</span><span class="val">__IP__</span></div>
     <div class="stat"><span class="lbl">Signal (RSSI)</span><span class="val">__RSSI__ dBm</span></div>
     <div class="stat"><span class="lbl">Status</span><span class="badge on">Connected</span></div>
@@ -173,7 +183,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
     <div class="stat"><span class="lbl">Broker</span><span class="val">__BROKER__:__PORT__</span></div>
     <div class="stat"><span class="lbl">Account</span><span class="val">__EMAIL__</span></div>
     <div class="stat"><span class="lbl">Status</span><span class="badge __MQTT_CLASS__">__MQTT_STATUS__</span></div>
-    <div class="stat"><span class="lbl">Messages received</span><span class="val">__MSG_COUNT__</span></div>
+    <div class="stat"><span class="lbl">Messages</span><span class="val">__MSG_COUNT__</span></div>
   </div>
   <div class="card">
     <h2>Device</h2>
@@ -181,13 +191,29 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
     <div class="stat"><span class="lbl">Free heap</span><span class="val">__HEAP__ KB</span></div>
     <div class="stat"><span class="lbl">Chip</span><span class="val">ESP8266</span></div>
   </div>
-  <div class="card" style="grid-column:1/-1">
-    <h2>Recent MQTT Messages</h2>
-    <div class="msg-list" id="msgs">__MESSAGES__</div>
-  </div>
 </div>
+
+<div class="card" style="margin-top:16px">
+  <h2>Devices &amp; Entities</h2>
+  <div class="dev-grid">__DEVICES__</div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h2>Recent MQTT Messages</h2>
+  <div class="msg-list">__MESSAGES__</div>
+</div>
+
 <a class="btn" href="/setup">Setup / Reconfigure</a>
 <a class="btn danger" href="/reset" onclick="return confirm('Wipe credentials and reboot?')">Factory Reset</a>
+<script>
+function sendCmd(topic, state) {
+  fetch('/cmd?topic=' + encodeURIComponent(topic) + '&payload=' + encodeURIComponent(state))
+    .then(r => r.json()).then(d => {
+      if (d.ok) { setTimeout(() => location.reload(), 600); }
+      else { alert('Command failed: ' + (d.msg || 'unknown error')); }
+    }).catch(() => { setTimeout(() => location.reload(), 600); });
+}
+</script>
 </body>
 </html>
 )rawhtml";
