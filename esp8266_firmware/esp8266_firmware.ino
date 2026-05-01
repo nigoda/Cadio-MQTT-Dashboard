@@ -36,6 +36,19 @@ unsigned long lastWiFiRetry = 0;
 unsigned long wifiLostSince = 0;
 unsigned long startupMs = 0;
 
+const char* wifiStatusName(wl_status_t s) {
+  switch (s) {
+    case WL_IDLE_STATUS:     return "IDLE";
+    case WL_NO_SSID_AVAIL:   return "NO_SSID";
+    case WL_SCAN_COMPLETED:  return "SCAN_DONE";
+    case WL_CONNECTED:       return "CONNECTED";
+    case WL_CONNECT_FAILED:  return "AUTH_FAILED";
+    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
+    case WL_DISCONNECTED:    return "DISCONNECTED";
+    default:                 return "UNKNOWN";
+  }
+}
+
 struct MqttMsg { String topic; String payload; };
 #define MSG_BUF_SIZE 20
 MqttMsg msgBuf[MSG_BUF_SIZE];
@@ -749,19 +762,36 @@ void setup() {
   WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.setAutoReconnect(true);
   WiFi.persistent(false);
-  WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
-
-  Serial.printf("[WiFi] Connecting to %s", creds.wifiSSID.c_str());
-  unsigned long t0 = millis();
-  while (WiFi.status() != WL_CONNECTED) {
-    checkResetButton();
-    if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
-      Serial.printf("\n[WiFi] Timeout (status=%d). Falling back to AP mode.\n", WiFi.status());
-      startAPMode();
-      return;
-    }
-    Serial.print(".");
+  bool wifiOk = false;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    Serial.printf("[WiFi] Attempt %d/3: connecting to %s\n", attempt, creds.wifiSSID.c_str());
+    WiFi.disconnect(true);
     delay(250);
+    WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
+
+    unsigned long t0 = millis();
+    while (WiFi.status() != WL_CONNECTED) {
+      checkResetButton();
+      if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
+        wl_status_t s = WiFi.status();
+        Serial.printf("[WiFi] Attempt %d timeout: %s (%d)\n", attempt, wifiStatusName(s), s);
+        break;
+      }
+      Serial.print(".");
+      delay(250);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiOk = true;
+      break;
+    }
+  }
+
+  if (!wifiOk) {
+    wl_status_t s = WiFi.status();
+    Serial.printf("\n[WiFi] Failed after retries: %s (%d). Falling back to AP mode.\n", wifiStatusName(s), s);
+    startAPMode();
+    return;
   }
 
   Serial.printf("\n[WiFi] Connected. IP: %s\n", WiFi.localIP().toString().c_str());
@@ -791,7 +821,7 @@ void loop() {
 
     if (wifiLostSince == 0) {
       wifiLostSince = now;
-      Serial.printf("[WiFi] Lost connection (status=%d). Starting reconnect loop.\n", wifiStatus);
+      Serial.printf("[WiFi] Lost connection: %s (%d). Starting reconnect loop.\n", wifiStatusName(wifiStatus), wifiStatus);
     }
 
     if (now - lastWiFiRetry >= WIFI_RETRY_INTERVAL_MS) {
