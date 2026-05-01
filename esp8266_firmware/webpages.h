@@ -154,13 +154,22 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .btn{display:inline-block;margin-top:14px;margin-right:8px;padding:7px 16px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.82rem}
   .btn:hover{background:#1d4ed8}
   .btn.danger{background:#7f1d1d;color:#fca5a5}
-  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:6px}
-  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:5px}
+  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(155px,1fr));gap:10px;margin-top:6px}
+  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s}
+  .dev-card.on{border-color:#16a34a}
+  .dev-card.off{border-color:#dc2626}
   .dev-type{font-size:.62rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
   .dev-name{font-size:.88rem;font-weight:700;color:#e2e8f0}
   .dev-val{font-size:1rem;font-weight:700;color:#38bdf8}
-  .dev-btn{margin-top:4px;padding:5px 0;background:#1e40af;color:#bfdbfe;border:none;border-radius:6px;font-size:.78rem;cursor:pointer;width:100%}
-  .dev-btn:hover{background:#1d4ed8}
+  .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
+  .toggle-lbl{font-size:.8rem;color:#94a3b8}
+  .toggle{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0}
+  .toggle input{opacity:0;width:0;height:0}
+  .slider{position:absolute;inset:0;background:#334155;border-radius:24px;cursor:pointer;transition:.25s}
+  .slider:before{content:'';position:absolute;width:18px;height:18px;left:3px;bottom:3px;background:#94a3b8;border-radius:50%;transition:.25s}
+  input:checked+.slider{background:#16a34a}
+  input:checked+.slider:before{transform:translateX(18px);background:#fff}
+  .toggle input:disabled+.slider{opacity:.45;cursor:not-allowed}
   .pulse{animation:pulse 1s ease-in-out}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
   #status-dot{display:inline-block;width:8px;height:8px;background:#86efac;border-radius:50%;margin-right:6px}
@@ -217,28 +226,47 @@ function badgeClass(state){
   return 'warn';
 }
 
+// Stable device state cache — survives re-renders
+var devCache = {};
+
+function isOnState(s){
+  s=(s||'').toUpperCase();
+  return s==='ON'||s==='1'||s==='TRUE'||s==='OPEN'||s==='LOCKED';
+}
+
 function renderDevices(devs){
   var g=$('dev-grid');
   if(!devs||devs.length===0){
     g.innerHTML="<p style='color:#64748b;font-size:.8rem'>No devices discovered yet. Waiting for MQTT config messages...</p>";
     return;
   }
+  // Merge incoming states into cache (skip if optimistic pending)
+  devs.forEach(function(d){ if(!devCache[d.cmd]||!devCache[d.cmd].pending) devCache[d.cmd]={state:d.state,pending:false}; });
+
   var h='';
   devs.forEach(function(d){
-    var isOn=(d.state==='ON'||d.state==='on'||d.state==='1'||d.state==='true');
+    var cached=devCache[d.cmd]||{state:d.state,pending:false};
+    var curState=cached.state||d.state||'';
+    var isOn=isOnState(curState);
     var canCtrl=d.cmd&&(d.type==='switch'||d.type==='light'||d.type==='lock'||d.type==='fan'||d.type==='cover');
-    h+="<div class='dev-card'>";
+    var cardCls=canCtrl?(isOn?'on':'off'):'';
+    var safeCmd=d.cmd.replace(/"/g,'&quot;');
+    h+="<div class='dev-card "+cardCls+"'>";
     h+="<div class='dev-type'>"+d.type+"</div>";
     h+="<div class='dev-name'>"+d.name+"</div>";
     if(d.type==='sensor'||d.type==='binary_sensor'){
-      h+="<div class='dev-val'>"+(d.state||'--')+"</div>";
+      h+="<div class='dev-val'>"+(curState||'--')+"</div>";
     } else {
-      var bc=badgeClass(d.state);
-      h+="<span class='badge "+bc+"'>"+(d.state||'?')+"</span>";
+      var bc=badgeClass(curState);
+      h+="<span class='badge "+bc+"' id='badge-"+btoa(d.cmd).replace(/=/g,'')+'>'+(curState||'?')+"</span>";
       if(canCtrl){
-        var next=isOn?'OFF':'ON';
-        var label=isOn?'Turn OFF':'Turn ON';
-        h+="<button class='dev-btn' onclick=\"sendCmd('"+d.cmd+"','"+next+"')\">"+label+"</button>";
+        var chk=isOn?'checked':'';
+        var dis=cached.pending?'disabled':'';
+        h+="<div class='toggle-row'>";
+        h+="<span class='toggle-lbl'>"+(isOn?'ON':'OFF')+"</span>";
+        h+="<label class='toggle'><input type='checkbox' "+chk+' '+dis+" onchange=\"toggleCmd(this,'"+safeCmd+"')\">"
+          +"<span class='slider'></span></label>";
+        h+="</div>";
       }
     }
     h+="</div>";
@@ -280,14 +308,22 @@ function refresh(){
     .catch(function(){dot.classList.remove('pulse');});
 }
 
-function sendCmd(topic, state){
-  fetch('/cmd?topic='+encodeURIComponent(topic)+'&payload='+encodeURIComponent(state))
+function toggleCmd(checkbox, topic){
+  var newState = checkbox.checked ? 'ON' : 'OFF';
+  // Optimistic update
+  if(!devCache[topic]) devCache[topic]={state:newState,pending:true};
+  devCache[topic].state   = newState;
+  devCache[topic].pending = true;
+  checkbox.disabled = true;
+
+  fetch('/cmd?topic='+encodeURIComponent(topic)+'&payload='+encodeURIComponent(newState))
     .then(function(r){return r.json();})
     .then(function(d){
-      if(!d.ok) alert('Command failed: '+(d.msg||'error'));
-      setTimeout(refresh, 800);
+      if(!d.ok){ alert('Command failed: '+(d.msg||'error')); devCache[topic].pending=false; }
+      // Refresh quickly to get real broker state
+      setTimeout(function(){ devCache[topic].pending=false; refresh(); }, 1200);
     })
-    .catch(function(){setTimeout(refresh,800);});
+    .catch(function(){ devCache[topic].pending=false; setTimeout(refresh,1200); });
 }
 
 // Populate static fields from placeholders baked in at serve time
