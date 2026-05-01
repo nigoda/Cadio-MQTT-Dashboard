@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="10">
+<title>Nivixsa ESP32 Status (Preview)</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px}
+  h1{color:#38bdf8;margin-bottom:4px;font-size:1.4rem}
+  p.sub{color:#94a3b8;font-size:.85rem;margin-bottom:24px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+  .card{background:#1e293b;border-radius:10px;padding:20px}
+  .card h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-bottom:12px}
+  .stat{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .stat .lbl{font-size:.85rem;color:#94a3b8}
+  .stat .val{font-weight:700;color:#e2e8f0}
+  .badge{padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:700}
+  .badge.on{background:#052e16;color:#86efac}
+  .badge.off{background:#450a0a;color:#fca5a5}
+  .badge.warn{background:#431407;color:#fdba74}
+  .msg-list{max-height:220px;overflow-y:auto}
+  .msg-item{font-size:.78rem;padding:4px 0;border-bottom:1px solid #334155;word-break:break-all}
+  .msg-item .ts{color:#64748b;margin-right:6px}
+  .msg-item .topic{color:#38bdf8}
+  a.btn{display:inline-block;margin-top:20px;padding:8px 20px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.85rem}
+  a.btn:hover{background:#1d4ed8}
+  a.btn.danger{background:#7f1d1d;color:#fca5a5}
+</style>
+</head>
+<body>
+<h1>&#127968; Nivixsa ESP32 Status</h1>
+<p class="sub">Page auto-refreshes every 10 seconds.</p>
+<div class="grid">
+  <div class="card">
+    <h2>&#128246; Network</h2>
+    <div class="stat"><span class="lbl">Wi-Fi</span><span class="val" id="wifi_ssid">HomeWiFi</span></div>
+    <div class="stat"><span class="lbl">IP Address</span><span class="val">192.168.1.55</span></div>
+    <div class="stat"><span class="lbl">Signal (RSSI)</span><span class="val">-45 dBm</span></div>
+    <div class="stat"><span class="lbl">Status</span><span class="badge on">Connected</span></div>
+  </div>
+  <div class="card">
+    <h2>&#9729; MQTT</h2>
+    <div class="stat"><span class="lbl">Broker</span><span class="val">egycad.com:1883</span></div>
+    <div class="stat"><span class="lbl">Account</span><span class="val">user@domain.com</span></div>
+    <div class="stat"><span class="lbl">Status</span><span class="badge on">Connected</span></div>
+    <div class="stat"><span class="lbl">Messages received</span><span class="val">42</span></div>
+  </div>
+  <div class="card">
+    <h2>&#128200; Device</h2>
+    <div class="stat"><span class="lbl">Uptime</span><span class="val">01h 23m 45s</span></div>
+    <div class="stat"><span class="lbl">Free heap</span><span class="val">210 KB</span></div>
+    <div class="stat"><span class="lbl">Chip</span><span class="val">ESP32</span></div>
+  </div>
+  <!-- Demo Switch Device -->
+  <div class="card">
+    <h2>&#128161; Switch (Relay)</h2>
+    <div class="stat"><span class="lbl">State</span><span class="badge on">ON</span></div>
+    <div class="stat"><span class="lbl">Topic</span><span class="val">homeassistant/switch/relay/state</span></div>
+    <div class="stat"><span class="lbl">Control</span>
+      <button style="padding:6px 18px;background:#38bdf8;color:#0f172a;border:none;border-radius:8px;font-weight:700;cursor:pointer;">Toggle</button>
+    </div>
+  </div>
+  <!-- Demo RGB Device -->
+  <div class="card">
+    <h2>&#128161; RGB Light</h2>
+    <div class="stat"><span class="lbl">State</span><span class="badge on">ON</span></div>
+    <div class="stat"><span class="lbl">Color</span>
+      <span class="val" style="display:inline-block;width:18px;height:18px;background:linear-gradient(90deg,#f00,#0f0,#00f);border-radius:4px;vertical-align:middle;"></span>
+      <span class="val" style="margin-left:8px;">#FFAA33</span>
+    </div>
+    <div class="stat"><span class="lbl">Brightness</span><span class="val">180</span></div>
+    <div class="stat"><span class="lbl">Topic</span><span class="val">homeassistant/light/rgb_lamp/state</span></div>
+    <div class="stat"><span class="lbl">Control</span>
+      <button style="padding:6px 18px;background:#38bdf8;color:#0f172a;border:none;border-radius:8px;font-weight:700;cursor:pointer;">Toggle</button>
+    </div>
+  </div>
+  <!-- Demo Sensor Device -->
+  <div class="card">
+    <h2>&#128300; Temperature Sensor</h2>
+    <div class="stat"><span class="lbl">Temperature</span><span class="val">22.5 &deg;C</span></div>
+    <div class="stat"><span class="lbl">Humidity</span><span class="val">55 %</span></div>
+    <div class="stat"><span class="lbl">Topic</span><span class="val">homeassistant/sensor/temp/state</span></div>
+  </div>
+  <div class="card" style="grid-column:1/-1">
+    <h2>&#128240; Recent MQTT Messages</h2>
+    <div class="msg-list" id="msgs">
+      <div class='msg-item'><span class='ts'>42</span><span class='topic'>homeassistant/sensor/temp/state</span> → {"temperature":22.5}</div>
+      <div class='msg-item'><span class='ts'>41</span><span class='topic'>homeassistant/switch/relay/state</span> → {"state":"ON"}</div>
+      <div class='msg-item'><span class='ts'>40</span><span class='topic'>homeassistant/sensor/hum/state</span> → {"humidity":55}</div>
+      <div class='msg-item'><span class='ts'>39</span><span class='topic'>homeassistant/light/lamp/state</span> → {"brightness":128}</div>
+      <div class='msg-item'><span class='ts'>38</span><span class='topic'>homeassistant/sensor/temp/state</span> → {"temperature":22.3}</div>
+      <div class='msg-item'><span class='ts'>37</span><span class='topic'>homeassistant/switch/relay/state</span> → {"state":"OFF"}</div>
+    </div>
+  </div>
+</div>
+<a class="btn" href="#">&#9881; Setup / Reconfigure</a>
+<a class="btn danger" href="#" onclick="alert('(Preview) This would factory reset the device.')">&#9888; Factory Reset</a>
+</body>
+</html>
