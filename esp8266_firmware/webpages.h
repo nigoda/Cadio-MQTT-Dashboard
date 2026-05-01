@@ -132,87 +132,172 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="10">
 <title>Nivixsa ESP8266 Status</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px}
+  body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:20px}
   h1{color:#38bdf8;margin-bottom:4px;font-size:1.4rem}
-  p.sub{color:#94a3b8;font-size:.85rem;margin-bottom:24px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
-  .card{background:#1e293b;border-radius:10px;padding:20px}
-  .card h2{font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-bottom:12px}
-  .stat{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-  .stat .lbl{font-size:.85rem;color:#94a3b8}
-  .stat .val{font-weight:700;color:#e2e8f0}
-  .badge{padding:3px 10px;border-radius:20px;font-size:.75rem;font-weight:700}
+  .sub{color:#94a3b8;font-size:.82rem;margin-bottom:20px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+  .card{background:#1e293b;border-radius:10px;padding:16px}
+  .card h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-bottom:10px}
+  .stat{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
+  .stat .lbl{font-size:.82rem;color:#94a3b8}
+  .stat .val{font-weight:700;color:#e2e8f0;font-size:.88rem}
+  .badge{padding:2px 9px;border-radius:20px;font-size:.72rem;font-weight:700}
   .badge.on{background:#052e16;color:#86efac}
   .badge.off{background:#450a0a;color:#fca5a5}
   .badge.warn{background:#431407;color:#fdba74}
-  .msg-list{max-height:180px;overflow-y:auto}
-  .msg-item{font-size:.75rem;padding:3px 0;border-bottom:1px solid #334155;word-break:break-all}
-  .msg-item .ts{color:#64748b;margin-right:6px}
-  .msg-item .topic{color:#38bdf8}
-  a.btn{display:inline-block;margin-top:16px;margin-right:8px;padding:8px 18px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.85rem}
-  a.btn:hover{background:#1d4ed8}
-  a.btn.danger{background:#7f1d1d;color:#fca5a5}
-  /* Device cards */
-  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:4px}
-  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:6px}
-  .dev-type-lbl{font-size:.65rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
-  .dev-name{font-size:.9rem;font-weight:700;color:#e2e8f0}
-  .dev-val{font-size:1.1rem;font-weight:700;color:#38bdf8;margin-top:2px}
-  .dev-btn{margin-top:6px;padding:6px 12px;background:#1e40af;color:#bfdbfe;border:none;border-radius:6px;font-size:.8rem;cursor:pointer;width:100%}
+  .msg-list{max-height:160px;overflow-y:auto}
+  .msg-item{font-size:.73rem;padding:3px 0;border-bottom:1px solid #334155;word-break:break-all;color:#cbd5e1}
+  .msg-item .tp{color:#38bdf8;margin-right:4px}
+  .btn{display:inline-block;margin-top:14px;margin-right:8px;padding:7px 16px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.82rem}
+  .btn:hover{background:#1d4ed8}
+  .btn.danger{background:#7f1d1d;color:#fca5a5}
+  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-top:6px}
+  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:5px}
+  .dev-type{font-size:.62rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
+  .dev-name{font-size:.88rem;font-weight:700;color:#e2e8f0}
+  .dev-val{font-size:1rem;font-weight:700;color:#38bdf8}
+  .dev-btn{margin-top:4px;padding:5px 0;background:#1e40af;color:#bfdbfe;border:none;border-radius:6px;font-size:.78rem;cursor:pointer;width:100%}
   .dev-btn:hover{background:#1d4ed8}
-  .dev-card .badge{margin-top:2px;align-self:flex-start}
+  .pulse{animation:pulse 1s ease-in-out}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  #status-dot{display:inline-block;width:8px;height:8px;background:#86efac;border-radius:50%;margin-right:6px}
 </style>
 </head>
 <body>
 <h1>&#127968; Nivixsa ESP8266 Status</h1>
-<p class="sub">Page auto-refreshes every 10 seconds.</p>
+<p class="sub"><span id="status-dot"></span>Live &mdash; updates every 10s</p>
 <div class="grid">
   <div class="card">
     <h2>Network</h2>
-    <div class="stat"><span class="lbl">Wi-Fi</span><span class="val">__WIFI_SSID__</span></div>
-    <div class="stat"><span class="lbl">IP Address</span><span class="val">__IP__</span></div>
-    <div class="stat"><span class="lbl">Signal (RSSI)</span><span class="val">__RSSI__ dBm</span></div>
-    <div class="stat"><span class="lbl">Status</span><span class="badge on">Connected</span></div>
+    <div class="stat"><span class="lbl">Wi-Fi</span><span class="val" id="d-ssid">...</span></div>
+    <div class="stat"><span class="lbl">IP Address</span><span class="val" id="d-ip">...</span></div>
+    <div class="stat"><span class="lbl">Signal</span><span class="val" id="d-rssi">...</span></div>
   </div>
   <div class="card">
     <h2>MQTT</h2>
-    <div class="stat"><span class="lbl">Broker</span><span class="val">__BROKER__:__PORT__</span></div>
-    <div class="stat"><span class="lbl">Account</span><span class="val">__EMAIL__</span></div>
-    <div class="stat"><span class="lbl">Status</span><span class="badge __MQTT_CLASS__">__MQTT_STATUS__</span></div>
-    <div class="stat"><span class="lbl">Messages</span><span class="val">__MSG_COUNT__</span></div>
+    <div class="stat"><span class="lbl">Broker</span><span class="val" id="d-broker">...</span></div>
+    <div class="stat"><span class="lbl">Account</span><span class="val" id="d-email">...</span></div>
+    <div class="stat"><span class="lbl">Status</span><span id="d-mqtts" class="badge warn">...</span></div>
+    <div class="stat"><span class="lbl">Messages</span><span class="val" id="d-msgs">0</span></div>
   </div>
   <div class="card">
     <h2>Device</h2>
-    <div class="stat"><span class="lbl">Uptime</span><span class="val">__UPTIME__</span></div>
-    <div class="stat"><span class="lbl">Free heap</span><span class="val">__HEAP__ KB</span></div>
+    <div class="stat"><span class="lbl">Uptime</span><span class="val" id="d-uptime">...</span></div>
+    <div class="stat"><span class="lbl">Free heap</span><span class="val" id="d-heap">...</span></div>
     <div class="stat"><span class="lbl">Chip</span><span class="val">ESP8266</span></div>
   </div>
 </div>
-
-<div class="card" style="margin-top:16px">
+<div class="card" style="margin-top:14px">
   <h2>Devices &amp; Entities</h2>
-  <div class="dev-grid">__DEVICES__</div>
+  <div class="dev-grid" id="dev-grid"><p style="color:#64748b;font-size:.8rem">Waiting for MQTT discovery...</p></div>
 </div>
-
-<div class="card" style="margin-top:16px">
+<div class="card" style="margin-top:14px">
   <h2>Recent MQTT Messages</h2>
-  <div class="msg-list">__MESSAGES__</div>
+  <div class="msg-list" id="msg-list"><p style="color:#64748b;font-size:.8rem">No messages yet.</p></div>
 </div>
-
 <a class="btn" href="/setup">Setup / Reconfigure</a>
 <a class="btn danger" href="/reset" onclick="return confirm('Wipe credentials and reboot?')">Factory Reset</a>
+
 <script>
-function sendCmd(topic, state) {
-  fetch('/cmd?topic=' + encodeURIComponent(topic) + '&payload=' + encodeURIComponent(state))
-    .then(r => r.json()).then(d => {
-      if (d.ok) { setTimeout(() => location.reload(), 600); }
-      else { alert('Command failed: ' + (d.msg || 'unknown error')); }
-    }).catch(() => { setTimeout(() => location.reload(), 600); });
+var WIFI_SSID  = '__WIFI_SSID__';
+var BROKER     = '__BROKER__';
+var BROKER_PORT= '__PORT__';
+var EMAIL      = '__EMAIL__';
+var IP         = '__IP__';
+
+function $(id){ return document.getElementById(id); }
+
+function badgeClass(state){
+  var s = (state||'').toUpperCase();
+  if(s==='ON'||s==='LOCKED'||s==='OPEN') return 'on';
+  if(s==='OFF'||s==='UNLOCKED'||s==='CLOSED') return 'off';
+  return 'warn';
 }
+
+function renderDevices(devs){
+  var g=$('dev-grid');
+  if(!devs||devs.length===0){
+    g.innerHTML="<p style='color:#64748b;font-size:.8rem'>No devices discovered yet. Waiting for MQTT config messages...</p>";
+    return;
+  }
+  var h='';
+  devs.forEach(function(d){
+    var isOn=(d.state==='ON'||d.state==='on'||d.state==='1'||d.state==='true');
+    var canCtrl=d.cmd&&(d.type==='switch'||d.type==='light'||d.type==='lock'||d.type==='fan'||d.type==='cover');
+    h+="<div class='dev-card'>";
+    h+="<div class='dev-type'>"+d.type+"</div>";
+    h+="<div class='dev-name'>"+d.name+"</div>";
+    if(d.type==='sensor'||d.type==='binary_sensor'){
+      h+="<div class='dev-val'>"+(d.state||'--')+"</div>";
+    } else {
+      var bc=badgeClass(d.state);
+      h+="<span class='badge "+bc+"'>"+(d.state||'?')+"</span>";
+      if(canCtrl){
+        var next=isOn?'OFF':'ON';
+        var label=isOn?'Turn OFF':'Turn ON';
+        h+="<button class='dev-btn' onclick=\"sendCmd('"+d.cmd+"','"+next+"')\">"+label+"</button>";
+      }
+    }
+    h+="</div>";
+  });
+  g.innerHTML=h;
+}
+
+function renderMessages(msgs){
+  var el=$('msg-list');
+  if(!msgs||msgs.length===0){el.innerHTML="<p style='color:#64748b;font-size:.8rem'>No messages yet.</p>";return;}
+  var h='';
+  msgs.forEach(function(m){
+    h+="<div class='msg-item'><span class='tp'>"+m.t+"</span>"+m.p+"</div>";
+  });
+  el.innerHTML=h;
+}
+
+function refresh(){
+  var dot=$('status-dot');
+  dot.classList.add('pulse');
+  fetch('/api/data')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      dot.classList.remove('pulse');
+      $('d-ssid').textContent   = WIFI_SSID;
+      $('d-ip').textContent     = IP;
+      $('d-rssi').textContent   = d.rssi+' dBm';
+      $('d-broker').textContent = BROKER+':'+BROKER_PORT;
+      $('d-email').textContent  = EMAIL;
+      $('d-uptime').textContent = d.uptime;
+      $('d-heap').textContent   = d.heap+' KB';
+      $('d-msgs').textContent   = d.msg_count;
+      var ms=$('d-mqtts');
+      ms.textContent=d.mqtt?'Connected':'Disconnected';
+      ms.className='badge '+(d.mqtt?'on':'off');
+      renderDevices(d.devices);
+      renderMessages(d.messages);
+    })
+    .catch(function(){dot.classList.remove('pulse');});
+}
+
+function sendCmd(topic, state){
+  fetch('/cmd?topic='+encodeURIComponent(topic)+'&payload='+encodeURIComponent(state))
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok) alert('Command failed: '+(d.msg||'error'));
+      setTimeout(refresh, 800);
+    })
+    .catch(function(){setTimeout(refresh,800);});
+}
+
+// Populate static fields from placeholders baked in at serve time
+$('d-ssid').textContent   = WIFI_SSID;
+$('d-ip').textContent     = IP;
+$('d-broker').textContent = BROKER+':'+BROKER_PORT;
+$('d-email').textContent  = EMAIL;
+
+refresh();
+setInterval(refresh, 10000);
 </script>
 </body>
 </html>

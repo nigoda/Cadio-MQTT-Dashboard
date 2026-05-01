@@ -9,6 +9,13 @@
 #define RESET_BTN_PIN      0
 #define RESET_HOLD_MS   5000
 
+// Built-in LED on NodeMCU: GPIO2 (D4), active LOW
+#define STATUS_LED_PIN     2
+// Blink patterns (milliseconds)
+//   Fast blink  = AP / provisioning mode
+//   Slow blink  = Wi-Fi connected, MQTT disconnected
+//   Solid ON    = Wi-Fi + MQTT connected
+
 // ---------- Access Point (setup mode) --------------------------------------
 #define AP_SSID_PREFIX    "Nivixsa-Setup"
 #define AP_PASSWORD       ""                // empty = open AP

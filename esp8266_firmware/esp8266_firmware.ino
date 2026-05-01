@@ -152,6 +152,57 @@ void handleSetupPage() {
   server.send(200, "text/html", FPSTR(SETUP_HTML));
 }
 
+// ---------------------------------------------------------------------------
+//  /api/data — lightweight JSON endpoint polled by JS every 10s
+//  Keeps heap usage low by never rebuilding the full HTML page
+// ---------------------------------------------------------------------------
+void handleApiData() {
+  String json = "{";
+  json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  json += "\"heap\":" + String(ESP.getFreeHeap() / 1024) + ",";
+  json += "\"uptime\":\"" + uptimeStr() + "\",";
+  json += "\"mqtt\":" + String(mqttConnected ? "true" : "false") + ",";
+  json += "\"msg_count\":" + String(msgCount) + ",";
+
+  // Recent messages array (last 10 only to keep JSON small)
+  json += "\"messages\":[";
+  bool firstMsg = true;
+  for (int i = 0; i < 10; i++) {
+    int idx = ((msgBufHead - 1 - i) + MSG_BUF_SIZE) % MSG_BUF_SIZE;
+    if (msgBuf[idx].topic.isEmpty()) continue;
+    if (!firstMsg) json += ",";
+    firstMsg = false;
+    String t = msgBuf[idx].topic;
+    String p = msgBuf[idx].payload.substring(0, 80);
+    t.replace("\\", "\\\\"); t.replace("\"", "\\\"");
+    p.replace("\\", "\\\\"); p.replace("\"", "\\\"");
+    json += "{\"t\":\"" + t + "\",\"p\":\"" + p + "\"}";
+  }
+  json += "],";
+
+  // Devices array
+  json += "\"devices\":[";
+  bool firstDev = true;
+  for (int i = 0; i < deviceCount; i++) {
+    if (!devices[i].active) continue;
+    if (!firstDev) json += ",";
+    firstDev = false;
+    String name  = String(devices[i].name);  name.replace("\"", "'");
+    String state = String(devices[i].state); state.replace("\"", "'");
+    String cmd   = String(devices[i].cmdTopic);
+    json += "{";
+    json += "\"name\":\"" + name + "\",";
+    json += "\"type\":\"" + String(devices[i].type) + "\",";
+    json += "\"state\":\"" + state + "\",";
+    json += "\"cmd\":\"" + cmd + "\"";
+    json += "}";
+  }
+  json += "]}";
+
+  server.sendHeader("Cache-Control", "no-cache");
+  server.send(200, "application/json", json);
+}
+
 void handleCmd() {
   if (!server.hasArg("topic") || !server.hasArg("payload")) {
     server.send(400, "application/json", "{\"ok\":false,\"msg\":\"Missing topic or payload\"}");
@@ -164,38 +215,12 @@ void handleCmd() {
   String topic   = server.arg("topic");
   String payload = server.arg("payload");
   String json    = "{\"state\":\"" + payload + "\"}";
-  mqttClient.publish(topic.c_str(), json.c_str(), /*retain=*/false);
+  mqttClient.publish(topic.c_str(), json.c_str(), false);
   Serial.printf("[CMD] %s -> %s\n", topic.c_str(), json.c_str());
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-void handleDashboard() {
-  String msgs;
-  for (int i = 0; i < MSG_BUF_SIZE; i++) {
-    int idx = ((msgBufHead - 1 - i) + MSG_BUF_SIZE) % MSG_BUF_SIZE;
-    if (msgBuf[idx].topic.isEmpty()) continue;
-    msgs += "<div class='msg-item'><span class='ts'>" + String(msgCount - i) + "</span>";
-    msgs += "<span class='topic'>" + msgBuf[idx].topic + "</span> -> ";
-    msgs += msgBuf[idx].payload.substring(0, 120) + "</div>";
-  }
-  if (msgs.isEmpty()) msgs = "<p style='color:#64748b;font-size:.8rem'>No messages yet.</p>";
-
-  String html = FPSTR(DASHBOARD_HTML);
-  html.replace("__WIFI_SSID__",   creds.wifiSSID);
-  html.replace("__IP__",          WiFi.localIP().toString());
-  html.replace("__RSSI__",        String(WiFi.RSSI()));
-  html.replace("__BROKER__",      creds.mqttBroker);
-  html.replace("__PORT__",        String(creds.mqttPort));
-  html.replace("__EMAIL__",       creds.mqttEmail);
-  html.replace("__MQTT_CLASS__",  mqttConnected ? "on" : "off");
-  html.replace("__MQTT_STATUS__", mqttConnected ? "Connected" : "Disconnected");
-  html.replace("__MSG_COUNT__",   String(msgCount));
-  html.replace("__UPTIME__",      uptimeStr());
-  html.replace("__HEAP__",        String(ESP.getFreeHeap() / 1024));
-  html.replace("__MESSAGES__",    msgs);
-  html.replace("__DEVICES__",     buildDevicesHtml());
-  server.send(200, "text/html", html);
-}
+void handleDashboard() {\n  // Send the static HTML shell with a few baked-in fields.\n  // Dynamic data (devices, messages, states) is fetched by JS via /api/data.\n  String html = FPSTR(DASHBOARD_HTML);\n  html.replace(\"__WIFI_SSID__\", creds.wifiSSID);\n  html.replace(\"__IP__\",        WiFi.localIP().toString());\n  html.replace(\"__BROKER__\",    creds.mqttBroker);\n  html.replace(\"__PORT__\",      String(creds.mqttPort));\n  html.replace(\"__EMAIL__\",     creds.mqttEmail);\n  server.sendHeader(\"Cache-Control\", \"no-cache\");\n  server.send(200, \"text/html\", html);\n}
 
 void handleReset() {
   credStore.clear();
@@ -470,6 +495,7 @@ void startNormalMode() {
   server.on("/save", HTTP_POST, handleSave);
   server.on("/reset",     HTTP_GET,  handleReset);
   server.on("/cmd",       HTTP_GET,  handleCmd);
+  server.on("/api/data",  HTTP_GET,  handleApiData);
   server.onNotFound([]() { server.send(404, "text/plain", "Not found"); });
   server.begin();
 
@@ -491,6 +517,38 @@ void checkResetButton() {
   }
 }
 
+// ---------------------------------------------------------------------------
+//  Built-in LED status indicator (non-blocking)
+//  Active LOW: digitalWrite LOW = LED on, HIGH = LED off
+//  AP mode      : fast blink 150ms
+//  Wi-Fi only   : slow blink 1000ms
+//  Wi-Fi + MQTT : solid ON
+// ---------------------------------------------------------------------------
+void updateLed() {
+  static unsigned long lastToggle = 0;
+  static bool ledState = false;
+  unsigned long now = millis();
+
+  if (appMode == MODE_SETUP) {
+    // Fast blink — provisioning
+    if (now - lastToggle >= 150) {
+      lastToggle = now;
+      ledState = !ledState;
+      digitalWrite(STATUS_LED_PIN, ledState ? LOW : HIGH);
+    }
+  } else if (mqttConnected) {
+    // Solid ON
+    digitalWrite(STATUS_LED_PIN, LOW);
+  } else {
+    // Slow blink — Wi-Fi ok but MQTT not connected
+    if (now - lastToggle >= 1000) {
+      lastToggle = now;
+      ledState = !ledState;
+      digitalWrite(STATUS_LED_PIN, ledState ? LOW : HIGH);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -498,6 +556,8 @@ void setup() {
 
   Serial.println("\n=== Nivixsa IoT Dashboard ESP8266 ===");
   pinMode(RESET_BTN_PIN, INPUT_PULLUP);
+  pinMode(STATUS_LED_PIN, OUTPUT);
+  digitalWrite(STATUS_LED_PIN, HIGH); // OFF initially (active LOW)
 
   bool hasCredentials = credStore.load(creds);
   if (!hasCredentials) {
@@ -532,6 +592,7 @@ void setup() {
 
 void loop() {
   checkResetButton();
+  updateLed();
 
   if (appMode == MODE_SETUP) {
     dnsServer.processNextRequest();
