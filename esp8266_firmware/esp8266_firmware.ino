@@ -671,6 +671,26 @@ void checkResetButton() {
   }
 }
 
+bool checkResetButtonAtBoot() {
+  if (digitalRead(RESET_BTN_PIN) != LOW) return false;
+
+  Serial.println("[BTN] FLASH pressed at boot. Hold 3s to clear credentials...");
+  unsigned long pressedAt = millis();
+  while (digitalRead(RESET_BTN_PIN) == LOW) {
+    if (millis() - pressedAt >= RESET_HOLD_MS) {
+      Serial.println("[BTN] Boot reset triggered. Clearing credentials.");
+      credStore.clear();
+      delay(250);
+      ESP.restart();
+      return true;
+    }
+    delay(50);
+  }
+
+  Serial.println("[BTN] Released before 3s. Reset cancelled.");
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 //  Built-in LED status indicator (non-blocking)
 //  Active LOW: digitalWrite LOW = LED on, HIGH = LED off
@@ -713,6 +733,10 @@ void setup() {
   pinMode(STATUS_LED_PIN, OUTPUT);
   digitalWrite(STATUS_LED_PIN, HIGH); // OFF initially (active LOW)
 
+  if (checkResetButtonAtBoot()) {
+    return;
+  }
+
   bool hasCredentials = credStore.load(creds);
   if (!hasCredentials) {
     startAPMode();
@@ -720,13 +744,16 @@ void setup() {
   }
 
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);
   WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
 
   Serial.printf("[WiFi] Connecting to %s", creds.wifiSSID.c_str());
   unsigned long t0 = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    checkResetButton();
     if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
-      Serial.println("\n[WiFi] Timeout. Falling back to AP mode.");
+      Serial.printf("\n[WiFi] Timeout (status=%d). Falling back to AP mode.\n", WiFi.status());
       startAPMode();
       return;
     }
@@ -755,7 +782,7 @@ void loop() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Disconnected. Restarting to recover.");
+    Serial.printf("[WiFi] Disconnected (status=%d). Restarting to recover.\n", WiFi.status());
     delay(500);
     ESP.restart();
   }

@@ -7,7 +7,7 @@
 // Use the built-in FLASH button on NodeMCU: D3 (GPIO0).
 // NOTE: GPIO0 is a boot strap pin; do not keep it pressed while powering on.
 #define RESET_BTN_PIN      0
-#define RESET_HOLD_MS   5000
+#define RESET_HOLD_MS   3000
 
 // Built-in LED on NodeMCU: GPIO2 (D4), active LOW
 #define STATUS_LED_PIN     2

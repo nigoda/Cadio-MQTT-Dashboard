@@ -45,6 +45,6 @@ Normal usage
 Physical reset button
 ---------------------
 - Uses built-in FLASH button: GPIO0 (NodeMCU D3)
-- Hold LOW for 5 seconds to clear saved credentials
+- Hold LOW for 3 seconds to clear saved credentials
 - Important: do not keep FLASH pressed during power-on/reset boot
 - Edit config.h if your wiring differs
