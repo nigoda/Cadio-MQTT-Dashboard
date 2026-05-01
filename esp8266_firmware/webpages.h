@@ -164,6 +164,8 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .dev-val{font-size:1rem;font-weight:700;color:#38bdf8}
   .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
   .toggle-lbl{font-size:.8rem;color:#94a3b8}
+  .light-meta{display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:#94a3b8;margin-top:2px}
+  .light-range{width:100%;margin-top:6px;accent-color:#38bdf8}
   .toggle{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0}
   .toggle input{opacity:0;width:0;height:0}
   .slider{position:absolute;inset:0;background:#334155;border-radius:24px;cursor:pointer;transition:.25s}
@@ -264,6 +266,7 @@ function renderDevices(devs){
     var hasState=!!(curState&&curState.length);
     var isOn=isOnState(curState);
     var canCtrl=d.cmd&&(d.type==='switch'||d.type==='light'||d.type==='lock'||d.type==='fan'||d.type==='cover');
+    var canBrightness=(d.type==='light'&&d.cmd&&d.supports_brightness);
     var cardCls=canCtrl?(hasState?(isOn?'on':'off'):''):'';
     var safeCmd=d.cmd.replace(/"/g,'&quot;');
     h+="<div class='dev-card "+cardCls+"'>";
@@ -288,6 +291,11 @@ function renderDevices(devs){
         h+="<label class='toggle'><input type='checkbox' "+chk+' '+dis+" onchange=\"toggleCmd(this,'"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"')\">"
           +"<span class='slider'></span></label>";
         h+="</div>";
+      }
+      if(canBrightness){
+        var bri=(typeof d.brightness==='number'&&d.brightness>=0)?d.brightness:0;
+        h+="<div class='light-meta'><span>Brightness</span><span>"+bri+"</span></div>";
+        h+="<input class='light-range' type='range' min='0' max='100' value='"+bri+"' onchange=\"sendBrightness('"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"',this.value)\">";
       }
     }
     h+="</div>";
@@ -345,6 +353,21 @@ function toggleCmd(checkbox, key, topic){
       setTimeout(function(){ if(devCache[key]) devCache[key].pending=false; refresh(); }, 1200);
     })
     .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,1200); });
+}
+
+function sendBrightness(key, topic, value){
+  var bri=Math.max(0, Math.min(100, parseInt(value||0,10)));
+  if(!devCache[key]) devCache[key]={state:'ON',pending:true};
+  devCache[key].pending=true;
+  var payload=JSON.stringify({state:'ON', brightness:bri});
+
+  fetch('/cmd?topic='+encodeURIComponent(topic)+'&payload='+encodeURIComponent(payload)+'&raw=1')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){ alert('Brightness failed: '+(d.msg||'error')); }
+      setTimeout(function(){ if(devCache[key]) devCache[key].pending=false; refresh(); }, 900);
+    })
+    .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,900); });
 }
 
 // Populate static fields from placeholders baked in at serve time

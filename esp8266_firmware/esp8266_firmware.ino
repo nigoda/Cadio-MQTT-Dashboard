@@ -52,6 +52,8 @@ int msgBufHead = 0;
 
 struct IoTDevice {
   bool   active;
+  bool   supportsBrightness;
+  int    brightness;               // 0-100, -1 unknown
   char   name[DEV_NAME_LEN];
   char   deviceId[DEV_ID_LEN];
   char   serialId[DEV_SERIAL_LEN];
@@ -206,7 +208,9 @@ void handleApiData() {
     json += "\"name\":\"" + name + "\",";
       json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
-    json += "\"cmd\":\"" + cmd + "\"";
+    json += "\"cmd\":\"" + cmd + "\",";
+    json += "\"supports_brightness\":" + String(devices[i].supportsBrightness ? "true" : "false") + ",";
+    json += "\"brightness\":" + String(devices[i].brightness);
     json += "}";
   }
   json += "]}";
@@ -226,20 +230,37 @@ void handleCmd() {
   }
   String topic   = server.arg("topic");
   String payload = server.arg("payload");
-  String json    = "{\"state\":\"" + payload + "\"}";
-  mqttClient.publish(topic.c_str(), json.c_str(), false);
+  bool rawPayload = server.hasArg("raw") && server.arg("raw") == "1";
+  String mqttPayload = rawPayload ? payload : ("{\"state\":\"" + payload + "\"}");
+  mqttClient.publish(topic.c_str(), mqttPayload.c_str(), false);
 
-  // Reflect the new state immediately in the local device cache so the UI
-  // updates without waiting for the entity to publish a separate state echo.
+  // Reflect new state/brightness quickly in local cache.
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
     if (topic != String(devices[i].cmdTopic)) continue;
-    strncpy(devices[i].state, payload.c_str(), DEV_STATE_LEN - 1);
-    devices[i].state[DEV_STATE_LEN - 1] = '\0';
+
+    if (!rawPayload) {
+      strncpy(devices[i].state, payload.c_str(), DEV_STATE_LEN - 1);
+      devices[i].state[DEV_STATE_LEN - 1] = '\0';
+      break;
+    }
+
+    JsonDocument cmdDoc;
+    if (deserializeJson(cmdDoc, payload) == DeserializationError::Ok) {
+      if (cmdDoc.containsKey("state")) {
+        String s = cmdDoc["state"].as<String>();
+        s = s.substring(0, DEV_STATE_LEN - 1);
+        strncpy(devices[i].state, s.c_str(), DEV_STATE_LEN - 1);
+        devices[i].state[DEV_STATE_LEN - 1] = '\0';
+      }
+      if (cmdDoc.containsKey("brightness")) {
+        devices[i].brightness = constrain(cmdDoc["brightness"].as<int>(), 0, 100);
+      }
+    }
     break;
   }
 
-  Serial.printf("[CMD] %s -> %s\n", topic.c_str(), json.c_str());
+  Serial.printf("[CMD] %s -> %s\n", topic.c_str(), mqttPayload.c_str());
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -347,6 +368,7 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *name       = doc["name"]          | "";
   const char *stateTopic = doc["state_topic"]   | "";
   const char *cmdTopic   = doc["command_topic"] | "";
+  bool brightnessFlag = doc["brightness"] | false;
   if (strlen(stateTopic) == 0) return;
 
   // Find existing slot or allocate new one
@@ -359,7 +381,23 @@ void parseConfigMsg(const String &topic, const String &payload) {
   if (slot < 0 && deviceCount < MAX_DEVICES) slot = deviceCount++;
   if (slot < 0) return;
 
+  bool supportsBrightness = brightnessFlag;
+  if (doc["supported_color_modes"].is<JsonArray>()) {
+    JsonArray modes = doc["supported_color_modes"].as<JsonArray>();
+    for (JsonVariant v : modes) {
+      String m = v.as<String>();
+      if (m == "brightness" || m == "rgb") {
+        supportsBrightness = true;
+        break;
+      }
+    }
+  }
+
   devices[slot].active = true;
+  devices[slot].supportsBrightness = (entityType == "light") && supportsBrightness;
+  if (devices[slot].brightness < 0 || devices[slot].brightness > 100) {
+    devices[slot].brightness = -1;
+  }
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
   strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
   strncpy(devices[slot].serialId,   serialId.c_str(),                      DEV_SERIAL_LEN - 1);
@@ -398,6 +436,10 @@ void updateDeviceState(const String &topic, const String &payload) {
       else if (doc.containsKey("temperature")) stateVal = String(doc["temperature"].as<float>(), 1) + " C";
       else if (doc.containsKey("humidity"))    stateVal = String(doc["humidity"].as<float>(), 1) + " %";
       else if (doc.containsKey("value"))       stateVal = doc["value"].as<String>();
+
+      if (doc.containsKey("brightness")) {
+        devices[i].brightness = constrain(doc["brightness"].as<int>(), 0, 100);
+      }
     }
     stateVal = stateVal.substring(0, DEV_STATE_LEN - 1);
     strncpy(devices[i].state, stateVal.c_str(), DEV_STATE_LEN - 1);
