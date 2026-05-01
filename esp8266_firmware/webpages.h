@@ -234,6 +234,10 @@ function isOnState(s){
   return s==='ON'||s==='1'||s==='TRUE'||s==='OPEN'||s==='LOCKED';
 }
 
+function stateLabel(s){
+  return s && s.length ? s : '--';
+}
+
 function devKey(d){
   return d.id || d.cmd || d.name || '';
 }
@@ -256,23 +260,24 @@ function renderDevices(devs){
     var key=devKey(d);
     var cached=devCache[key]||{state:d.state,pending:false};
     var curState=cached.state||d.state||'';
+    var hasState=!!(curState&&curState.length);
     var isOn=isOnState(curState);
     var canCtrl=d.cmd&&(d.type==='switch'||d.type==='light'||d.type==='lock'||d.type==='fan'||d.type==='cover');
-    var cardCls=canCtrl?(isOn?'on':'off'):'';
+    var cardCls=canCtrl?(hasState?(isOn?'on':'off'):''):'';
     var safeCmd=d.cmd.replace(/"/g,'&quot;');
     h+="<div class='dev-card "+cardCls+"'>";
     h+="<div class='dev-type'>"+d.type+"</div>";
     h+="<div class='dev-name'>"+d.name+"</div>";
     if(d.type==='sensor'||d.type==='binary_sensor'){
-      h+="<div class='dev-val'>"+(curState||'--')+"</div>";
+      h+="<div class='dev-val'>"+stateLabel(curState)+"</div>";
     } else {
       var bc=badgeClass(curState);
-      h+="<span class='badge "+bc+"' id='badge-"+btoa(d.cmd).replace(/=/g,'')+'>'+(curState||'?')+"</span>";
+      h+="<span class='badge "+(hasState?bc:'warn')+"' id='badge-"+btoa(d.cmd).replace(/=/g,'')+'>'+stateLabel(curState)+"</span>";
       if(canCtrl){
         var chk=isOn?'checked':'';
         var dis=cached.pending?'disabled':'';
         h+="<div class='toggle-row'>";
-        h+="<span class='toggle-lbl'>"+(isOn?'ON':'OFF')+"</span>";
+        h+="<span class='toggle-lbl'>"+(hasState?(isOn?'ON':'OFF'):'--')+"</span>";
         h+="<label class='toggle'><input type='checkbox' "+chk+' '+dis+" onchange=\"toggleCmd(this,'"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"')\">"
           +"<span class='slider'></span></label>";
         h+="</div>";

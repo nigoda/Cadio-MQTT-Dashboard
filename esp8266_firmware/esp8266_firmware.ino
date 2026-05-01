@@ -355,6 +355,13 @@ void parseConfigMsg(const String &topic, const String &payload) {
   devices[slot].stateTopic[DEV_TOPIC_LEN - 1] = '\0';
   devices[slot].cmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
 
+  if (mqttClient.connected()) {
+    mqttClient.subscribe(devices[slot].stateTopic);
+    if (strlen(devices[slot].cmdTopic) > 0) {
+      mqttClient.subscribe(devices[slot].cmdTopic);
+    }
+  }
+
   Serial.printf("[DEV] Registered: %s (%s)\n", devices[slot].name, devices[slot].type);
 }
 
