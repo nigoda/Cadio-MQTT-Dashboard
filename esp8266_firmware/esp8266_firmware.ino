@@ -220,7 +220,18 @@ void handleCmd() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-void handleDashboard() {\n  // Send the static HTML shell with a few baked-in fields.\n  // Dynamic data (devices, messages, states) is fetched by JS via /api/data.\n  String html = FPSTR(DASHBOARD_HTML);\n  html.replace(\"__WIFI_SSID__\", creds.wifiSSID);\n  html.replace(\"__IP__\",        WiFi.localIP().toString());\n  html.replace(\"__BROKER__\",    creds.mqttBroker);\n  html.replace(\"__PORT__\",      String(creds.mqttPort));\n  html.replace(\"__EMAIL__\",     creds.mqttEmail);\n  server.sendHeader(\"Cache-Control\", \"no-cache\");\n  server.send(200, \"text/html\", html);\n}
+void handleDashboard() {
+  // Send the static HTML shell with a few baked-in fields.
+  // Dynamic data (devices, messages, states) is fetched by JS via /api/data.
+  String html = FPSTR(DASHBOARD_HTML);
+  html.replace("__WIFI_SSID__", creds.wifiSSID);
+  html.replace("__IP__",        WiFi.localIP().toString());
+  html.replace("__BROKER__",    creds.mqttBroker);
+  html.replace("__PORT__",      String(creds.mqttPort));
+  html.replace("__EMAIL__",     creds.mqttEmail);
+  server.sendHeader("Cache-Control", "no-cache");
+  server.send(200, "text/html", html);
+}
 
 void handleReset() {
   credStore.clear();
