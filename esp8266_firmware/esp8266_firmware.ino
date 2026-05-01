@@ -44,6 +44,7 @@ int msgBufHead = 0;
 // ---------------------------------------------------------------------------
 #define MAX_DEVICES     20
 #define DEV_NAME_LEN    48
+#define DEV_ID_LEN      48
 #define DEV_TYPE_LEN    16
 #define DEV_TOPIC_LEN   96
 #define DEV_STATE_LEN   48
@@ -51,6 +52,7 @@ int msgBufHead = 0;
 struct IoTDevice {
   bool   active;
   char   name[DEV_NAME_LEN];
+  char   deviceId[DEV_ID_LEN];
   char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
@@ -188,6 +190,7 @@ void handleApiData() {
     if (!firstDev) json += ",";
     firstDev = false;
       String id    = String(devices[i].stateTopic);
+      String deviceId = String(devices[i].deviceId); deviceId.replace("\\", "\\\\"); deviceId.replace("\"", "\\\"");
       String name  = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
       String type  = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
       String state = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
@@ -195,6 +198,7 @@ void handleApiData() {
       id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
       json += "\"id\":\"" + id + "\",";
+      json += "\"device_id\":\"" + deviceId + "\",";
     json += "\"name\":\"" + name + "\",";
       json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
@@ -319,7 +323,10 @@ void parseConfigMsg(const String &topic, const String &payload) {
   if (s1 < 0) return;
   int s2 = topic.indexOf('/', s1 + 1);
   if (s2 < 0) return;
+  int s3 = topic.indexOf('/', s2 + 1);
+  if (s3 < 0) return;
   String entityType = topic.substring(s1 + 1, s2);
+  String deviceId = topic.substring(s2 + 1, s3);
 
   // Only handle controllable / displayable types
   if (entityType != "switch" && entityType != "light" &&
@@ -347,10 +354,12 @@ void parseConfigMsg(const String &topic, const String &payload) {
 
   devices[slot].active = true;
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
+  strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
   devices[slot].name[DEV_NAME_LEN - 1]       = '\0';
+  devices[slot].deviceId[DEV_ID_LEN - 1]     = '\0';
   devices[slot].type[DEV_TYPE_LEN - 1]       = '\0';
   devices[slot].stateTopic[DEV_TOPIC_LEN - 1] = '\0';
   devices[slot].cmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
@@ -541,7 +550,7 @@ void checkResetButton() {
   unsigned long pressedAt = millis();
   while (digitalRead(RESET_BTN_PIN) == LOW) {
     if (millis() - pressedAt >= RESET_HOLD_MS) {
-      Serial.println("[BTN] Reset triggered. Clearing credentials.");
+      Serial.println("[BTN] Reset triggered (3s). Clearing credentials.");
       credStore.clear();
       delay(250);
       ESP.restart();
@@ -604,6 +613,7 @@ void setup() {
   Serial.printf("[WiFi] Connecting to %s", creds.wifiSSID.c_str());
   unsigned long t0 = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    checkResetButton();
     if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
       Serial.println("\n[WiFi] Timeout. Falling back to AP mode.");
       startAPMode();

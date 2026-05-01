@@ -160,6 +160,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .dev-card.off{border-color:#dc2626}
   .dev-type{font-size:.62rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
   .dev-name{font-size:.88rem;font-weight:700;color:#e2e8f0}
+  .dev-id{font-size:.68rem;color:#64748b;word-break:break-all;margin-top:-2px}
   .dev-val{font-size:1rem;font-weight:700;color:#38bdf8}
   .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
   .toggle-lbl{font-size:.8rem;color:#94a3b8}
@@ -268,6 +269,9 @@ function renderDevices(devs){
     h+="<div class='dev-card "+cardCls+"'>";
     h+="<div class='dev-type'>"+d.type+"</div>";
     h+="<div class='dev-name'>"+d.name+"</div>";
+    if(d.device_id){
+      h+="<div class='dev-id'>ID: "+d.device_id+"</div>";
+    }
     if(d.type==='sensor'||d.type==='binary_sensor'){
       h+="<div class='dev-val'>"+stateLabel(curState)+"</div>";
     } else {
