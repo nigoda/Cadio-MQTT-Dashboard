@@ -662,13 +662,15 @@ void setup() {
   WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
 
   Serial.printf("[WiFi] Connecting to %s", creds.wifiSSID.c_str());
-  unsigned long t0 = millis();
+  unsigned long lastAttempt = millis();
   while (WiFi.status() != WL_CONNECTED) {
     checkResetButton();
-    if (millis() - t0 > WIFI_CONNECT_TIMEOUT_MS) {
-      Serial.println("\n[WiFi] Timeout. Falling back to AP mode.");
-      startAPMode();
-      return;
+    if (millis() - lastAttempt > WIFI_CONNECT_TIMEOUT_MS) {
+      Serial.println("\n[WiFi] Retry timeout. Re-attempting STA connection...");
+      WiFi.disconnect();
+      delay(100);
+      WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
+      lastAttempt = millis();
     }
     Serial.print(".");
     delay(250);
@@ -695,9 +697,16 @@ void loop() {
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Disconnected. Restarting to recover.");
-    delay(500);
-    ESP.restart();
+    static unsigned long lastWiFiRetry = 0;
+    unsigned long now = millis();
+    if (now - lastWiFiRetry >= MQTT_RECONNECT_INTERVAL_MS) {
+      lastWiFiRetry = now;
+      Serial.println("[WiFi] Disconnected. Retrying STA connection...");
+      WiFi.disconnect();
+      WiFi.begin(creds.wifiSSID.c_str(), creds.wifiPassword.c_str());
+    }
+    server.handleClient();
+    return;
   }
 
   if (!mqttClient.connected()) {
