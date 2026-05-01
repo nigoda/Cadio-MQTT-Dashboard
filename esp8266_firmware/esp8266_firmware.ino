@@ -349,10 +349,17 @@ void handleCaptivePortalRedirect() {
 bool callLoginApi() {
   Serial.println("[API] Calling Nivixsa login API...");
 
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[API] Skipped: Wi-Fi not connected.");
+    return false;
+  }
+
   BearSSL::WiFiClientSecure secureClient;
   secureClient.setInsecure();
+  secureClient.setTimeout(7000);
 
   HTTPClient https;
+  https.setTimeout(7000);
   if (!https.begin(secureClient, CADIO_LOGIN_URL)) {
     Serial.println("[API] Failed to begin HTTPS");
     return false;
@@ -366,15 +373,17 @@ bool callLoginApi() {
   String body;
   serializeJson(req, body);
 
+  unsigned long apiStart = millis();
   int code = https.POST(body);
   if (code != 200) {
-    Serial.printf("[API] HTTP %d\n", code);
+    Serial.printf("[API] HTTP %d, elapsed=%lums\n", code, millis() - apiStart);
     https.end();
     return false;
   }
 
   String response = https.getString();
   https.end();
+  Serial.printf("[API] Success, elapsed=%lums\n", millis() - apiStart);
 
   JsonDocument resp;
   DeserializationError err = deserializeJson(resp, response);
