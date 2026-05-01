@@ -283,41 +283,41 @@ void handleCmd() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
-void updateRgbFromPayload(IoTDevice &device, const String &payload) {
+void updateRgbFromPayload(uint8_t rgbOut[3], const String &payload) {
   JsonDocument doc;
   if (deserializeJson(doc, payload) == DeserializationError::Ok) {
     if (doc["rgb"].is<JsonArray>()) {
       JsonArray rgb = doc["rgb"].as<JsonArray>();
       if (rgb.size() >= 3) {
-        device.rgb[0] = constrain(rgb[0].as<int>(), 0, 255);
-        device.rgb[1] = constrain(rgb[1].as<int>(), 0, 255);
-        device.rgb[2] = constrain(rgb[2].as<int>(), 0, 255);
+        rgbOut[0] = constrain(rgb[0].as<int>(), 0, 255);
+        rgbOut[1] = constrain(rgb[1].as<int>(), 0, 255);
+        rgbOut[2] = constrain(rgb[2].as<int>(), 0, 255);
         return;
       }
     }
     if (doc["rgb_color"].is<JsonArray>()) {
       JsonArray rgb = doc["rgb_color"].as<JsonArray>();
       if (rgb.size() >= 3) {
-        device.rgb[0] = constrain(rgb[0].as<int>(), 0, 255);
-        device.rgb[1] = constrain(rgb[1].as<int>(), 0, 255);
-        device.rgb[2] = constrain(rgb[2].as<int>(), 0, 255);
+        rgbOut[0] = constrain(rgb[0].as<int>(), 0, 255);
+        rgbOut[1] = constrain(rgb[1].as<int>(), 0, 255);
+        rgbOut[2] = constrain(rgb[2].as<int>(), 0, 255);
         return;
       }
     }
     if (doc["color"].is<JsonObject>()) {
       JsonObject color = doc["color"].as<JsonObject>();
-      device.rgb[0] = constrain((int)(color["r"] | device.rgb[0]), 0, 255);
-      device.rgb[1] = constrain((int)(color["g"] | device.rgb[1]), 0, 255);
-      device.rgb[2] = constrain((int)(color["b"] | device.rgb[2]), 0, 255);
+      rgbOut[0] = constrain((int)(color["r"] | rgbOut[0]), 0, 255);
+      rgbOut[1] = constrain((int)(color["g"] | rgbOut[1]), 0, 255);
+      rgbOut[2] = constrain((int)(color["b"] | rgbOut[2]), 0, 255);
       return;
     }
   }
 
   int r = 0, g = 0, b = 0;
   if (sscanf(payload.c_str(), "%d,%d,%d", &r, &g, &b) == 3) {
-    device.rgb[0] = constrain(r, 0, 255);
-    device.rgb[1] = constrain(g, 0, 255);
-    device.rgb[2] = constrain(b, 0, 255);
+    rgbOut[0] = constrain(r, 0, 255);
+    rgbOut[1] = constrain(g, 0, 255);
+    rgbOut[2] = constrain(b, 0, 255);
   }
 }
 
@@ -495,7 +495,7 @@ void updateDeviceState(const String &topic, const String &payload) {
     }
 
     if (strlen(devices[i].rgbStateTopic) > 0 && topic == String(devices[i].rgbStateTopic)) {
-      updateRgbFromPayload(devices[i], payload);
+      updateRgbFromPayload(devices[i].rgb, payload);
       break;
     }
 
@@ -515,7 +515,7 @@ void updateDeviceState(const String &topic, const String &payload) {
         devices[i].brightness = map(constrain(doc["brightness_pct"].as<int>(), 0, 100), 0, 100, 0, 255);
       }
 
-      updateRgbFromPayload(devices[i], payload);
+      updateRgbFromPayload(devices[i].rgb, payload);
     }
     stateVal = stateVal.substring(0, DEV_STATE_LEN - 1);
     strncpy(devices[i].state, stateVal.c_str(), DEV_STATE_LEN - 1);
@@ -588,7 +588,7 @@ bool connectMqtt() {
   String clientId = String(MQTT_CLIENT_ID_PREFIX) + chipID();
   mqttClient.setServer(creds.mqttBroker.c_str(), creds.mqttPort);
   mqttClient.setCallback(mqttCallback);
-  mqttClient.setKeepAlive(MQTT_KEEPALIVE);
+  mqttClient.setKeepAlive(APP_MQTT_KEEPALIVE);
   mqttClient.setBufferSize(MQTT_BUFFER_SIZE);
 
   Serial.printf("[MQTT] Connecting to %s:%d as %s\n", creds.mqttBroker.c_str(), creds.mqttPort, clientId.c_str());
