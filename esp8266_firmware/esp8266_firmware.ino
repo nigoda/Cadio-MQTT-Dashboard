@@ -656,6 +656,7 @@ void setup() {
   Serial.printf("[WiFi] Connecting to %s", creds.wifiSSID.c_str());
   unsigned long lastAttempt = millis();
   while (WiFi.status() != WL_CONNECTED) {
+    updateLed();
     checkResetButton();
     if (millis() - lastAttempt > WIFI_CONNECT_TIMEOUT_MS) {
       Serial.println("\n[WiFi] Retry timeout. Re-attempting STA connection...");
