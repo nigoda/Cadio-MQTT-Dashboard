@@ -160,9 +160,14 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .dev-card.off{border-color:#dc2626}
   .dev-type{font-size:.62rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
   .dev-name{font-size:.88rem;font-weight:700;color:#e2e8f0}
+  .dev-id{font-size:.7rem;color:#64748b;word-break:break-all;margin-top:-2px}
   .dev-val{font-size:1rem;font-weight:700;color:#38bdf8}
   .toggle-row{display:flex;align-items:center;justify-content:space-between;margin-top:4px}
   .toggle-lbl{font-size:.8rem;color:#94a3b8}
+  .light-meta{display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:#94a3b8;margin-top:2px}
+  .light-range{width:100%;margin-top:6px;accent-color:#38bdf8}
+  .color-row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}
+  .color-picker{width:42px;height:28px;padding:0;border:none;border-radius:6px;background:none}
   .toggle{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0}
   .toggle input{opacity:0;width:0;height:0}
   .slider{position:absolute;inset:0;background:#334155;border-radius:24px;cursor:pointer;transition:.25s}
@@ -242,6 +247,24 @@ function devKey(d){
   return d.id || d.cmd || d.name || '';
 }
 
+function rgbToHex(rgb){
+  if(!rgb||rgb.length<3) return '#ffffff';
+  return '#'+rgb.map(function(v){
+    var n=Math.max(0,Math.min(255,parseInt(v||0,10)));
+    return n.toString(16).padStart(2,'0');
+  }).join('');
+}
+
+function hexToRgb(hex){
+  var clean=(hex||'#ffffff').replace('#','');
+  if(clean.length!==6) return [255,255,255];
+  return [
+    parseInt(clean.slice(0,2),16),
+    parseInt(clean.slice(2,4),16),
+    parseInt(clean.slice(4,6),16)
+  ];
+}
+
 function renderDevices(devs){
   var g=$('dev-grid');
   if(!devs||devs.length===0){
@@ -263,11 +286,16 @@ function renderDevices(devs){
     var hasState=!!(curState&&curState.length);
     var isOn=isOnState(curState);
     var canCtrl=d.cmd&&(d.type==='switch'||d.type==='light'||d.type==='lock'||d.type==='fan'||d.type==='cover');
+    var hasBrightness=!!d.brightness_cmd;
+    var hasRgb=!!d.rgb_cmd;
     var cardCls=canCtrl?(hasState?(isOn?'on':'off'):''):'';
     var safeCmd=d.cmd.replace(/"/g,'&quot;');
     h+="<div class='dev-card "+cardCls+"'>";
     h+="<div class='dev-type'>"+d.type+"</div>";
     h+="<div class='dev-name'>"+d.name+"</div>";
+    if(d.device_id){
+      h+="<div class='dev-id'>ID: "+d.device_id+"</div>";
+    }
     if(d.type==='sensor'||d.type==='binary_sensor'){
       h+="<div class='dev-val'>"+stateLabel(curState)+"</div>";
     } else {
@@ -281,6 +309,13 @@ function renderDevices(devs){
         h+="<label class='toggle'><input type='checkbox' "+chk+' '+dis+" onchange=\"toggleCmd(this,'"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"')\">"
           +"<span class='slider'></span></label>";
         h+="</div>";
+        if(d.type==='light' && hasBrightness){
+          h+="<div class='light-meta'><span>Brightness</span><span>"+parseInt(d.brightness||0,10)+"</span></div>";
+          h+="<input class='light-range' type='range' min='0' max='255' value='"+parseInt(d.brightness||0,10)+"' onchange=\"sendLevel('"+key.replace(/"/g,'&quot;')+"','"+d.brightness_cmd.replace(/"/g,'&quot;')+"',this.value)\">";
+        }
+        if(d.type==='light' && hasRgb){
+          h+="<div class='color-row'><span class='toggle-lbl'>RGB</span><input class='color-picker' type='color' value='"+rgbToHex(d.rgb)+"' onchange=\"sendColor('"+key.replace(/"/g,'&quot;')+"','"+d.rgb_cmd.replace(/"/g,'&quot;')+"',this.value)\"></div>";
+        }
       }
     }
     h+="</div>";
@@ -338,6 +373,28 @@ function toggleCmd(checkbox, key, topic){
       setTimeout(function(){ if(devCache[key]) devCache[key].pending=false; refresh(); }, 1200);
     })
     .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,1200); });
+}
+
+function sendRawCmd(key, topic, payload){
+  if(!topic) return;
+  if(!devCache[key]) devCache[key]={state:'',pending:true};
+  devCache[key].pending = true;
+  fetch('/cmd?topic='+encodeURIComponent(topic)+'&payload='+encodeURIComponent(payload)+'&raw=1')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok) alert('Command failed: '+(d.msg||'error'));
+      setTimeout(function(){ if(devCache[key]) devCache[key].pending=false; refresh(); }, 1200);
+    })
+    .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,1200); });
+}
+
+function sendLevel(key, topic, value){
+  sendRawCmd(key, topic, String(parseInt(value||0,10)));
+}
+
+function sendColor(key, topic, hex){
+  var rgb = hexToRgb(hex);
+  sendRawCmd(key, topic, rgb.join(','));
 }
 
 // Populate static fields from placeholders baked in at serve time

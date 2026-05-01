@@ -44,6 +44,7 @@ int msgBufHead = 0;
 // ---------------------------------------------------------------------------
 #define MAX_DEVICES     20
 #define DEV_NAME_LEN    48
+#define DEV_ID_LEN      48
 #define DEV_TYPE_LEN    16
 #define DEV_TOPIC_LEN   96
 #define DEV_STATE_LEN   48
@@ -51,10 +52,18 @@ int msgBufHead = 0;
 struct IoTDevice {
   bool   active;
   char   name[DEV_NAME_LEN];
+  char   deviceId[DEV_ID_LEN];
+  char   entityId[DEV_ID_LEN];
   char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
+  char   brightnessStateTopic[DEV_TOPIC_LEN];
+  char   brightnessCmdTopic[DEV_TOPIC_LEN];
+  char   rgbStateTopic[DEV_TOPIC_LEN];
+  char   rgbCmdTopic[DEV_TOPIC_LEN];
   char   state[DEV_STATE_LEN];
+  int    brightness;
+  uint8_t rgb[3];
 };
 
 IoTDevice devices[MAX_DEVICES];
@@ -187,18 +196,28 @@ void handleApiData() {
     if (!devices[i].active) continue;
     if (!firstDev) json += ",";
     firstDev = false;
-      String id    = String(devices[i].stateTopic);
-      String name  = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
-      String type  = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
-      String state = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
-      String cmd   = String(devices[i].cmdTopic); cmd.replace("\\", "\\\\"); cmd.replace("\"", "\\\"");
-      id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
+    String id      = String(devices[i].stateTopic);
+    String deviceId = String(devices[i].deviceId); deviceId.replace("\\", "\\\\"); deviceId.replace("\"", "\\\"");
+    String entityId = String(devices[i].entityId); entityId.replace("\\", "\\\\"); entityId.replace("\"", "\\\"");
+    String name    = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
+    String type    = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
+    String state   = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
+    String cmd     = String(devices[i].cmdTopic); cmd.replace("\\", "\\\\"); cmd.replace("\"", "\\\"");
+    String briCmd  = String(devices[i].brightnessCmdTopic); briCmd.replace("\\", "\\\\"); briCmd.replace("\"", "\\\"");
+    String rgbCmd  = String(devices[i].rgbCmdTopic); rgbCmd.replace("\\", "\\\\"); rgbCmd.replace("\"", "\\\"");
+    id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
-      json += "\"id\":\"" + id + "\",";
+    json += "\"id\":\"" + id + "\",";
     json += "\"name\":\"" + name + "\",";
-      json += "\"type\":\"" + type + "\",";
+    json += "\"device_id\":\"" + deviceId + "\",";
+    json += "\"entity_id\":\"" + entityId + "\",";
+    json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
-    json += "\"cmd\":\"" + cmd + "\"";
+    json += "\"cmd\":\"" + cmd + "\",";
+    json += "\"brightness\":" + String(devices[i].brightness) + ",";
+    json += "\"brightness_cmd\":\"" + briCmd + "\",";
+    json += "\"rgb_cmd\":\"" + rgbCmd + "\",";
+    json += "\"rgb\":[" + String(devices[i].rgb[0]) + "," + String(devices[i].rgb[1]) + "," + String(devices[i].rgb[2]) + "]";
     json += "}";
   }
   json += "]}";
@@ -218,21 +237,73 @@ void handleCmd() {
   }
   String topic   = server.arg("topic");
   String payload = server.arg("payload");
-  String json    = "{\"state\":\"" + payload + "\"}";
-  mqttClient.publish(topic.c_str(), json.c_str(), false);
+  bool rawPayload = server.hasArg("raw") && server.arg("raw") == "1";
+  String mqttPayload = rawPayload ? payload : "{\"state\":\"" + payload + "\"}";
+  mqttClient.publish(topic.c_str(), mqttPayload.c_str(), false);
 
   // Reflect the new state immediately in the local device cache so the UI
   // updates without waiting for the entity to publish a separate state echo.
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
-    if (topic != String(devices[i].cmdTopic)) continue;
-    strncpy(devices[i].state, payload.c_str(), DEV_STATE_LEN - 1);
-    devices[i].state[DEV_STATE_LEN - 1] = '\0';
-    break;
+    if (topic == String(devices[i].cmdTopic)) {
+      strncpy(devices[i].state, payload.c_str(), DEV_STATE_LEN - 1);
+      devices[i].state[DEV_STATE_LEN - 1] = '\0';
+      break;
+    }
+    if (topic == String(devices[i].brightnessCmdTopic)) {
+      devices[i].brightness = constrain(payload.toInt(), 0, 255);
+      break;
+    }
+    if (topic == String(devices[i].rgbCmdTopic)) {
+      int r = 0, g = 0, b = 0;
+      sscanf(payload.c_str(), "%d,%d,%d", &r, &g, &b);
+      devices[i].rgb[0] = constrain(r, 0, 255);
+      devices[i].rgb[1] = constrain(g, 0, 255);
+      devices[i].rgb[2] = constrain(b, 0, 255);
+      break;
+    }
   }
 
-  Serial.printf("[CMD] %s -> %s\n", topic.c_str(), json.c_str());
+  Serial.printf("[CMD] %s -> %s\n", topic.c_str(), mqttPayload.c_str());
   server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void updateRgbFromPayload(IoTDevice &device, const String &payload) {
+  JsonDocument doc;
+  if (deserializeJson(doc, payload) == DeserializationError::Ok) {
+    if (doc["rgb"].is<JsonArray>()) {
+      JsonArray rgb = doc["rgb"].as<JsonArray>();
+      if (rgb.size() >= 3) {
+        device.rgb[0] = constrain(rgb[0].as<int>(), 0, 255);
+        device.rgb[1] = constrain(rgb[1].as<int>(), 0, 255);
+        device.rgb[2] = constrain(rgb[2].as<int>(), 0, 255);
+        return;
+      }
+    }
+    if (doc["rgb_color"].is<JsonArray>()) {
+      JsonArray rgb = doc["rgb_color"].as<JsonArray>();
+      if (rgb.size() >= 3) {
+        device.rgb[0] = constrain(rgb[0].as<int>(), 0, 255);
+        device.rgb[1] = constrain(rgb[1].as<int>(), 0, 255);
+        device.rgb[2] = constrain(rgb[2].as<int>(), 0, 255);
+        return;
+      }
+    }
+    if (doc["color"].is<JsonObject>()) {
+      JsonObject color = doc["color"].as<JsonObject>();
+      device.rgb[0] = constrain((int)(color["r"] | device.rgb[0]), 0, 255);
+      device.rgb[1] = constrain((int)(color["g"] | device.rgb[1]), 0, 255);
+      device.rgb[2] = constrain((int)(color["b"] | device.rgb[2]), 0, 255);
+      return;
+    }
+  }
+
+  int r = 0, g = 0, b = 0;
+  if (sscanf(payload.c_str(), "%d,%d,%d", &r, &g, &b) == 3) {
+    device.rgb[0] = constrain(r, 0, 255);
+    device.rgb[1] = constrain(g, 0, 255);
+    device.rgb[2] = constrain(b, 0, 255);
+  }
 }
 
 void handleDashboard() {
@@ -319,7 +390,13 @@ void parseConfigMsg(const String &topic, const String &payload) {
   if (s1 < 0) return;
   int s2 = topic.indexOf('/', s1 + 1);
   if (s2 < 0) return;
+  int s3 = topic.indexOf('/', s2 + 1);
+  if (s3 < 0) return;
+  int s4 = topic.indexOf('/', s3 + 1);
+  if (s4 < 0) return;
   String entityType = topic.substring(s1 + 1, s2);
+  String deviceId = topic.substring(s2 + 1, s3);
+  String entityId = topic.substring(s3 + 1, s4);
 
   // Only handle controllable / displayable types
   if (entityType != "switch" && entityType != "light" &&
@@ -333,6 +410,10 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *name       = doc["name"]          | "";
   const char *stateTopic = doc["state_topic"]   | "";
   const char *cmdTopic   = doc["command_topic"] | "";
+  const char *brightnessStateTopic = doc["brightness_state_topic"] | "";
+  const char *brightnessCmdTopic   = doc["brightness_command_topic"] | "";
+  const char *rgbStateTopic        = doc["rgb_state_topic"] | "";
+  const char *rgbCmdTopic          = doc["rgb_command_topic"] | "";
   if (strlen(stateTopic) == 0) return;
 
   // Find existing slot or allocate new one
@@ -347,18 +428,39 @@ void parseConfigMsg(const String &topic, const String &payload) {
 
   devices[slot].active = true;
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
+  strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
+  strncpy(devices[slot].entityId,   entityId.c_str(),                      DEV_ID_LEN - 1);
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
+  strncpy(devices[slot].brightnessStateTopic, brightnessStateTopic,         DEV_TOPIC_LEN - 1);
+  strncpy(devices[slot].brightnessCmdTopic,   brightnessCmdTopic,           DEV_TOPIC_LEN - 1);
+  strncpy(devices[slot].rgbStateTopic,        rgbStateTopic,                DEV_TOPIC_LEN - 1);
+  strncpy(devices[slot].rgbCmdTopic,          rgbCmdTopic,                  DEV_TOPIC_LEN - 1);
   devices[slot].name[DEV_NAME_LEN - 1]       = '\0';
+  devices[slot].deviceId[DEV_ID_LEN - 1]     = '\0';
+  devices[slot].entityId[DEV_ID_LEN - 1]     = '\0';
   devices[slot].type[DEV_TYPE_LEN - 1]       = '\0';
   devices[slot].stateTopic[DEV_TOPIC_LEN - 1] = '\0';
   devices[slot].cmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
+  devices[slot].brightnessStateTopic[DEV_TOPIC_LEN - 1] = '\0';
+  devices[slot].brightnessCmdTopic[DEV_TOPIC_LEN - 1]   = '\0';
+  devices[slot].rgbStateTopic[DEV_TOPIC_LEN - 1]        = '\0';
+  devices[slot].rgbCmdTopic[DEV_TOPIC_LEN - 1]          = '\0';
+  if (devices[slot].brightness < 0 || devices[slot].brightness > 255) {
+    devices[slot].brightness = 255;
+  }
 
   if (mqttClient.connected()) {
     mqttClient.subscribe(devices[slot].stateTopic);
     if (strlen(devices[slot].cmdTopic) > 0) {
       mqttClient.subscribe(devices[slot].cmdTopic);
+    }
+    if (strlen(devices[slot].brightnessStateTopic) > 0) {
+      mqttClient.subscribe(devices[slot].brightnessStateTopic);
+    }
+    if (strlen(devices[slot].rgbStateTopic) > 0) {
+      mqttClient.subscribe(devices[slot].rgbStateTopic);
     }
   }
 
@@ -371,15 +473,34 @@ void parseConfigMsg(const String &topic, const String &payload) {
 void updateDeviceState(const String &topic, const String &payload) {
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
+
+    if (strlen(devices[i].brightnessStateTopic) > 0 && topic == String(devices[i].brightnessStateTopic)) {
+      devices[i].brightness = constrain(payload.toInt(), 0, 255);
+      break;
+    }
+
+    if (strlen(devices[i].rgbStateTopic) > 0 && topic == String(devices[i].rgbStateTopic)) {
+      updateRgbFromPayload(devices[i], payload);
+      break;
+    }
+
     if (topic != String(devices[i].stateTopic)) continue;
 
     String stateVal = payload;
     JsonDocument doc;
     if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-      if (doc.containsKey("state"))       stateVal = doc["state"].as<String>();
-      else if (doc.containsKey("temperature")) stateVal = String(doc["temperature"].as<float>(), 1) + " C";
-      else if (doc.containsKey("humidity"))    stateVal = String(doc["humidity"].as<float>(), 1) + " %";
-      else if (doc.containsKey("value"))       stateVal = doc["value"].as<String>();
+      if (doc.containsKey("state"))             stateVal = doc["state"].as<String>();
+      else if (doc.containsKey("temperature"))  stateVal = String(doc["temperature"].as<float>(), 1) + " C";
+      else if (doc.containsKey("humidity"))     stateVal = String(doc["humidity"].as<float>(), 1) + " %";
+      else if (doc.containsKey("value"))        stateVal = doc["value"].as<String>();
+
+      if (doc.containsKey("brightness")) {
+        devices[i].brightness = constrain(doc["brightness"].as<int>(), 0, 255);
+      } else if (doc.containsKey("brightness_pct")) {
+        devices[i].brightness = map(constrain(doc["brightness_pct"].as<int>(), 0, 100), 0, 100, 0, 255);
+      }
+
+      updateRgbFromPayload(devices[i], payload);
     }
     stateVal = stateVal.substring(0, DEV_STATE_LEN - 1);
     strncpy(devices[i].state, stateVal.c_str(), DEV_STATE_LEN - 1);
