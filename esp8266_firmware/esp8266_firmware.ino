@@ -179,67 +179,83 @@ void handleSetupPage() {
 //  Keeps heap usage low by never rebuilding the full HTML page
 // ---------------------------------------------------------------------------
 void handleApiData() {
-  String json = "{";
-  json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
-  json += "\"heap\":" + String(ESP.getFreeHeap() / 1024) + ",";
-  json += "\"uptime\":\"" + uptimeStr() + "\",";
-  json += "\"mqtt\":" + String(mqttConnected ? "true" : "false") + ",";
-  json += "\"msg_count\":" + String(msgCount) + ",";
+  String json;
+  json.reserve(2048);  // Pre-allocate to avoid heap fragmentation
 
-  // Recent messages array (last 10 only to keep JSON small)
-  json += "\"messages\":[";
-  bool firstMsg = true;
-  for (int i = 0; i < 10; i++) {
+  json = "{\"rssi\":";
+  json += String(WiFi.RSSI());
+  json += ",\"heap\":";
+  json += String(ESP.getFreeHeap() / 1024);
+  json += ",\"uptime\":\"";
+  json += uptimeStr();
+  json += "\",\"mqtt\":";
+  json += mqttConnected ? "true" : "false";
+  json += ",\"msg_count\":";
+  json += String(msgCount);
+
+  // Recent messages (last 5 to keep small)
+  json += ",\"messages\":[";
+  bool first = true;
+  for (int i = 0; i < 5; i++) {
     int idx = ((msgBufHead - 1 - i) + MSG_BUF_SIZE) % MSG_BUF_SIZE;
     if (msgBuf[idx].topic.isEmpty()) continue;
-    if (!firstMsg) json += ",";
-    firstMsg = false;
-    String t = msgBuf[idx].topic;
-    String p = msgBuf[idx].payload.substring(0, 80);
-    t.replace("\\", "\\\\"); t.replace("\"", "\\\"");
-    p.replace("\\", "\\\\"); p.replace("\"", "\\\"");
-    json += "{\"t\":\"" + t + "\",\"p\":\"" + p + "\"}";
+    if (!first) json += ',';
+    first = false;
+    json += "{\"t\":\"";
+    json += msgBuf[idx].topic.substring(0, 60);
+    json += "\",\"p\":\"";
+    json += msgBuf[idx].payload.substring(0, 50);
+    json += "\"}";
   }
-  json += "],";
 
-  // Devices array
-  json += "\"devices\":[";
-  bool firstDev = true;
+  // Devices
+  json += "],\"devices\":[";
+  first = true;
+  char buf[16];
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
-    if (!firstDev) json += ",";
-    firstDev = false;
-      String id    = String(devices[i].stateTopic);
-      String deviceId = String(devices[i].deviceId); deviceId.replace("\\", "\\\\"); deviceId.replace("\"", "\\\"");
-      String serial = String(devices[i].serialId); serial.replace("\\", "\\\\"); serial.replace("\"", "\\\"");
-      String name  = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
-      String type  = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
-      String state = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
-      String cmd   = String(devices[i].cmdTopic); cmd.replace("\\", "\\\\"); cmd.replace("\"", "\\\"");
-      id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
-    json += "{";
-      json += "\"id\":\"" + id + "\",";
-      String devName = "";
-      for (int u = 0; u < unitCount; u++) {
-        if (strncmp(units[u].deviceId, devices[i].deviceId, DEV_ID_LEN) == 0) {
-          devName = String(units[u].name); break;
-        }
+    if (!first) json += ',';
+    first = false;
+
+    // Look up unit name
+    const char *dname = "";
+    for (int u = 0; u < unitCount; u++) {
+      if (strncmp(units[u].deviceId, devices[i].deviceId, DEV_ID_LEN) == 0) {
+        dname = units[u].name; break;
       }
-      devName.replace("\\", "\\\\"); devName.replace("\"", "'");
-      json += "\"device_id\":\"" + deviceId + "\",";
-      json += "\"serial\":\"" + serial + "\",";
-      json += "\"device_name\":\"" + devName + "\",";
-    json += "\"name\":\"" + name + "\",";
-      json += "\"type\":\"" + type + "\",";
-    json += "\"state\":\"" + state + "\",";
-    json += "\"cmd\":\"" + cmd + "\",";
-    json += "\"supports_brightness\":" + String(devices[i].supportsBrightness ? "true" : "false") + ",";
-    json += "\"supports_rgb\":" + String(devices[i].supportsRgb ? "true" : "false") + ",";
-    json += "\"brightness\":" + String(devices[i].brightness) + ",";
-    json += "\"color_r\":" + String(devices[i].colorR) + ",";
-    json += "\"color_g\":" + String(devices[i].colorG) + ",";
-    json += "\"color_b\":" + String(devices[i].colorB);
-    json += "}";
+    }
+
+    json += "{\"id\":\"";
+    json += devices[i].stateTopic;
+    json += "\",\"device_id\":\"";
+    json += devices[i].deviceId;
+    json += "\",\"serial\":\"";
+    json += devices[i].serialId;
+    json += "\",\"device_name\":\"";
+    json += dname;
+    json += "\",\"name\":\"";
+    json += devices[i].name;
+    json += "\",\"type\":\"";
+    json += devices[i].type;
+    json += "\",\"state\":\"";
+    json += devices[i].state;
+    json += "\",\"cmd\":\"";
+    json += devices[i].cmdTopic;
+    json += "\",\"supports_brightness\":";
+    json += devices[i].supportsBrightness ? "true" : "false";
+    json += ",\"supports_rgb\":";
+    json += devices[i].supportsRgb ? "true" : "false";
+    json += ",\"brightness\":";
+    itoa(devices[i].brightness, buf, 10); json += buf;
+    json += ",\"color_r\":";
+    itoa(devices[i].colorR, buf, 10); json += buf;
+    json += ",\"color_g\":";
+    itoa(devices[i].colorG, buf, 10); json += buf;
+    json += ",\"color_b\":";
+    itoa(devices[i].colorB, buf, 10); json += buf;
+    json += '}';
+
+    yield();  // Prevent watchdog reset on large device lists
   }
   json += "]}";
 
