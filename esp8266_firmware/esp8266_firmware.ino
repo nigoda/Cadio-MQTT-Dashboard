@@ -432,9 +432,14 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *devName    = "";
   if (doc["device"].is<JsonObject>()) {
     devName = doc["device"]["name"] | "";
+  } else if (doc["dev"].is<JsonObject>()) {
+    devName = doc["dev"]["name"] | "";
   }
   bool brightnessFlag = doc["brightness"] | false;
   if (strlen(stateTopic) == 0) return;
+
+  // Copy devName to a safe String before doc gets reused
+  String devNameStr = String(devName);
 
   // Extract value_template key for sensors sharing a state_topic
   String valueKey = "";
@@ -460,7 +465,7 @@ void parseConfigMsg(const String &topic, const String &payload) {
   }
 
   // Store unit name in shared lookup table
-  if (strlen(devName) > 0) {
+  if (devNameStr.length() > 0) {
     bool found = false;
     for (int u = 0; u < unitCount; u++) {
       if (strncmp(units[u].deviceId, deviceId.c_str(), DEV_ID_LEN) == 0) { found = true; break; }
@@ -468,9 +473,10 @@ void parseConfigMsg(const String &topic, const String &payload) {
     if (!found && unitCount < MAX_UNITS) {
       strncpy(units[unitCount].deviceId, deviceId.c_str(), DEV_ID_LEN - 1);
       units[unitCount].deviceId[DEV_ID_LEN - 1] = '\0';
-      strncpy(units[unitCount].name, devName, UNIT_NAME_LEN - 1);
+      strncpy(units[unitCount].name, devNameStr.c_str(), UNIT_NAME_LEN - 1);
       units[unitCount].name[UNIT_NAME_LEN - 1] = '\0';
       unitCount++;
+      Serial.printf("[UNIT] Registered unit: %s (id=%s)\n", units[unitCount-1].name, units[unitCount-1].deviceId);
     }
   }
 
