@@ -42,15 +42,15 @@ int msgBufHead = 0;
 // ---------------------------------------------------------------------------
 //  Device discovery — parsed from homeassistant MQTT config messages
 // ---------------------------------------------------------------------------
-#define MAX_DEVICES     40
-#define DEV_NAME_LEN    48
-#define DEV_ID_LEN      48
-#define DEV_SERIAL_LEN  48
-#define DEV_DEVNAME_LEN 48
+#define MAX_DEVICES     30
+#define DEV_NAME_LEN    32
+#define DEV_ID_LEN      24
+#define DEV_SERIAL_LEN  32
+#define DEV_DEVNAME_LEN 24
 #define DEV_TYPE_LEN    16
-#define DEV_TOPIC_LEN   96
-#define DEV_STATE_LEN   48
-#define DEV_VALKEY_LEN  24
+#define DEV_TOPIC_LEN   80
+#define DEV_STATE_LEN   32
+#define DEV_VALKEY_LEN  20
 
 struct IoTDevice {
   bool   active;
