@@ -43,14 +43,23 @@ int msgBufHead = 0;
 //  Device discovery — parsed from homeassistant MQTT config messages
 // ---------------------------------------------------------------------------
 #define MAX_DEVICES     20
-#define DEV_NAME_LEN    48
-#define DEV_ID_LEN      48
-#define DEV_SERIAL_LEN  48
-#define DEV_DEVNAME_LEN 48
+#define DEV_NAME_LEN    32
+#define DEV_ID_LEN      20
+#define DEV_SERIAL_LEN  32
 #define DEV_TYPE_LEN    16
-#define DEV_TOPIC_LEN   96
-#define DEV_STATE_LEN   48
-#define DEV_VALKEY_LEN  24
+#define DEV_TOPIC_LEN   80
+#define DEV_STATE_LEN   32
+#define DEV_VALKEY_LEN  20
+
+// Separate small table for physical unit names (shared across entities)
+#define MAX_UNITS       4
+#define UNIT_NAME_LEN   32
+struct UnitInfo {
+  char deviceId[DEV_ID_LEN];
+  char name[UNIT_NAME_LEN];
+};
+UnitInfo units[MAX_UNITS];
+int unitCount = 0;
 
 struct IoTDevice {
   bool   active;
@@ -63,12 +72,11 @@ struct IoTDevice {
   char   name[DEV_NAME_LEN];
   char   deviceId[DEV_ID_LEN];
   char   serialId[DEV_SERIAL_LEN];
-  char   deviceName[DEV_DEVNAME_LEN];
-  char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
+  char   type[DEV_TYPE_LEN];
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
   char   state[DEV_STATE_LEN];
-  char   valueKey[DEV_VALKEY_LEN];   // JSON key for shared state_topic sensors
+  char   valueKey[DEV_VALKEY_LEN];
 };
 
 IoTDevice devices[MAX_DEVICES];
@@ -211,7 +219,13 @@ void handleApiData() {
       id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
       json += "\"id\":\"" + id + "\",";
-      String devName = String(devices[i].deviceName); devName.replace("\\", "\\\\"); devName.replace("\"", "'");
+      String devName = "";
+      for (int u = 0; u < unitCount; u++) {
+        if (strncmp(units[u].deviceId, devices[i].deviceId, DEV_ID_LEN) == 0) {
+          devName = String(units[u].name); break;
+        }
+      }
+      devName.replace("\\", "\\\\"); devName.replace("\"", "'");
       json += "\"device_id\":\"" + deviceId + "\",";
       json += "\"serial\":\"" + serial + "\",";
       json += "\"device_name\":\"" + devName + "\",";
@@ -396,7 +410,6 @@ void parseConfigMsg(const String &topic, const String &payload) {
   if (strlen(stateTopic) == 0) return;
 
   // Extract value_template key for sensors sharing a state_topic
-  // Pattern: {{ value_json.KEY }} or {{ value_json['KEY'] }}
   String valueKey = "";
   const char *vtRaw = doc["value_template"] | "";
   if (strlen(vtRaw) == 0) vtRaw = doc["val_tpl"] | "";
@@ -416,6 +429,21 @@ void parseConfigMsg(const String &topic, const String &payload) {
         int end = vt.indexOf("']", start);
         if (end > start) valueKey = vt.substring(start, end);
       }
+    }
+  }
+
+  // Store unit name in shared lookup table
+  if (strlen(devName) > 0) {
+    bool found = false;
+    for (int u = 0; u < unitCount; u++) {
+      if (strncmp(units[u].deviceId, deviceId.c_str(), DEV_ID_LEN) == 0) { found = true; break; }
+    }
+    if (!found && unitCount < MAX_UNITS) {
+      strncpy(units[unitCount].deviceId, deviceId.c_str(), DEV_ID_LEN - 1);
+      units[unitCount].deviceId[DEV_ID_LEN - 1] = '\0';
+      strncpy(units[unitCount].name, devName, UNIT_NAME_LEN - 1);
+      units[unitCount].name[UNIT_NAME_LEN - 1] = '\0';
+      unitCount++;
     }
   }
 
@@ -459,12 +487,6 @@ void parseConfigMsg(const String &topic, const String &payload) {
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
   strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
   strncpy(devices[slot].serialId,   serialId.c_str(),                      DEV_SERIAL_LEN - 1);
-  if (strlen(devName) > 0) {
-    strncpy(devices[slot].deviceName, devName,                              DEV_DEVNAME_LEN - 1);
-    devices[slot].deviceName[DEV_DEVNAME_LEN - 1] = '\0';
-  } else if (!isExisting) {
-    devices[slot].deviceName[0] = '\0';
-  }
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
