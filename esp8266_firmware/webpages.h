@@ -155,7 +155,8 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .btn:hover{background:#1d4ed8}
   .btn.danger{background:#7f1d1d;color:#fca5a5}
   .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:6px}
-  .unit-section{margin-top:12px;grid-column:1/-1}
+  .unit-section{margin-top:18px;width:100%}
+  .unit-devices{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
   .unit-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:4px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #334155}
   .unit-title{font-size:.76rem;font-weight:700;letter-spacing:.06em;color:#93c5fd;text-transform:uppercase}
   .unit-meta{font-size:.68rem;color:#64748b;word-break:break-all}
@@ -309,11 +310,13 @@ function renderDevices(devs){
     var dname=grp.device_name||did;
 
     h+="<div class='unit-section'>";
+
     h+="<div class='unit-head'>";
     h+="<div class='unit-title'>"+dname+"</div>";
     h+="<div class='unit-meta'>Serial: "+sid+"</div>";
     h+="</div>";
-    h+="<div class='dev-grid'>";
+
+    h+="<div class='unit-devices'>";
 
     grp.items.forEach(function(d){
     var key=devKey(d);
@@ -441,8 +444,8 @@ function renderDevices(devs){
     h+="</div>";
     });
 
-    h+="</div>";
-    h+="</div>";
+    h+="</div>"; // unit-devices
+    h+="</div>"; // unit-section
   });
   g.innerHTML=h;
 }
