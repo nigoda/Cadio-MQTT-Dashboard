@@ -42,15 +42,15 @@ int msgBufHead = 0;
 // ---------------------------------------------------------------------------
 //  Device discovery — parsed from homeassistant MQTT config messages
 // ---------------------------------------------------------------------------
-#define MAX_DEVICES     30
-#define DEV_NAME_LEN    32
-#define DEV_ID_LEN      24
-#define DEV_SERIAL_LEN  32
-#define DEV_DEVNAME_LEN 24
+#define MAX_DEVICES     20
+#define DEV_NAME_LEN    48
+#define DEV_ID_LEN      48
+#define DEV_SERIAL_LEN  48
+#define DEV_DEVNAME_LEN 48
 #define DEV_TYPE_LEN    16
-#define DEV_TOPIC_LEN   80
-#define DEV_STATE_LEN   32
-#define DEV_VALKEY_LEN  20
+#define DEV_TOPIC_LEN   96
+#define DEV_STATE_LEN   48
+#define DEV_VALKEY_LEN  24
 
 struct IoTDevice {
   bool   active;
@@ -398,8 +398,10 @@ void parseConfigMsg(const String &topic, const String &payload) {
   // Extract value_template key for sensors sharing a state_topic
   // Pattern: {{ value_json.KEY }} or {{ value_json['KEY'] }}
   String valueKey = "";
-  if (doc.containsKey("value_template") || doc.containsKey("val_tpl")) {
-    String vt = doc["value_template"] | (doc["val_tpl"] | "");
+  const char *vtRaw = doc["value_template"] | "";
+  if (strlen(vtRaw) == 0) vtRaw = doc["val_tpl"] | "";
+  if (strlen(vtRaw) > 0) {
+    String vt = String(vtRaw);
     int dotIdx = vt.indexOf("value_json.");
     if (dotIdx >= 0) {
       int start = dotIdx + 11;
