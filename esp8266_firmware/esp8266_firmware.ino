@@ -46,6 +46,7 @@ int msgBufHead = 0;
 #define DEV_NAME_LEN    48
 #define DEV_ID_LEN      48
 #define DEV_SERIAL_LEN  48
+#define DEV_DEVNAME_LEN 48
 #define DEV_TYPE_LEN    16
 #define DEV_TOPIC_LEN   96
 #define DEV_STATE_LEN   48
@@ -61,6 +62,7 @@ struct IoTDevice {
   char   name[DEV_NAME_LEN];
   char   deviceId[DEV_ID_LEN];
   char   serialId[DEV_SERIAL_LEN];
+  char   deviceName[DEV_DEVNAME_LEN];
   char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
@@ -207,8 +209,10 @@ void handleApiData() {
       id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
       json += "\"id\":\"" + id + "\",";
+      String devName = String(devices[i].deviceName); devName.replace("\\", "\\\\"); devName.replace("\"", "'");
       json += "\"device_id\":\"" + deviceId + "\",";
       json += "\"serial\":\"" + serial + "\",";
+      json += "\"device_name\":\"" + devName + "\",";
     json += "\"name\":\"" + name + "\",";
       json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
@@ -382,6 +386,10 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *name       = doc["name"]          | "";
   const char *stateTopic = doc["state_topic"]   | "";
   const char *cmdTopic   = doc["command_topic"] | "";
+  const char *devName    = "";
+  if (doc["device"].is<JsonObject>()) {
+    devName = doc["device"]["name"] | "";
+  }
   bool brightnessFlag = doc["brightness"] | false;
   if (strlen(stateTopic) == 0) return;
 
@@ -425,6 +433,12 @@ void parseConfigMsg(const String &topic, const String &payload) {
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
   strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
   strncpy(devices[slot].serialId,   serialId.c_str(),                      DEV_SERIAL_LEN - 1);
+  if (strlen(devName) > 0) {
+    strncpy(devices[slot].deviceName, devName,                              DEV_DEVNAME_LEN - 1);
+    devices[slot].deviceName[DEV_DEVNAME_LEN - 1] = '\0';
+  } else if (!isExisting) {
+    devices[slot].deviceName[0] = '\0';
+  }
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);

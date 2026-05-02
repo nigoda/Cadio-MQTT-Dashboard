@@ -155,6 +155,10 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .btn:hover{background:#1d4ed8}
   .btn.danger{background:#7f1d1d;color:#fca5a5}
   .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:6px}
+  .unit-section{margin-top:12px;grid-column:1/-1}
+  .unit-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:4px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #334155}
+  .unit-title{font-size:.76rem;font-weight:700;letter-spacing:.06em;color:#93c5fd;text-transform:uppercase}
+  .unit-meta{font-size:.68rem;color:#64748b;word-break:break-all}
   .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s}
   .dev-card.on{border-color:#16a34a}
   .dev-card.off{border-color:#dc2626}
@@ -282,8 +286,36 @@ function renderDevices(devs){
     if(!devCache[key]||!devCache[key].pending) devCache[key]={state:d.state,pending:false};
   });
 
-  var h='';
+  // Group cards by physical unit (identifier + serial), like the main web dashboard
+  var byUnit={};
+  var order=[];
   devs.forEach(function(d){
+    var did=(d.device_id||'').trim();
+    var sid=(d.serial||'').trim();
+    var unitKey=(did||'unknown')+'|'+(sid||'unknown');
+    if(!byUnit[unitKey]){
+      byUnit[unitKey]={device_id:did,serial:sid,device_name:'',items:[]};
+      order.push(unitKey);
+    }
+    if(d.device_name&&!byUnit[unitKey].device_name) byUnit[unitKey].device_name=d.device_name;
+    byUnit[unitKey].items.push(d);
+  });
+
+  var h='';
+  order.forEach(function(unitKey){
+    var grp=byUnit[unitKey];
+    var did=grp.device_id||'Unknown ID';
+    var sid=grp.serial||'Unknown Serial';
+    var dname=grp.device_name||did;
+
+    h+="<div class='unit-section'>";
+    h+="<div class='unit-head'>";
+    h+="<div class='unit-title'>"+dname+"</div>";
+    h+="<div class='unit-meta'>Serial: "+sid+"</div>";
+    h+="</div>";
+    h+="<div class='dev-grid'>";
+
+    grp.items.forEach(function(d){
     var key=devKey(d);
     var cached=devCache[key]||{state:d.state,pending:false};
     var curState=cached.state||d.state||'';
@@ -406,6 +438,10 @@ function renderDevices(devs){
         h+="</div>";
       }
     }
+    h+="</div>";
+    });
+
+    h+="</div>";
     h+="</div>";
   });
   g.innerHTML=h;
