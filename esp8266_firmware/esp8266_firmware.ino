@@ -215,10 +215,12 @@ void handleApiData() {
       id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
       json += "\"id\":\"" + id + "\",";
-      // Look up unit name for this device_id
+      // Look up unit name by base serial (MAC prefix)
+      String baseS = String(devices[i].serialId);
+      int us = baseS.indexOf('_'); if (us > 0) baseS = baseS.substring(0, us);
       String uname = "";
       for (int u = 0; u < unitNameCount; u++) {
-        if (strncmp(unitNames[u].id, devices[i].deviceId, UNIT_ID_LEN) == 0) { uname = unitNames[u].nm; break; }
+        if (baseS == String(unitNames[u].id)) { uname = unitNames[u].nm; break; }
       }
       uname.replace("\\", "\\\\"); uname.replace("\"", "'");
       json += "\"device_id\":\"" + deviceId + "\",";
@@ -398,17 +400,22 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *stateTopic = doc["state_topic"]   | "";
   const char *cmdTopic   = doc["command_topic"] | "";
 
-  // Extract physical unit name from device object
+  // Extract physical unit name from device object, keyed by base serial (MAC)
   const char *devNm = "";
   if (doc["device"].is<JsonObject>()) devNm = doc["device"]["name"] | "";
   else if (doc["dev"].is<JsonObject>()) devNm = doc["dev"]["name"] | "";
   if (strlen(devNm) > 0) {
+    // Base serial = part before first '_' in serialId (e.g. A4CF12F03246 from A4CF12F03246_0)
+    String baseSerial = serialId;
+    int uscore = baseSerial.indexOf('_');
+    if (uscore > 0) baseSerial = baseSerial.substring(0, uscore);
+
     bool found = false;
     for (int u = 0; u < unitNameCount; u++) {
-      if (strncmp(unitNames[u].id, deviceId.c_str(), UNIT_ID_LEN) == 0) { found = true; break; }
+      if (strncmp(unitNames[u].id, baseSerial.c_str(), UNIT_ID_LEN) == 0) { found = true; break; }
     }
     if (!found && unitNameCount < MAX_UNITS) {
-      strncpy(unitNames[unitNameCount].id, deviceId.c_str(), UNIT_ID_LEN - 1);
+      strncpy(unitNames[unitNameCount].id, baseSerial.c_str(), UNIT_ID_LEN - 1);
       unitNames[unitNameCount].id[UNIT_ID_LEN - 1] = '\0';
       strncpy(unitNames[unitNameCount].nm, devNm, UNIT_NM_LEN - 1);
       unitNames[unitNameCount].nm[UNIT_NM_LEN - 1] = '\0';
