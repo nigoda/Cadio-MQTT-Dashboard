@@ -42,7 +42,7 @@ int msgBufHead = 0;
 // ---------------------------------------------------------------------------
 //  Device discovery — parsed from homeassistant MQTT config messages
 // ---------------------------------------------------------------------------
-#define MAX_DEVICES     20
+#define MAX_DEVICES     40
 #define DEV_NAME_LEN    48
 #define DEV_ID_LEN      48
 #define DEV_SERIAL_LEN  48
@@ -50,6 +50,7 @@ int msgBufHead = 0;
 #define DEV_TYPE_LEN    16
 #define DEV_TOPIC_LEN   96
 #define DEV_STATE_LEN   48
+#define DEV_VALKEY_LEN  24
 
 struct IoTDevice {
   bool   active;
@@ -67,6 +68,7 @@ struct IoTDevice {
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
   char   state[DEV_STATE_LEN];
+  char   valueKey[DEV_VALKEY_LEN];   // JSON key for shared state_topic sensors
 };
 
 IoTDevice devices[MAX_DEVICES];
@@ -393,11 +395,33 @@ void parseConfigMsg(const String &topic, const String &payload) {
   bool brightnessFlag = doc["brightness"] | false;
   if (strlen(stateTopic) == 0) return;
 
-  // Find existing slot or allocate new one
+  // Extract value_template key for sensors sharing a state_topic
+  // Pattern: {{ value_json.KEY }} or {{ value_json['KEY'] }}
+  String valueKey = "";
+  if (doc.containsKey("value_template") || doc.containsKey("val_tpl")) {
+    String vt = doc["value_template"] | (doc["val_tpl"] | "");
+    int dotIdx = vt.indexOf("value_json.");
+    if (dotIdx >= 0) {
+      int start = dotIdx + 11;
+      int end = start;
+      while (end < (int)vt.length() && vt[end] != ' ' && vt[end] != '}' && vt[end] != '|' && vt[end] != ')') end++;
+      valueKey = vt.substring(start, end);
+      valueKey.trim();
+    } else {
+      int bIdx = vt.indexOf("value_json['");
+      if (bIdx >= 0) {
+        int start = bIdx + 12;
+        int end = vt.indexOf("']", start);
+        if (end > start) valueKey = vt.substring(start, end);
+      }
+    }
+  }
+
+  // Find existing slot by serialId (unique entity identifier from topic path)
   int slot = -1;
   bool isExisting = false;
   for (int i = 0; i < deviceCount; i++) {
-    if (devices[i].active && strncmp(devices[i].stateTopic, stateTopic, DEV_TOPIC_LEN) == 0) {
+    if (devices[i].active && strncmp(devices[i].serialId, serialId.c_str(), DEV_SERIAL_LEN) == 0) {
       slot = i;
       isExisting = true;
       break;
@@ -442,6 +466,8 @@ void parseConfigMsg(const String &topic, const String &payload) {
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
+  strncpy(devices[slot].valueKey,   valueKey.c_str(),                       DEV_VALKEY_LEN - 1);
+  devices[slot].valueKey[DEV_VALKEY_LEN - 1]  = '\0';
   devices[slot].name[DEV_NAME_LEN - 1]       = '\0';
   devices[slot].deviceId[DEV_ID_LEN - 1]     = '\0';
   devices[slot].serialId[DEV_SERIAL_LEN - 1] = '\0';
@@ -463,17 +489,32 @@ void parseConfigMsg(const String &topic, const String &payload) {
 //  Update device state when a state message arrives
 // ---------------------------------------------------------------------------
 void updateDeviceState(const String &topic, const String &payload) {
+  // Parse JSON once, reuse for all matching devices
+  JsonDocument doc;
+  bool jsonOk = (deserializeJson(doc, payload) == DeserializationError::Ok);
+
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
     if (topic != String(devices[i].stateTopic)) continue;
 
     String stateVal = payload;
-    JsonDocument doc;
-    if (deserializeJson(doc, payload) == DeserializationError::Ok) {
-      if (doc.containsKey("state"))       stateVal = doc["state"].as<String>();
-      else if (doc.containsKey("temperature")) stateVal = String(doc["temperature"].as<float>(), 1) + " C";
-      else if (doc.containsKey("humidity"))    stateVal = String(doc["humidity"].as<float>(), 1) + " %";
-      else if (doc.containsKey("value"))       stateVal = doc["value"].as<String>();
+
+    if (jsonOk) {
+      // If device has a valueKey, extract that specific field from shared JSON
+      if (strlen(devices[i].valueKey) > 0) {
+        if (doc.containsKey(devices[i].valueKey)) {
+          if (doc[devices[i].valueKey].is<float>())
+            stateVal = String(doc[devices[i].valueKey].as<float>(), 2);
+          else
+            stateVal = doc[devices[i].valueKey].as<String>();
+        }
+      } else {
+        // No valueKey — use generic extraction
+        if (doc.containsKey("state"))            stateVal = doc["state"].as<String>();
+        else if (doc.containsKey("temperature")) stateVal = String(doc["temperature"].as<float>(), 1) + " C";
+        else if (doc.containsKey("humidity"))     stateVal = String(doc["humidity"].as<float>(), 1) + " %";
+        else if (doc.containsKey("value"))        stateVal = doc["value"].as<String>();
+      }
 
       if (doc.containsKey("brightness")) {
         devices[i].brightness = constrain(doc["brightness"].as<int>(), 0, 100);
@@ -488,7 +529,7 @@ void updateDeviceState(const String &topic, const String &payload) {
     stateVal = stateVal.substring(0, DEV_STATE_LEN - 1);
     strncpy(devices[i].state, stateVal.c_str(), DEV_STATE_LEN - 1);
     devices[i].state[DEV_STATE_LEN - 1] = '\0';
-    break;
+    // Don't break — multiple entities may share the same state_topic
   }
 }
 
