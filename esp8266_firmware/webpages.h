@@ -305,7 +305,9 @@ function renderDevices(devs){
   var order=[];
   devs.forEach(function(d){
     var dname=(d.device_name||'Unknown').trim();
-    var sid=(d.serial||'').replace(/_[0-9]+$/,'').trim();
+    var sid=(d.serial||'').trim();
+    var ui=sid.indexOf('_');
+    if(ui>0) sid=sid.substring(0,ui);
     var unitKey=dname;
     if(!byUnit[unitKey]){
       byUnit[unitKey]={serial:sid,device_name:dname,items:[]};
