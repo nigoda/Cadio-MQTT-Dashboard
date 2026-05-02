@@ -70,6 +70,14 @@ struct IoTDevice {
 IoTDevice devices[MAX_DEVICES];
 int deviceCount = 0;
 
+// Tiny lookup: map deviceId -> physical unit name (shared, max 4 units)
+#define MAX_UNITS    4
+#define UNIT_ID_LEN  20
+#define UNIT_NM_LEN  32
+struct UnitName { char id[UNIT_ID_LEN]; char nm[UNIT_NM_LEN]; };
+UnitName unitNames[MAX_UNITS];
+int unitNameCount = 0;
+
 String chipID() {
   char id[9];
   snprintf(id, sizeof(id), "%08X", ESP.getChipId());
@@ -207,8 +215,15 @@ void handleApiData() {
       id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
     json += "{";
       json += "\"id\":\"" + id + "\",";
+      // Look up unit name for this device_id
+      String uname = "";
+      for (int u = 0; u < unitNameCount; u++) {
+        if (strncmp(unitNames[u].id, devices[i].deviceId, UNIT_ID_LEN) == 0) { uname = unitNames[u].nm; break; }
+      }
+      uname.replace("\\", "\\\\"); uname.replace("\"", "'");
       json += "\"device_id\":\"" + deviceId + "\",";
       json += "\"serial\":\"" + serial + "\",";
+      json += "\"device_name\":\"" + uname + "\",";
     json += "\"name\":\"" + name + "\",";
       json += "\"type\":\"" + type + "\",";
     json += "\"state\":\"" + state + "\",";
@@ -382,6 +397,25 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *name       = doc["name"]          | "";
   const char *stateTopic = doc["state_topic"]   | "";
   const char *cmdTopic   = doc["command_topic"] | "";
+
+  // Extract physical unit name from device object
+  const char *devNm = "";
+  if (doc["device"].is<JsonObject>()) devNm = doc["device"]["name"] | "";
+  else if (doc["dev"].is<JsonObject>()) devNm = doc["dev"]["name"] | "";
+  if (strlen(devNm) > 0) {
+    bool found = false;
+    for (int u = 0; u < unitNameCount; u++) {
+      if (strncmp(unitNames[u].id, deviceId.c_str(), UNIT_ID_LEN) == 0) { found = true; break; }
+    }
+    if (!found && unitNameCount < MAX_UNITS) {
+      strncpy(unitNames[unitNameCount].id, deviceId.c_str(), UNIT_ID_LEN - 1);
+      unitNames[unitNameCount].id[UNIT_ID_LEN - 1] = '\0';
+      strncpy(unitNames[unitNameCount].nm, devNm, UNIT_NM_LEN - 1);
+      unitNames[unitNameCount].nm[UNIT_NM_LEN - 1] = '\0';
+      unitNameCount++;
+    }
+  }
+
   bool brightnessFlag = doc["brightness"] | false;
   if (strlen(stateTopic) == 0) return;
 

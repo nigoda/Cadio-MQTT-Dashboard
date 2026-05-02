@@ -154,7 +154,12 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .btn{display:inline-block;margin-top:14px;margin-right:8px;padding:7px 16px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.82rem}
   .btn:hover{background:#1d4ed8}
   .btn.danger{background:#7f1d1d;color:#fca5a5}
-  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:6px}
+  .dev-grid{margin-top:6px}
+  .unit-section{margin-top:16px}
+  .unit-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px;padding-bottom:5px;border-bottom:1px solid #334155}
+  .unit-title{font-size:.78rem;font-weight:700;letter-spacing:.06em;color:#93c5fd;text-transform:uppercase}
+  .unit-meta{font-size:.66rem;color:#64748b}
+  .unit-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
   .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s}
   .dev-card.on{border-color:#16a34a}
   .dev-card.off{border-color:#dc2626}
@@ -282,8 +287,26 @@ function renderDevices(devs){
     if(!devCache[key]||!devCache[key].pending) devCache[key]={state:d.state,pending:false};
   });
 
-  var h='';
+  // Group by device_name (physical unit)
+  var byUnit={},uOrder=[];
   devs.forEach(function(d){
+    var dn=(d.device_name||'').trim()||'Other';
+    var sid=(d.serial||'').trim();
+    var ui=sid.indexOf('_'); if(ui>0) sid=sid.substring(0,ui);
+    if(!byUnit[dn]){byUnit[dn]={serial:sid,items:[]};uOrder.push(dn);}
+    byUnit[dn].items.push(d);
+  });
+
+  var h='';
+  uOrder.forEach(function(uname){
+    var grp=byUnit[uname];
+    h+="<div class='unit-section'>";
+    h+="<div class='unit-head'>";
+    h+="<div class='unit-title'>"+uname+"</div>";
+    if(grp.serial) h+="<div class='unit-meta'>Serial: "+grp.serial+"</div>";
+    h+="</div>";
+    h+="<div class='unit-cards'>";
+    grp.items.forEach(function(d){
     var key=devKey(d);
     var cached=devCache[key]||{state:d.state,pending:false};
     var curState=cached.state||d.state||'';
@@ -407,6 +430,8 @@ function renderDevices(devs){
       }
     }
     h+="</div>";
+    });
+    h+="</div></div>";
   });
   g.innerHTML=h;
 }
