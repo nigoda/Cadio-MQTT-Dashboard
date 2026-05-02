@@ -287,27 +287,25 @@ function renderDevices(devs){
     if(!devCache[key]||!devCache[key].pending) devCache[key]={state:d.state,pending:false};
   });
 
-  // Group cards by physical unit (identifier + serial), like the main web dashboard
+  // Group cards by physical unit name
   var byUnit={};
   var order=[];
   devs.forEach(function(d){
-    var did=(d.device_id||'').trim();
-    var sid=(d.serial||'').trim();
-    var unitKey=(did||'unknown')+'|'+(sid||'unknown');
+    var dname=(d.device_name||'Unknown').trim();
+    var sid=(d.serial||'').replace(/_[0-9]+$/,'').trim();
+    var unitKey=dname;
     if(!byUnit[unitKey]){
-      byUnit[unitKey]={device_id:did,serial:sid,device_name:'',items:[]};
+      byUnit[unitKey]={serial:sid,device_name:dname,items:[]};
       order.push(unitKey);
     }
-    if(d.device_name&&!byUnit[unitKey].device_name) byUnit[unitKey].device_name=d.device_name;
     byUnit[unitKey].items.push(d);
   });
 
   var h='';
   order.forEach(function(unitKey){
     var grp=byUnit[unitKey];
-    var did=grp.device_id||'Unknown ID';
     var sid=grp.serial||'Unknown Serial';
-    var dname=grp.device_name||did;
+    var dname=grp.device_name||'Unknown';
 
     h+="<div class='unit-section'>";
 
