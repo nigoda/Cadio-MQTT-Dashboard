@@ -16,6 +16,10 @@
 #include "credentials.h"
 #include "webpages.h"
 
+// Forward declarations (prevent Arduino IDE auto-prototype issues)
+void jsonAppendStr(String &j, const char *s);
+void jsonAppendInt(String &j, int v);
+
 CredentialStore credStore;
 AppCredentials  creds;
 
@@ -176,7 +180,7 @@ void handleSetupPage() {
 //  Pre-allocated buffer to prevent heap fragmentation
 // ---------------------------------------------------------------------------
 // Append char array to json, replacing " with ' and \ with /
-static void jS(String &j, const char *s) {
+void jsonAppendStr(String &j, const char *s) {
   while (*s) {
     char c = *s++;
     if (c == '"') j += '\'';
@@ -184,22 +188,32 @@ static void jS(String &j, const char *s) {
     else j += c;
   }
 }
-static void jI(String &j, int v) { char b[12]; itoa(v, b, 10); j += b; }
+void jsonAppendInt(String &j, int v) { char b[12]; itoa(v, b, 10); j += b; }
 
 void handleApiData() {
   String json;
   json.reserve(2048);
 
-  json = "{\"rssi\":";
-  jI(json, WiFi.RSSI());
+  json = "{\"ssid\":\"";
+  jsonAppendStr(json, creds.wifiSSID);
+  json += "\",\"ip\":\"";
+  jsonAppendStr(json, WiFi.localIP().toString().c_str());
+  json += "\",\"broker\":\"";
+  jsonAppendStr(json, creds.mqttBroker);
+  json += "\",\"port\":";
+  jsonAppendInt(json, creds.mqttPort);
+  json += ",\"email\":\"";
+  jsonAppendStr(json, creds.mqttEmail);
+  json += "\",\"rssi\":";
+  jsonAppendInt(json, WiFi.RSSI());
   json += ",\"heap\":";
-  jI(json, ESP.getFreeHeap() / 1024);
+  jsonAppendInt(json, ESP.getFreeHeap() / 1024);
   json += ",\"uptime\":\"";
   json += uptimeStr();
   json += "\",\"mqtt\":";
   json += mqttConnected ? "true" : "false";
   json += ",\"msg_count\":";
-  jI(json, msgCount);
+  jsonAppendInt(json, msgCount);
 
   // Messages (last 5)
   json += ",\"messages\":[";
@@ -210,9 +224,9 @@ void handleApiData() {
     if (!f) json += ',';
     f = false;
     json += "{\"t\":\"";
-    jS(json, msgBuf[idx].topic.substring(0, 50).c_str());
+    jsonAppendStr(json, msgBuf[idx].topic.substring(0, 50).c_str());
     json += "\",\"p\":\"";
-    jS(json, msgBuf[idx].payload.substring(0, 40).c_str());
+    jsonAppendStr(json, msgBuf[idx].payload.substring(0, 40).c_str());
     json += "\"}";
   }
 
@@ -234,22 +248,22 @@ void handleApiData() {
       if (strcmp(unitNames[u].id, baseS) == 0) { uname = unitNames[u].nm; break; }
     }
 
-    json += "{\"id\":\"";       jS(json, devices[i].stateTopic);
-    json += "\",\"device_id\":\""; jS(json, devices[i].deviceId);
-    json += "\",\"serial\":\"";    jS(json, devices[i].serialId);
-    json += "\",\"device_name\":\""; jS(json, uname);
-    json += "\",\"name\":\"";     jS(json, devices[i].name);
-    json += "\",\"type\":\"";     jS(json, devices[i].type);
-    json += "\",\"state\":\"";    jS(json, devices[i].state);
-    json += "\",\"cmd\":\"";      jS(json, devices[i].cmdTopic);
+    json += "{\"id\":\"";       jsonAppendStr(json, devices[i].stateTopic);
+    json += "\",\"device_id\":\""; jsonAppendStr(json, devices[i].deviceId);
+    json += "\",\"serial\":\"";    jsonAppendStr(json, devices[i].serialId);
+    json += "\",\"device_name\":\""; jsonAppendStr(json, uname);
+    json += "\",\"name\":\"";     jsonAppendStr(json, devices[i].name);
+    json += "\",\"type\":\"";     jsonAppendStr(json, devices[i].type);
+    json += "\",\"state\":\"";    jsonAppendStr(json, devices[i].state);
+    json += "\",\"cmd\":\"";      jsonAppendStr(json, devices[i].cmdTopic);
     json += "\",\"supports_brightness\":";
     json += devices[i].supportsBrightness ? "true" : "false";
     json += ",\"supports_rgb\":";
     json += devices[i].supportsRgb ? "true" : "false";
-    json += ",\"brightness\":"; jI(json, devices[i].brightness);
-    json += ",\"color_r\":";    jI(json, devices[i].colorR);
-    json += ",\"color_g\":";    jI(json, devices[i].colorG);
-    json += ",\"color_b\":";    jI(json, devices[i].colorB);
+    json += ",\"brightness\":"; jsonAppendInt(json, devices[i].brightness);
+    json += ",\"color_r\":";    jsonAppendInt(json, devices[i].colorR);
+    json += ",\"color_g\":";    jsonAppendInt(json, devices[i].colorG);
+    json += ",\"color_b\":";    jsonAppendInt(json, devices[i].colorB);
     json += '}';
     yield();
   }
@@ -311,16 +325,10 @@ void handleCmd() {
 }
 
 void handleDashboard() {
-  // Send the static HTML shell with a few baked-in fields.
-  // Dynamic data (devices, messages, states) is fetched by JS via /api/data.
-  String html = FPSTR(DASHBOARD_HTML);
-  html.replace("__WIFI_SSID__", creds.wifiSSID);
-  html.replace("__IP__",        WiFi.localIP().toString());
-  html.replace("__BROKER__",    creds.mqttBroker);
-  html.replace("__PORT__",      String(creds.mqttPort));
-  html.replace("__EMAIL__",     creds.mqttEmail);
+  // Send directly from PROGMEM — zero heap allocation.
+  // Config values (SSID, IP, broker etc.) are now fetched by JS via /api/data.
   server.sendHeader("Cache-Control", "no-cache");
-  server.send(200, "text/html", html);
+  server.send_P(200, "text/html", DASHBOARD_HTML);
 }
 
 void handleReset() {

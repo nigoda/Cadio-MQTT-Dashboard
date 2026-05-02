@@ -225,11 +225,11 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
 <a class="btn danger" href="/reset" onclick="return confirm('Wipe credentials and reboot?')">Factory Reset</a>
 
 <script>
-var WIFI_SSID  = '__WIFI_SSID__';
-var BROKER     = '__BROKER__';
-var BROKER_PORT= '__PORT__';
-var EMAIL      = '__EMAIL__';
-var IP         = '__IP__';
+var WIFI_SSID  = '';
+var BROKER     = '';
+var BROKER_PORT= '';
+var EMAIL      = '';
+var IP         = '';
 
 function $(id){ return document.getElementById(id); }
 
@@ -456,11 +456,11 @@ function refresh(){
     .then(function(r){return r.json();})
     .then(function(d){
       dot.classList.remove('pulse');
-      $('d-ssid').textContent   = WIFI_SSID;
-      $('d-ip').textContent     = IP;
+      $('d-ssid').textContent   = d.ssid||'';
+      $('d-ip').textContent     = d.ip||'';
       $('d-rssi').textContent   = d.rssi+' dBm';
-      $('d-broker').textContent = BROKER+':'+BROKER_PORT;
-      $('d-email').textContent  = EMAIL;
+      $('d-broker').textContent = (d.broker||'')+':'+(d.port||'');
+      $('d-email').textContent  = d.email||'';
       $('d-uptime').textContent = d.uptime;
       $('d-heap').textContent   = d.heap+' KB';
       $('d-msgs').textContent   = d.msg_count;
@@ -521,12 +521,6 @@ function sendColor(key, topic, hex){
     })
     .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,900); });
 }
-
-// Populate static fields from placeholders baked in at serve time
-$('d-ssid').textContent   = WIFI_SSID;
-$('d-ip').textContent     = IP;
-$('d-broker').textContent = BROKER+':'+BROKER_PORT;
-$('d-email').textContent  = EMAIL;
 
 refresh();
 setInterval(refresh, 2000);
