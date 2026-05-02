@@ -172,72 +172,86 @@ void handleSetupPage() {
 }
 
 // ---------------------------------------------------------------------------
-//  /api/data — lightweight JSON endpoint polled by JS every 10s
-//  Keeps heap usage low by never rebuilding the full HTML page
+//  /api/data — lightweight JSON endpoint polled by JS every 2s
+//  Pre-allocated buffer to prevent heap fragmentation
 // ---------------------------------------------------------------------------
-void handleApiData() {
-  String json = "{";
-  json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
-  json += "\"heap\":" + String(ESP.getFreeHeap() / 1024) + ",";
-  json += "\"uptime\":\"" + uptimeStr() + "\",";
-  json += "\"mqtt\":" + String(mqttConnected ? "true" : "false") + ",";
-  json += "\"msg_count\":" + String(msgCount) + ",";
+// Append char array to json, replacing " with ' and \ with /
+static void jS(String &j, const char *s) {
+  while (*s) {
+    char c = *s++;
+    if (c == '"') j += '\'';
+    else if (c == '\\') j += '/';
+    else j += c;
+  }
+}
+static void jI(String &j, int v) { char b[12]; itoa(v, b, 10); j += b; }
 
-  // Recent messages array (last 10 only to keep JSON small)
-  json += "\"messages\":[";
-  bool firstMsg = true;
-  for (int i = 0; i < 10; i++) {
+void handleApiData() {
+  String json;
+  json.reserve(2048);
+
+  json = "{\"rssi\":";
+  jI(json, WiFi.RSSI());
+  json += ",\"heap\":";
+  jI(json, ESP.getFreeHeap() / 1024);
+  json += ",\"uptime\":\"";
+  json += uptimeStr();
+  json += "\",\"mqtt\":";
+  json += mqttConnected ? "true" : "false";
+  json += ",\"msg_count\":";
+  jI(json, msgCount);
+
+  // Messages (last 5)
+  json += ",\"messages\":[";
+  bool f = true;
+  for (int i = 0; i < 5; i++) {
     int idx = ((msgBufHead - 1 - i) + MSG_BUF_SIZE) % MSG_BUF_SIZE;
     if (msgBuf[idx].topic.isEmpty()) continue;
-    if (!firstMsg) json += ",";
-    firstMsg = false;
-    String t = msgBuf[idx].topic;
-    String p = msgBuf[idx].payload.substring(0, 80);
-    t.replace("\\", "\\\\"); t.replace("\"", "\\\"");
-    p.replace("\\", "\\\\"); p.replace("\"", "\\\"");
-    json += "{\"t\":\"" + t + "\",\"p\":\"" + p + "\"}";
+    if (!f) json += ',';
+    f = false;
+    json += "{\"t\":\"";
+    jS(json, msgBuf[idx].topic.substring(0, 50).c_str());
+    json += "\",\"p\":\"";
+    jS(json, msgBuf[idx].payload.substring(0, 40).c_str());
+    json += "\"}";
   }
-  json += "],";
 
-  // Devices array
-  json += "\"devices\":[";
-  bool firstDev = true;
+  // Devices
+  json += "],\"devices\":[";
+  f = true;
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
-    if (!firstDev) json += ",";
-    firstDev = false;
-      String id    = String(devices[i].stateTopic);
-      String deviceId = String(devices[i].deviceId); deviceId.replace("\\", "\\\\"); deviceId.replace("\"", "\\\"");
-      String serial = String(devices[i].serialId); serial.replace("\\", "\\\\"); serial.replace("\"", "\\\"");
-      String name  = String(devices[i].name);  name.replace("\\", "\\\\"); name.replace("\"", "'");
-      String type  = String(devices[i].type);  type.replace("\\", "\\\\"); type.replace("\"", "'");
-      String state = String(devices[i].state); state.replace("\\", "\\\\"); state.replace("\"", "'");
-      String cmd   = String(devices[i].cmdTopic); cmd.replace("\\", "\\\\"); cmd.replace("\"", "\\\"");
-      id.replace("\\", "\\\\"); id.replace("\"", "\\\"");
-    json += "{";
-      json += "\"id\":\"" + id + "\",";
-      // Look up unit name by base serial (MAC prefix)
-      String baseS = String(devices[i].serialId);
-      int us = baseS.indexOf('_'); if (us > 0) baseS = baseS.substring(0, us);
-      String uname = "";
-      for (int u = 0; u < unitNameCount; u++) {
-        if (baseS == String(unitNames[u].id)) { uname = unitNames[u].nm; break; }
-      }
-      uname.replace("\\", "\\\\"); uname.replace("\"", "'");
-      json += "\"device_id\":\"" + deviceId + "\",";
-      json += "\"serial\":\"" + serial + "\",";
-      json += "\"device_name\":\"" + uname + "\",";
-    json += "\"name\":\"" + name + "\",";
-      json += "\"type\":\"" + type + "\",";
-    json += "\"state\":\"" + state + "\",";
-    json += "\"cmd\":\"" + cmd + "\",";
-    json += "\"supports_brightness\":" + String(devices[i].supportsBrightness ? "true" : "false") + ",";
-    json += "\"supports_rgb\":" + String(devices[i].supportsRgb ? "true" : "false") + ",";
-    json += "\"brightness\":" + String(devices[i].brightness) + ",";
-    json += "\"color_r\":" + String(devices[i].colorR) + ",";
-    json += "\"color_g\":" + String(devices[i].colorG) + ",";
-    json += "\"color_b\":" + String(devices[i].colorB);
-    json += "}";
+    if (!f) json += ',';
+    f = false;
+
+    // Find unit name by base serial
+    const char *uname = "";
+    char baseS[20] = {0};
+    strncpy(baseS, devices[i].serialId, 19);
+    char *usc = strchr(baseS, '_');
+    if (usc) *usc = '\0';
+    for (int u = 0; u < unitNameCount; u++) {
+      if (strcmp(unitNames[u].id, baseS) == 0) { uname = unitNames[u].nm; break; }
+    }
+
+    json += "{\"id\":\"";       jS(json, devices[i].stateTopic);
+    json += "\",\"device_id\":\""; jS(json, devices[i].deviceId);
+    json += "\",\"serial\":\"";    jS(json, devices[i].serialId);
+    json += "\",\"device_name\":\""; jS(json, uname);
+    json += "\",\"name\":\"";     jS(json, devices[i].name);
+    json += "\",\"type\":\"";     jS(json, devices[i].type);
+    json += "\",\"state\":\"";    jS(json, devices[i].state);
+    json += "\",\"cmd\":\"";      jS(json, devices[i].cmdTopic);
+    json += "\",\"supports_brightness\":";
+    json += devices[i].supportsBrightness ? "true" : "false";
+    json += ",\"supports_rgb\":";
+    json += devices[i].supportsRgb ? "true" : "false";
+    json += ",\"brightness\":"; jI(json, devices[i].brightness);
+    json += ",\"color_r\":";    jI(json, devices[i].colorR);
+    json += ",\"color_g\":";    jI(json, devices[i].colorG);
+    json += ",\"color_b\":";    jI(json, devices[i].colorB);
+    json += '}';
+    yield();
   }
   json += "]}";
 
