@@ -422,6 +422,9 @@ function renderMessages(msgs){
 }
 
 function refresh(){
+  // Skip render if color picker is open (prevents modal from closing)
+  if(document.querySelector('input[type="color"]:focus')) return;
+  
   var dot=$('status-dot');
   dot.classList.add('pulse');
   fetch('/api/data')
