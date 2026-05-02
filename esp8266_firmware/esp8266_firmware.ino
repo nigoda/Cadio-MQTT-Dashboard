@@ -178,6 +178,17 @@ void handleSetupPage() {
 //  /api/data — lightweight JSON endpoint polled by JS every 10s
 //  Keeps heap usage low by never rebuilding the full HTML page
 // ---------------------------------------------------------------------------
+
+// Append a JSON-safe string (escape \ and ") directly into dest
+static void jsonStr(String &dest, const char *src) {
+  while (*src) {
+    if (*src == '"') dest += '\'';
+    else if (*src == '\\') dest += '/';
+    else dest += *src;
+    src++;
+  }
+}
+
 void handleApiData() {
   String json;
   json.reserve(2048);  // Pre-allocate to avoid heap fragmentation
@@ -202,9 +213,9 @@ void handleApiData() {
     if (!first) json += ',';
     first = false;
     json += "{\"t\":\"";
-    json += msgBuf[idx].topic.substring(0, 60);
+    jsonStr(json, msgBuf[idx].topic.substring(0, 60).c_str());
     json += "\",\"p\":\"";
-    json += msgBuf[idx].payload.substring(0, 50);
+    jsonStr(json, msgBuf[idx].payload.substring(0, 50).c_str());
     json += "\"}";
   }
 
@@ -226,21 +237,21 @@ void handleApiData() {
     }
 
     json += "{\"id\":\"";
-    json += devices[i].stateTopic;
+    jsonStr(json, devices[i].stateTopic);
     json += "\",\"device_id\":\"";
-    json += devices[i].deviceId;
+    jsonStr(json, devices[i].deviceId);
     json += "\",\"serial\":\"";
-    json += devices[i].serialId;
+    jsonStr(json, devices[i].serialId);
     json += "\",\"device_name\":\"";
-    json += dname;
+    jsonStr(json, dname);
     json += "\",\"name\":\"";
-    json += devices[i].name;
+    jsonStr(json, devices[i].name);
     json += "\",\"type\":\"";
-    json += devices[i].type;
+    jsonStr(json, devices[i].type);
     json += "\",\"state\":\"";
-    json += devices[i].state;
+    jsonStr(json, devices[i].state);
     json += "\",\"cmd\":\"";
-    json += devices[i].cmdTopic;
+    jsonStr(json, devices[i].cmdTopic);
     json += "\",\"supports_brightness\":";
     json += devices[i].supportsBrightness ? "true" : "false";
     json += ",\"supports_rgb\":";
