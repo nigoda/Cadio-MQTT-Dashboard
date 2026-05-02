@@ -155,7 +155,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .btn:hover{background:#1d4ed8}
   .btn.danger{background:#7f1d1d;color:#fca5a5}
   .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:6px}
-  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s;overflow:hidden}
+  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s}
   .dev-card.on{border-color:#16a34a}
   .dev-card.off{border-color:#dc2626}
   .dev-type{font-size:.62rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
@@ -167,10 +167,11 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .light-wrap{border-top:1px solid #334155;padding-top:6px;margin-top:2px}
   .light-meta{display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:#94a3b8;margin-bottom:4px}
   .light-range{display:block;width:100%;accent-color:#38bdf8}
-  .light-color{margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
-  .light-color-meta{display:flex;align-items:center;gap:8px}
-  .light-color input[type=color]{width:34px;height:24px;padding:0;border:1px solid #334155;border-radius:6px;background:#0f172a;cursor:pointer}
-  .light-hex{font-size:.72rem;color:#94a3b8;text-transform:lowercase}
+  .light-color{margin-top:10px;border-top:1px solid #334155;padding-top:8px}
+  .light-color-label{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+  .light-color-picker{display:flex;align-items:center;gap:10px}
+  .light-color input[type=color]{width:48px;height:36px;padding:2px;border:1px solid #334155;border-radius:6px;background:#0f172a;cursor:pointer;position:relative;z-index:100}
+  .light-hex{font-size:.72rem;color:#94a3b8;text-transform:lowercase;flex:1}
   .toggle{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0}
   .toggle input{opacity:0;width:0;height:0}
   .slider{position:absolute;inset:0;background:#334155;border-radius:24px;cursor:pointer;transition:.25s}
@@ -395,8 +396,8 @@ function renderDevices(devs){
         var clrId='clr-val-'+btoa(d.cmd).replace(/=/g,'');
 
         h+="<div class='light-color'>";
-        h+="<span class='toggle-lbl'>Color</span>";
-        h+="<div class='light-color-meta'>";
+        h+="<div class='light-color-label'><span class='toggle-lbl'>Color</span></div>";
+        h+="<div class='light-color-picker'>";
         h+="<input type='color' value='"+hex+"' ";
         h+="oninput=\"document.getElementById('"+clrId+"').textContent=this.value\" ";
         h+="onchange=\"sendColor('"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"',this.value)\">";
