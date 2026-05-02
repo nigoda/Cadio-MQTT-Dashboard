@@ -135,10 +135,10 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
 <title>Nivixsa ESP8266 Status</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:20px}
+  body{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:12px;max-width:1200px;margin:0 auto}
   h1{color:#38bdf8;margin-bottom:4px;font-size:1.4rem}
   .sub{color:#94a3b8;font-size:.82rem;margin-bottom:20px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}
   .card{background:#1e293b;border-radius:10px;padding:16px}
   .card h2{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8;margin-bottom:10px}
   .stat{display:flex;justify-content:space-between;align-items:center;margin-bottom:7px}
@@ -154,13 +154,13 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .btn{display:inline-block;margin-top:14px;margin-right:8px;padding:7px 16px;background:#1e40af;color:#bfdbfe;border-radius:8px;text-decoration:none;font-size:.82rem}
   .btn:hover{background:#1d4ed8}
   .btn.danger{background:#7f1d1d;color:#fca5a5}
-  .dev-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:6px}
+  .dev-grid{margin-top:6px}
   .unit-section{margin-top:18px;width:100%}
-  .unit-devices{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+  .unit-devices{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
   .unit-head{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:4px;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid #334155}
   .unit-title{font-size:.76rem;font-weight:700;letter-spacing:.06em;color:#93c5fd;text-transform:uppercase}
   .unit-meta{font-size:.68rem;color:#64748b;word-break:break-all}
-  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s}
+  .dev-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:6px;transition:border-color .2s;min-width:0}
   .dev-card.on{border-color:#16a34a}
   .dev-card.off{border-color:#dc2626}
   .dev-type{font-size:.62rem;text-transform:uppercase;color:#38bdf8;letter-spacing:.07em}
@@ -187,6 +187,19 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .pulse{animation:pulse 1s ease-in-out}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
   #status-dot{display:inline-block;width:8px;height:8px;background:#86efac;border-radius:50%;margin-right:6px}
+  @media(max-width:480px){
+    body{padding:8px}
+    .grid{grid-template-columns:1fr}
+    .unit-devices{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px}
+    .dev-card{padding:10px}
+    h1{font-size:1.2rem}
+  }
+  @media(min-width:481px) and (max-width:768px){
+    .unit-devices{grid-template-columns:repeat(2,1fr)}
+  }
+  @media(min-width:769px){
+    .unit-devices{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+  }
 </style>
 </head>
 <body>
