@@ -53,7 +53,11 @@ int msgBufHead = 0;
 struct IoTDevice {
   bool   active;
   bool   supportsBrightness;
+  bool   supportsRgb;
   int    brightness;               // 0-100, -1 unknown
+  int    colorR;                   // 0-255, -1 unknown
+  int    colorG;                   // 0-255, -1 unknown
+  int    colorB;                   // 0-255, -1 unknown
   char   name[DEV_NAME_LEN];
   char   deviceId[DEV_ID_LEN];
   char   serialId[DEV_SERIAL_LEN];
@@ -210,7 +214,11 @@ void handleApiData() {
     json += "\"state\":\"" + state + "\",";
     json += "\"cmd\":\"" + cmd + "\",";
     json += "\"supports_brightness\":" + String(devices[i].supportsBrightness ? "true" : "false") + ",";
-    json += "\"brightness\":" + String(devices[i].brightness);
+    json += "\"supports_rgb\":" + String(devices[i].supportsRgb ? "true" : "false") + ",";
+    json += "\"brightness\":" + String(devices[i].brightness) + ",";
+    json += "\"color_r\":" + String(devices[i].colorR) + ",";
+    json += "\"color_g\":" + String(devices[i].colorG) + ",";
+    json += "\"color_b\":" + String(devices[i].colorB);
     json += "}";
   }
   json += "]}";
@@ -255,6 +263,12 @@ void handleCmd() {
       }
       if (cmdDoc.containsKey("brightness")) {
         devices[i].brightness = constrain(cmdDoc["brightness"].as<int>(), 0, 100);
+      }
+      if (cmdDoc["color"].is<JsonObject>()) {
+        JsonObject c = cmdDoc["color"].as<JsonObject>();
+        if (c.containsKey("r")) devices[i].colorR = constrain(c["r"].as<int>(), 0, 255);
+        if (c.containsKey("g")) devices[i].colorG = constrain(c["g"].as<int>(), 0, 255);
+        if (c.containsKey("b")) devices[i].colorB = constrain(c["b"].as<int>(), 0, 255);
       }
     }
     break;
@@ -373,30 +387,40 @@ void parseConfigMsg(const String &topic, const String &payload) {
 
   // Find existing slot or allocate new one
   int slot = -1;
+  bool isExisting = false;
   for (int i = 0; i < deviceCount; i++) {
     if (devices[i].active && strncmp(devices[i].stateTopic, stateTopic, DEV_TOPIC_LEN) == 0) {
-      slot = i; break;
+      slot = i;
+      isExisting = true;
+      break;
     }
   }
   if (slot < 0 && deviceCount < MAX_DEVICES) slot = deviceCount++;
   if (slot < 0) return;
 
   bool supportsBrightness = brightnessFlag;
+  bool supportsRgb = false;
   if (doc["supported_color_modes"].is<JsonArray>()) {
     JsonArray modes = doc["supported_color_modes"].as<JsonArray>();
     for (JsonVariant v : modes) {
       String m = v.as<String>();
       if (m == "brightness" || m == "rgb") {
         supportsBrightness = true;
-        break;
+      }
+      if (m == "rgb") {
+        supportsRgb = true;
       }
     }
   }
 
   devices[slot].active = true;
   devices[slot].supportsBrightness = (entityType == "light") && supportsBrightness;
-  if (devices[slot].brightness < 0 || devices[slot].brightness > 100) {
+  devices[slot].supportsRgb = (entityType == "light") && supportsRgb;
+  if (!isExisting) {
     devices[slot].brightness = -1;
+    devices[slot].colorR = -1;
+    devices[slot].colorG = -1;
+    devices[slot].colorB = -1;
   }
   strncpy(devices[slot].name,       strlen(name) > 0 ? name : "Unknown", DEV_NAME_LEN - 1);
   strncpy(devices[slot].deviceId,   deviceId.c_str(),                      DEV_ID_LEN - 1);
@@ -439,6 +463,12 @@ void updateDeviceState(const String &topic, const String &payload) {
 
       if (doc.containsKey("brightness")) {
         devices[i].brightness = constrain(doc["brightness"].as<int>(), 0, 100);
+      }
+      if (doc["color"].is<JsonObject>()) {
+        JsonObject c = doc["color"].as<JsonObject>();
+        if (c.containsKey("r")) devices[i].colorR = constrain(c["r"].as<int>(), 0, 255);
+        if (c.containsKey("g")) devices[i].colorG = constrain(c["g"].as<int>(), 0, 255);
+        if (c.containsKey("b")) devices[i].colorB = constrain(c["b"].as<int>(), 0, 255);
       }
     }
     stateVal = stateVal.substring(0, DEV_STATE_LEN - 1);

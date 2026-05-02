@@ -167,6 +167,10 @@ const char DASHBOARD_HTML[] PROGMEM = R"rawhtml(
   .light-wrap{border-top:1px solid #334155;padding-top:6px;margin-top:2px}
   .light-meta{display:flex;justify-content:space-between;align-items:center;font-size:.74rem;color:#94a3b8;margin-bottom:4px}
   .light-range{display:block;width:100%;accent-color:#38bdf8}
+  .light-color{margin-top:8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .light-color-meta{display:flex;align-items:center;gap:8px}
+  .light-color input[type=color]{width:34px;height:24px;padding:0;border:1px solid #334155;border-radius:6px;background:#0f172a;cursor:pointer}
+  .light-hex{font-size:.72rem;color:#94a3b8;text-transform:lowercase}
   .toggle{position:relative;display:inline-block;width:42px;height:24px;flex-shrink:0}
   .toggle input{opacity:0;width:0;height:0}
   .slider{position:absolute;inset:0;background:#334155;border-radius:24px;cursor:pointer;transition:.25s}
@@ -242,6 +246,24 @@ function stateLabel(s){
   return s && s.length ? s : '--';
 }
 
+function rgbToHex(r,g,b){
+  function p(v){
+    var n=Math.max(0,Math.min(255,parseInt(v||0,10)));
+    return n.toString(16).padStart(2,'0');
+  }
+  return '#'+p(r)+p(g)+p(b);
+}
+
+function hexToRgb(hex){
+  if(!hex||typeof hex!=='string') return null;
+  var h=hex.trim();
+  if(h[0]==='#') h=h.substring(1);
+  if(h.length!==6) return null;
+  var n=parseInt(h,16);
+  if(isNaN(n)) return null;
+  return {r:(n>>16)&255,g:(n>>8)&255,b:n&255};
+}
+
 function devKey(d){
   return d.id || d.cmd || d.name || '';
 }
@@ -268,6 +290,7 @@ function renderDevices(devs){
     var isOn=isOnState(curState);
     var canCtrl=d.cmd&&(d.type==='switch'||d.type==='light'||d.type==='lock'||d.type==='fan'||d.type==='cover');
     var canBrightness=(d.type==='light'&&d.cmd&&d.supports_brightness);
+    var canColor=(d.type==='light'&&d.cmd&&d.supports_rgb);
     var cardCls=canCtrl?(hasState?(isOn?'on':'off'):''):'';
     var safeCmd=d.cmd.replace(/"/g,'&quot;');
     h+="<div class='dev-card "+cardCls+"'>";
@@ -363,6 +386,24 @@ function renderDevices(devs){
 
         h+="</div>";
       }
+
+      if(canColor){
+        var cr=(typeof d.color_r==='number'&&d.color_r>=0&&d.color_r<=255)?d.color_r:255;
+        var cg=(typeof d.color_g==='number'&&d.color_g>=0&&d.color_g<=255)?d.color_g:0;
+        var cb=(typeof d.color_b==='number'&&d.color_b>=0&&d.color_b<=255)?d.color_b:0;
+        var hex=rgbToHex(cr,cg,cb);
+        var clrId='clr-val-'+btoa(d.cmd).replace(/=/g,'');
+
+        h+="<div class='light-color'>";
+        h+="<span class='toggle-lbl'>Color</span>";
+        h+="<div class='light-color-meta'>";
+        h+="<input type='color' value='"+hex+"' ";
+        h+="oninput=\"document.getElementById('"+clrId+"').textContent=this.value\" ";
+        h+="onchange=\"sendColor('"+key.replace(/"/g,'&quot;')+"','"+safeCmd+"',this.value)\">";
+        h+="<span class='light-hex' id='"+clrId+"'>"+hex+"</span>";
+        h+="</div>";
+        h+="</div>";
+      }
     }
     h+="</div>";
   });
@@ -431,6 +472,22 @@ function sendBrightness(key, topic, value){
     .then(function(r){return r.json();})
     .then(function(d){
       if(!d.ok){ alert('Brightness failed: '+(d.msg||'error')); }
+      setTimeout(function(){ if(devCache[key]) devCache[key].pending=false; refresh(); }, 900);
+    })
+    .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,900); });
+}
+
+function sendColor(key, topic, hex){
+  var rgb=hexToRgb(hex);
+  if(!rgb) return;
+  if(!devCache[key]) devCache[key]={state:'ON',pending:true};
+  devCache[key].pending=true;
+  var payload=JSON.stringify({state:'ON', color:{r:rgb.r, g:rgb.g, b:rgb.b}});
+
+  fetch('/cmd?topic='+encodeURIComponent(topic)+'&payload='+encodeURIComponent(payload)+'&raw=1')
+    .then(function(r){return r.json();})
+    .then(function(d){
+      if(!d.ok){ alert('Color failed: '+(d.msg||'error')); }
       setTimeout(function(){ if(devCache[key]) devCache[key].pending=false; refresh(); }, 900);
     })
     .catch(function(){ if(devCache[key]) devCache[key].pending=false; setTimeout(refresh,900); });
