@@ -36,5 +36,5 @@
 #define MQTT_BUFFER_SIZE      2048
 
 // ---------- Device limits ---------------------------------------------------
-#define MAX_DEVICES     16
+#define MAX_DEVICES     30
 #define MSG_BUF_SIZE    10

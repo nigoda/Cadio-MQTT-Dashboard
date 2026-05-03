@@ -213,7 +213,7 @@ void handleDashboard() {
 
 void handleApiData() {
   String json;
-  json.reserve(2048);
+  json.reserve(4096);
 
   json = "{\"ssid\":\"";
   jsonStr(json, creds.wifiSSID.c_str());
@@ -465,7 +465,10 @@ void parseConfig(const String &topic, const String &payload) {
     }
   }
   if (slot < 0 && devCount < MAX_DEVICES) slot = devCount++;
-  if (slot < 0) return;
+  if (slot < 0) {
+    Serial.printf("[DEV] FULL! Can't add %s (%s)\n", name, entityType.c_str());
+    return;
+  }
 
   // Brightness / RGB support
   bool bri = doc["brightness"] | false;
