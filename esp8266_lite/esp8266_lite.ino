@@ -110,14 +110,11 @@ void pushMsg(const char *topic, const char *payload) {
 }
 
 // Check if a serialId matches our configured unit serial.
-// serialId format: "A4CF12F03246_0" or "A4CF12F03246_12-consumption"
-// We match the part before the first '_' against creds.unitSerial.
+// serialId can be: "A4CF12F03246_0", "A4CF12F03246_LINE_1", etc.
+// We check if serialId starts with our configured serial (case-insensitive).
 bool serialMatches(const char *serialId) {
   if (creds.unitSerial.length() == 0) return true; // no filter = show all
-  const char *us = strchr(serialId, '_');
-  int len = us ? (int)(us - serialId) : (int)strlen(serialId);
-  if (len != (int)creds.unitSerial.length()) return false;
-  return strncasecmp(serialId, creds.unitSerial.c_str(), len) == 0;
+  return strncasecmp(serialId, creds.unitSerial.c_str(), creds.unitSerial.length()) == 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +412,11 @@ void parseConfig(const String &topic, const String &payload) {
       entityType != "fan" && entityType != "lock") return;
 
   // *** SERIAL FILTER — skip devices not belonging to our unit ***
-  if (!serialMatches(serialId.c_str())) return;
+  if (!serialMatches(serialId.c_str())) {
+    Serial.printf("[SKIP] %s (serial: %s)\n", entityType.c_str(), serialId.c_str());
+    return;
+  }
+  Serial.printf("[MATCH] %s (serial: %s)\n", entityType.c_str(), serialId.c_str());
 
   JsonDocument doc;
   if (deserializeJson(doc, payload)) return;
