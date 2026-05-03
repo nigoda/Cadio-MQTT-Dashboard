@@ -577,20 +577,24 @@ void updateState(const String &topic, const String &payload) {
 //  MQTT callback & connection
 // ---------------------------------------------------------------------------
 void mqttCallback(char *topic, byte *payload, unsigned int length) {
-  // Build payload into stack buffer — no heap String
-  char buf[256];
-  int pLen = (length < 255) ? length : 255;
-  memcpy(buf, payload, pLen);
-  buf[pLen] = '\0';
+  // Null-terminate payload in place (PubSubClient reserves space for this)
+  payload[length] = '\0';
+  const char *pStr = (const char *)payload;
 
-  pushMsg(topic, buf);
+  // Push truncated version to message log (display only)
+  pushMsg(topic, pStr);
 
   String t(topic);
-  String p(buf);
 
   if (t.endsWith("/config")) {
+    // Config payloads can be 500-2000 bytes — pass full payload
+    String p;
+    p.reserve(length + 1);
+    p = pStr;
     parseConfig(t, p);
   } else {
+    // State payloads are small — use directly
+    String p(pStr);
     updateState(t, p);
   }
 }
