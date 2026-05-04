@@ -11,17 +11,19 @@ Main entry point. Handles:
 import json
 import logging
 import os
+import ssl
 import threading
 import time
 from datetime import datetime
+from functools import wraps
 
 import paho.mqtt.client as mqtt
 import requests
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session
 from flask_socketio import SocketIO, emit
 
 from config import (
-    CADIO_LOGIN_URL, MQTT_BROKER, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD,
+    CADIO_LOGIN_URL, MQTT_BROKER, MQTT_PORT,
     DISCOVERY_PREFIX, ENGINE_TICK_INTERVAL, SECRET_KEY
 )
 from engine import Engine, State
@@ -36,6 +38,8 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 # ---------------------------------------------------------------------------
 # In-memory state
 # ---------------------------------------------------------------------------
+MQTT_USERNAME = ""
+MQTT_PASSWORD = ""
 switch_states: dict = {}    # switch_id (state_topic) → "ON"/"OFF"
 sensor_states: dict = {}    # sensor_id (state_topic) → value string
 device_registry: dict = {}  # topic → {name, type, state_topic, cmd_topic, ...}
@@ -160,23 +164,47 @@ def _handle_state(topic, payload):
         "type": dev_type,
     })
 
-def connect_mqtt():
-    global mqtt_client, broker_info
+def cadio_login(email, password):
+    """Call Cadio login API. Returns broker details dict or None."""
+    try:
+        resp = requests.post(CADIO_LOGIN_URL, json={
+            "email": email, "password": password
+        }, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            log.info(f"[API] Login OK: {data.get('mqtt_host', data.get('broker', 'n/a'))}")
+            return data
+        else:
+            log.warning(f"[API] Login failed: {resp.status_code}")
+            return None
+    except Exception as e:
+        log.error(f"[API] Login error: {e}")
+        return None
 
-    # Try login API first
+
+def connect_mqtt(email=None, password=None):
+    global mqtt_client, broker_info, MQTT_USERNAME, MQTT_PASSWORD
+
+    if email:
+        MQTT_USERNAME = email
+    if password:
+        MQTT_PASSWORD = password
+
+    # Call login API to get broker details
     if MQTT_USERNAME and MQTT_PASSWORD:
+        api_data = cadio_login(MQTT_USERNAME, MQTT_PASSWORD)
+        if api_data:
+            broker_info["broker"] = api_data.get("mqtt_host", api_data.get("broker", MQTT_BROKER))
+            broker_info["port"] = int(api_data.get("mqtt_port", api_data.get("port", MQTT_PORT)))
+            log.info(f"[API] Broker: {broker_info['broker']}:{broker_info['port']}")
+
+    # Disconnect old client if exists
+    if mqtt_client:
         try:
-            resp = requests.post(CADIO_LOGIN_URL, json={
-                "email": MQTT_USERNAME,
-                "password": MQTT_PASSWORD
-            }, timeout=10)
-            if resp.status_code == 200:
-                data = resp.json()
-                broker_info["broker"] = data.get("broker", data.get("mqtt_broker", MQTT_BROKER))
-                broker_info["port"] = data.get("port", data.get("mqtt_port", MQTT_PORT))
-                log.info(f"[API] Broker: {broker_info['broker']}:{broker_info['port']}")
-        except Exception as e:
-            log.warning(f"[API] Login failed: {e}")
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+        except Exception:
+            pass
 
     mqtt_client = mqtt.Client()
     mqtt_client.on_connect = on_connect
@@ -186,11 +214,25 @@ def connect_mqtt():
     if MQTT_USERNAME:
         mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
 
+    port = broker_info["port"]
+    if port == 8883:
+        mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS)
+
     try:
-        mqtt_client.connect(broker_info["broker"], broker_info["port"], 60)
+        mqtt_client.connect(broker_info["broker"], port, 60)
         mqtt_client.loop_start()
     except Exception as e:
         log.error(f"[MQTT] Connection error: {e}")
+        # Try TLS fallback
+        if port == 1883:
+            try:
+                log.info("[MQTT] Retrying with TLS on 8883...")
+                mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS)
+                mqtt_client.connect(broker_info["broker"], 8883, 60)
+                mqtt_client.loop_start()
+                broker_info["port"] = 8883
+            except Exception as e2:
+                log.error(f"[MQTT] TLS also failed: {e2}")
 
 # ---------------------------------------------------------------------------
 # Engine tick loop
@@ -239,14 +281,75 @@ def load_automations():
         log.error(f"[LOAD] Error: {e}")
 
 # ---------------------------------------------------------------------------
+# Auth helpers
+# ---------------------------------------------------------------------------
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect(url_for("login_page"))
+        return f(*args, **kwargs)
+    return decorated
+
+# ---------------------------------------------------------------------------
 # REST API
 # ---------------------------------------------------------------------------
 
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    if request.method == "GET":
+        if session.get("logged_in"):
+            return redirect(url_for("index"))
+        return render_template("login.html")
+
+    # POST — authenticate
+    data = request.form
+    email = data.get("email", "").strip()
+    password = data.get("password", "")
+
+    if not email or not password:
+        return render_template("login.html", error="Email and password are required")
+
+    # Verify against Cadio API
+    api_data = cadio_login(email, password)
+    if not api_data:
+        return render_template("login.html", error="Invalid credentials")
+
+    # Store session
+    session["logged_in"] = True
+    session["email"] = email
+    session["password"] = password  # needed for MQTT reconnect
+
+    # Connect MQTT with valid credentials
+    connect_mqtt(email, password)
+
+    return redirect(url_for("index"))
+
+@app.route("/logout")
+def logout():
+    global mqtt_client, mqtt_connected
+    session.clear()
+    if mqtt_client:
+        try:
+            mqtt_client.loop_stop()
+            mqtt_client.disconnect()
+        except Exception:
+            pass
+        mqtt_client = None
+    mqtt_connected = False
+    switch_states.clear()
+    sensor_states.clear()
+    device_registry.clear()
+    return redirect(url_for("login_page"))
+
 @app.route("/")
+@login_required
 def index():
     return render_template("index.html")
 
 @app.route("/api/status")
+@login_required
 def api_status():
     return jsonify({
         "mqtt": mqtt_connected,
@@ -257,6 +360,7 @@ def api_status():
     })
 
 @app.route("/api/devices")
+@login_required
 def api_devices():
     switches = []
     sensors = []
@@ -269,6 +373,7 @@ def api_devices():
     return jsonify({"switches": switches, "sensors": sensors})
 
 @app.route("/api/automations")
+@login_required
 def api_automations():
     result = []
     for auto in engine.automations.values():
@@ -382,7 +487,7 @@ def broadcast_loop():
 
 if __name__ == "__main__":
     load_automations()
-    connect_mqtt()
+    # MQTT connects after user login — no auto-connect with empty creds
 
     # Start engine thread
     engine_thread = threading.Thread(target=engine_loop, daemon=True)
