@@ -111,23 +111,30 @@ def _handle_config(topic, payload):
     except json.JSONDecodeError:
         return
 
-    # Extract type from topic
+    # Extract type from topic: homeassistant/<type>/<accountId>/<objectId>/config
     parts = topic.split("/")
     if len(parts) < 5:
         return
     dev_type = parts[1]
+    object_id = parts[3] if len(parts) >= 4 else ""
     state_topic = data.get("state_topic", "")
     cmd_topic = data.get("command_topic", "")
-    name = data.get("name", "Unknown")
+
+    # Build a good display name: prefer config name, fallback to object_id
+    raw_name = data.get("name", "")
+    if not raw_name or raw_name.lower() in ("state", "unknown", ""):
+        # Use object_id with underscores → spaces + title case
+        raw_name = object_id.replace("_", " ").title() if object_id else "Unknown"
 
     if not state_topic:
         return
 
     device_registry[state_topic] = {
-        "name": name,
+        "name": raw_name,
         "type": dev_type,
         "state_topic": state_topic,
         "cmd_topic": cmd_topic,
+        "object_id": object_id,
     }
 
     # Subscribe to state topic

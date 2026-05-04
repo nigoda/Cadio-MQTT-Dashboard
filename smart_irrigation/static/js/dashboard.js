@@ -7,6 +7,7 @@ const socket = io();
 let automations = [];
 let switches = {};
 let sensors = {};
+let deviceList = { switches: [], sensors: [] }; // from /api/devices
 let selectedAutoId = null;
 let editingAutoId = null; // null = new, string = editing
 
@@ -204,7 +205,7 @@ function renderConditionSection(auto) {
         const met = checkCondition(actual, c.operator, c.value);
         return `<div class="cond-item">
           <span class="cond-dot ${met ? 'met' : 'unmet'}"></span>
-          <span>${esc(c.sensor.split('/').pop())} ${c.operator || '='} ${esc(c.value)}</span>
+          <span>${esc(deviceName(c.sensor))} ${c.operator || '='} ${esc(c.value)}</span>
           <span style="margin-left:auto;font-size:.72rem;color:var(--text-dim)">(${esc(actual)})</span>
         </div>`;
       }).join('')}
@@ -222,7 +223,7 @@ function renderInitSection(auto) {
         const ok = actual.toUpperCase() === i.state.toUpperCase();
         return `<div class="action-item ${ok ? 'done' : ''}">
           <span class="action-icon">${ok ? '&#10004;' : '&#9679;'}</span>
-          <span class="action-text">${esc(i.switch.split('/').pop())} → ${i.state}</span>
+          <span class="action-text">${esc(deviceName(i.switch))} → ${i.state}</span>
           <span class="action-time">(${actual})</span>
         </div>`;
       }).join('')}
@@ -243,7 +244,7 @@ function renderActionsSection(auto) {
         const icon = cls === 'done' ? '&#10004;' : cls === 'active' ? '&#9654;' : '&#9679;';
         return `<div class="action-item ${cls}">
           <span class="action-icon">${icon}</span>
-          <span class="action-text">${esc(a.switch.split('/').pop())} → ${a.state}</span>
+          <span class="action-text">${esc(deviceName(a.switch))} → ${a.state}</span>
           <span class="action-time">${formatDuration(a.duration)}</span>
         </div>`;
       }).join('')}
@@ -259,7 +260,7 @@ function renderErrorSection(auto) {
       <h4>Error State (Fail-Safe) ${isError ? '<span style="color:var(--red)">ACTIVE</span>' : ''}</h4>
       ${auto.error_state.map(e => `<div class="action-item">
         <span class="action-icon">&#9888;</span>
-        <span class="action-text">${esc(e.switch.split('/').pop())} → ${e.state}</span>
+        <span class="action-text">${esc(deviceName(e.switch))} → ${e.state}</span>
       </div>`).join('')}
     </div>
   `;
@@ -278,19 +279,18 @@ function renderDetailLogs(auto) {
 
 function renderSwitches() {
   const grid = document.getElementById('switch-grid');
-  const entries = Object.entries(switches);
-  if (!entries.length) { grid.innerHTML = '<p class="empty-msg">No switches discovered</p>'; return; }
-  grid.innerHTML = entries.map(([topic, val]) => {
-    const info = findDevice(topic);
-    const name = info ? info.name : topic.split('/').pop();
+  const items = deviceList.switches || [];
+  if (!items.length) { grid.innerHTML = '<p class="empty-msg">No switches discovered</p>'; return; }
+  grid.innerHTML = items.map(dev => {
+    const val = switches[dev.state_topic] || dev.value || '--';
     const isOn = val === 'ON';
     return `<div class="device-card">
-      <div class="device-name">${esc(name)}</div>
-      <div class="device-topic">${esc(topic)}</div>
+      <div class="device-name">${esc(dev.name)}</div>
+      <div class="device-topic">${esc(dev.state_topic)}</div>
       <div class="device-value" style="color:${isOn ? 'var(--green)' : 'var(--text-dim)'}">${val}</div>
       <div class="device-toggle">
         <label class="toggle">
-          <input type="checkbox" ${isOn ? 'checked' : ''} onchange="setSwitch('${esc(topic)}', this.checked ? 'ON' : 'OFF')">
+          <input type="checkbox" ${isOn ? 'checked' : ''} onchange="setSwitch('${esc(dev.cmd_topic || dev.state_topic)}', this.checked ? 'ON' : 'OFF')">
           <span class="toggle-slider"></span>
         </label>
       </div>
@@ -300,14 +300,13 @@ function renderSwitches() {
 
 function renderSensors() {
   const grid = document.getElementById('sensor-grid');
-  const entries = Object.entries(sensors);
-  if (!entries.length) { grid.innerHTML = '<p class="empty-msg">No sensors discovered</p>'; return; }
-  grid.innerHTML = entries.map(([topic, val]) => {
-    const info = findDevice(topic);
-    const name = info ? info.name : topic.split('/').pop();
+  const items = deviceList.sensors || [];
+  if (!items.length) { grid.innerHTML = '<p class="empty-msg">No sensors discovered</p>'; return; }
+  grid.innerHTML = items.map(dev => {
+    const val = sensors[dev.state_topic] || dev.value || '--';
     return `<div class="device-card">
-      <div class="device-name">${esc(name)}</div>
-      <div class="device-topic">${esc(topic)}</div>
+      <div class="device-name">${esc(dev.name)}</div>
+      <div class="device-topic">${esc(dev.state_topic)}</div>
       <div class="device-value">${esc(val)}</div>
     </div>`;
   }).join('');
@@ -475,13 +474,34 @@ function saveModal() {
 function editAuto(id) { openModal(id); }
 
 // ===== Dynamic Rows =====
+
+function switchOptions(selected) {
+  const items = deviceList.switches || [];
+  let html = '<option value="">-- Select Switch --</option>';
+  items.forEach(d => {
+    const sel = (d.cmd_topic === selected || d.state_topic === selected) ? 'selected' : '';
+    html += `<option value="${esc(d.cmd_topic || d.state_topic)}" ${sel}>${esc(d.name)}</option>`;
+  });
+  return html;
+}
+
+function sensorOptions(selected) {
+  const items = deviceList.sensors || [];
+  let html = '<option value="">-- Select Sensor --</option>';
+  items.forEach(d => {
+    const sel = d.state_topic === selected ? 'selected' : '';
+    html += `<option value="${esc(d.state_topic)}" ${sel}>${esc(d.name)}</option>`;
+  });
+  return html;
+}
+
 function addCondRow(data) {
   const list = document.getElementById('cond-list');
   const row = document.createElement('div');
   row.className = 'cond-row';
   row.innerHTML = `
     <select class="cond-logic"><option value="AND">AND</option><option value="OR">OR</option></select>
-    <input type="text" class="cond-sensor" placeholder="sensor topic" value="${esc(data?.sensor || '')}">
+    <select class="cond-sensor">${sensorOptions(data?.sensor || '')}</select>
     <select class="cond-op">
       <option value="=">=</option><option value="!=">!=</option>
       <option value=">">&gt;</option><option value="<">&lt;</option>
@@ -500,7 +520,7 @@ function addInitRow(data) {
   const row = document.createElement('div');
   row.className = 'action-row';
   row.innerHTML = `
-    <input type="text" class="sw-topic" placeholder="switch topic" value="${esc(data?.switch || '')}">
+    <select class="sw-topic">${switchOptions(data?.switch || '')}</select>
     <select class="sw-state"><option value="ON">ON</option><option value="OFF">OFF</option></select>
     <button class="row-remove" onclick="this.parentElement.remove()">&times;</button>
   `;
@@ -513,7 +533,7 @@ function addActionRow(data) {
   const row = document.createElement('div');
   row.className = 'action-row';
   row.innerHTML = `
-    <input type="text" class="sw-topic" placeholder="switch topic" value="${esc(data?.switch || '')}">
+    <select class="sw-topic">${switchOptions(data?.switch || '')}</select>
     <select class="sw-state"><option value="ON">ON</option><option value="OFF">OFF</option></select>
     <input type="number" class="sw-duration" placeholder="sec" min="1" value="${data?.duration || 60}">
     <button class="row-remove" onclick="this.parentElement.remove()">&times;</button>
@@ -527,7 +547,7 @@ function addErrorRow(data) {
   const row = document.createElement('div');
   row.className = 'action-row';
   row.innerHTML = `
-    <input type="text" class="sw-topic" placeholder="switch topic" value="${esc(data?.switch || '')}">
+    <select class="sw-topic">${switchOptions(data?.switch || '')}</select>
     <select class="sw-state"><option value="ON">ON</option><option value="OFF">OFF</option></select>
     <button class="row-remove" onclick="this.parentElement.remove()">&times;</button>
   `;
@@ -539,7 +559,7 @@ function getConditions() {
   const rows = document.querySelectorAll('#cond-list .cond-row');
   return Array.from(rows).map(r => ({
     logic: r.querySelector('.cond-logic').value,
-    sensor: r.querySelector('.cond-sensor').value.trim(),
+    sensor: r.querySelector('.cond-sensor').value,
     operator: r.querySelector('.cond-op').value,
     value: r.querySelector('.cond-value').value.trim(),
   })).filter(c => c.sensor);
@@ -548,7 +568,7 @@ function getConditions() {
 function getInitList() {
   const rows = document.querySelectorAll('#init-list .action-row');
   return Array.from(rows).map(r => ({
-    switch: r.querySelector('.sw-topic').value.trim(),
+    switch: r.querySelector('.sw-topic').value,
     state: r.querySelector('.sw-state').value,
   })).filter(i => i.switch);
 }
@@ -556,7 +576,7 @@ function getInitList() {
 function getActionList() {
   const rows = document.querySelectorAll('#action-list .action-row');
   return Array.from(rows).map(r => ({
-    switch: r.querySelector('.sw-topic').value.trim(),
+    switch: r.querySelector('.sw-topic').value,
     state: r.querySelector('.sw-state').value,
     duration: parseInt(r.querySelector('.sw-duration').value) || 60,
   })).filter(a => a.switch);
@@ -565,7 +585,7 @@ function getActionList() {
 function getErrorList() {
   const rows = document.querySelectorAll('#error-list .action-row');
   return Array.from(rows).map(r => ({
-    switch: r.querySelector('.sw-topic').value.trim(),
+    switch: r.querySelector('.sw-topic').value,
     state: r.querySelector('.sw-state').value,
   })).filter(e => e.switch);
 }
@@ -630,18 +650,36 @@ function checkCondition(actual, op, expected) {
 }
 
 function findDevice(topic) {
-  // Simple lookup — will be populated when devices API is available
+  // Look up from deviceList
+  const sw = (deviceList.switches || []).find(d => d.state_topic === topic || d.cmd_topic === topic);
+  if (sw) return sw;
+  const sn = (deviceList.sensors || []).find(d => d.state_topic === topic);
+  if (sn) return sn;
   return null;
+}
+
+function deviceName(topic) {
+  const dev = findDevice(topic);
+  if (dev && dev.name) return dev.name;
+  // Fallback: last segment of topic, cleaned up
+  const parts = (topic || '').split('/');
+  return parts[parts.length - 1].replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 // ===== Initial load =====
 fetchAutomations();
-fetch('/api/devices').then(r => r.json()).then(d => {
-  (d.switches || []).forEach(s => { switches[s.state_topic] = s.value; });
-  (d.sensors || []).forEach(s => { sensors[s.state_topic] = s.value; });
-  renderSwitches();
-  renderSensors();
-}).catch(() => {});
+fetchDevices();
+
+function fetchDevices() {
+  fetch('/api/devices').then(r => r.json()).then(d => {
+    deviceList = d;
+    (d.switches || []).forEach(s => { switches[s.state_topic] = s.value; });
+    (d.sensors || []).forEach(s => { sensors[s.state_topic] = s.value; });
+    renderSwitches();
+    renderSensors();
+  }).catch(() => {});
+}
 
 // Periodic refresh as fallback
 setInterval(fetchAutomations, 5000);
+setInterval(fetchDevices, 10000);
