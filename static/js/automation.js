@@ -21,6 +21,27 @@
   const modalOverlay = $("#auto-modal-overlay");
 
   // ─── Helpers ───
+  function populateTimezones() {
+    const tzSelect = $("#auto-f-tz");
+    if (!tzSelect) return;
+    let options = "";
+    for (let h = -12; h <= 14; h++) {
+        for (let m of [0, 30, 45]) {
+            if (h === 14 && m > 0) continue;
+            if (h === -12 && m > 0) continue;
+            let offsetMins = -(h * 60 + (h < 0 ? -m : m));
+            if (h === 0) offsetMins = -m;
+            let sign = offsetMins <= 0 ? "+" : "-";
+            let displayH = Math.floor(Math.abs(offsetMins) / 60).toString().padStart(2, '0');
+            let displayM = (Math.abs(offsetMins) % 60).toString().padStart(2, '0');
+            let label = `UTC${sign}${displayH}:${displayM}`;
+            if (offsetMins === 0) label = "UTC±00:00";
+            options += `<option value="${offsetMins}">${label}</option>`;
+        }
+    }
+    tzSelect.innerHTML = options;
+  }
+  populateTimezones();
   function stateClass(auto) {
     if (!auto) return "off";
     const s = auto.status;
@@ -116,27 +137,15 @@
     });
   }
 
-  // ─── Render Detail ───
-  function renderDetail() {
+  // ─── Live Timer Update ───
+  function updateLiveTimers() {
     const auto = _autos[_selectedId];
-    if (!auto) { detailContent.classList.add("hidden"); detailEmpty.style.display = ""; return; }
-    detailEmpty.style.display = "none";
-    detailContent.classList.remove("hidden");
-
-    const cls = stateClass(auto);
+    if (!auto || detailContent.classList.contains("hidden")) return;
+    
     const rt = auto.runtime || {};
     const actions = auto.actions || [];
     const idx = rt.currentActionIndex || 0;
-    const progress = actions.length > 0 ? Math.round(((idx) / actions.length) * 100) : 0;
 
-    // Header
-    $("#irr-detail-name").textContent = auto.name;
-    $("#irr-detail-desc").textContent = auto.description || "";
-    const badge = $("#irr-detail-badge");
-    badge.textContent = stateLabel(auto);
-    badge.className = "irr-status-badge " + cls;
-
-    // State bar
     // Helper to format seconds nicely
     function formatTime(sec) {
         if (sec < 60) return Math.round(sec) + " sec";
@@ -170,8 +179,9 @@
       let remainingCurSec = dur;
 
       if (rt.state === "ACTION_RUN") {
-         const timerStart = rt.timerStart || Date.now();
-         elapsedCurSec = Math.max(0, Math.min(dur, (Date.now() - timerStart) / 1000));
+         const timerStart = rt.timerStart || (Date.now() / 1000);
+         const elapsedSec = Math.max(0, (Date.now() / 1000) - timerStart);
+         elapsedCurSec = Math.min(dur, elapsedSec);
          remainingCurSec = Math.max(0, dur - elapsedCurSec);
          
          curSub = `${curAction.switchName||'Switch'} ${curAction.state} for ${formatTime(elapsedCurSec)}`;
@@ -188,8 +198,8 @@
       } else if (rt.state === "BUFFER") {
          elapsedCurSec = dur;
          const bufTime = auto.bufferTime || 5;
-         const bufStart = rt.bufferStart || Date.now();
-         const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() - bufStart) / 1000));
+         const bufStart = rt.bufferStart || (Date.now() / 1000);
+         const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
          
          curSub = `Waiting for buffer`;
          nextSub = `In ${formatTime(Math.max(0, bufTime - bufElapsed))}`;
@@ -215,6 +225,29 @@
     $("#irr-progress-text").textContent = progText;
     $("#irr-next-step").textContent = nextStep;
     $("#irr-next-step-sub").textContent = nextSub;
+  }
+
+  // ─── Render Detail ───
+  function renderDetail() {
+    const auto = _autos[_selectedId];
+    if (!auto) { detailContent.classList.add("hidden"); detailEmpty.style.display = ""; return; }
+    detailEmpty.style.display = "none";
+    detailContent.classList.remove("hidden");
+
+    const cls = stateClass(auto);
+    const rt = auto.runtime || {};
+    const actions = auto.actions || [];
+    const idx = rt.currentActionIndex || 0;
+
+    // Header
+    $("#irr-detail-name").textContent = auto.name;
+    $("#irr-detail-desc").textContent = auto.description || "";
+    const badge = $("#irr-detail-badge");
+    badge.textContent = stateLabel(auto);
+    badge.className = "irr-status-badge " + cls;
+
+    // Run the live timer update logic
+    updateLiveTimers();
 
     const toggle = $("#irr-status-toggle");
     toggle.checked = auto.status === "ON";
@@ -321,6 +354,15 @@
 
     $("#auto-f-start").value = auto?.schedule?.startTime || "";
     $("#auto-f-end").value = auto?.schedule?.endTime || "";
+    
+    // Auto-detect browser offset if no offset is configured yet
+    const tzSelect = $("#auto-f-tz");
+    if (tzSelect) {
+        tzSelect.value = auto?.schedule?.utcOffset ?? new Date().getTimezoneOffset();
+        // Fallback to first if somehow the browser offset isn't in the list
+        if (!tzSelect.value) tzSelect.selectedIndex = 0;
+    }
+
     $("#auto-f-buffer").value = auto?.bufferTime ?? 5;
 
     // Init rows
@@ -399,7 +441,12 @@
 
     return {
       name, description: $("#auto-f-desc").value.trim(),
-      schedule: { days, startTime: $("#auto-f-start").value, endTime: $("#auto-f-end").value },
+      schedule: { 
+          days, 
+          startTime: $("#auto-f-start").value, 
+          endTime: $("#auto-f-end").value,
+          utcOffset: parseInt($("#auto-f-tz").value, 10) || 0
+      },
       condition: conds,
       initialization: collectSwitchRows("auto-f-init"),
       actions,
@@ -467,4 +514,7 @@
   socket.on("mqtt_status", (data) => {
     if (data.connected) setTimeout(() => socket.emit("get_automations"), 1000);
   });
+
+  // Start live timer loop
+  setInterval(updateLiveTimers, 1000);
 })();

@@ -463,17 +463,32 @@ def check_schedule(auto):
     sched = auto.get("schedule")
     if not sched:
         return True
+        
     days = sched.get("days", [])
+    if not days:
+        return False  # No days selected -> Deactivated
+        
     start_str = sched.get("startTime", "")
     end_str = sched.get("endTime", "")
-    if not days or not start_str or not end_str:
-        return True
 
-    now = datetime.now()
+    # Use utcOffset if provided, else fallback to server local time
+    utc_offset_mins = sched.get("utcOffset")
+    if utc_offset_mins is not None:
+        try:
+            offset = int(utc_offset_mins)
+            now = datetime.utcnow() - timedelta(minutes=offset)
+        except ValueError:
+            now = datetime.now()
+    else:
+        now = datetime.now()
+
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     current_day = day_names[now.weekday()]
     if current_day not in days:
         return False
+
+    if not start_str or not end_str:
+        return True  # No time selected -> Active 24/7 on the selected days
 
     try:
         start_h, start_m = map(int, start_str.split(":"))
