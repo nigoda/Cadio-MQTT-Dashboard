@@ -8,6 +8,7 @@
   // State
   // -------------------------------------------------------
   const entities = {};        // entityId -> { config, state, type, name, topic, ... }
+  window._dashboardEntities = entities;  // Expose for automation.js
   const devices = {};         // serial -> { name, model, sw_version, serial, manufacturer }
   const allTopics = new Set();
   const logEntries = [];
