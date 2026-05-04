@@ -663,29 +663,54 @@ def engine_tick(auto):
         return
 
     if state == "ACTION_REVERT":
-        # Move directly to verify revert (revert is implicit when next action sets new state)
+        # Send the OPPOSITE state to revert the switch
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        if idx < len(actions):
+            action = actions[idx]
+            revert_state = "OFF" if action.get("state", "").upper() == "ON" else "ON"
+            _mqtt_set_switch(action.get("switchCmdTopic", ""), revert_state)
+            _auto_log(auto_id, f"Action {idx+1}: Reverting {action.get('switchName','')} → {revert_state}")
         rt["verifyStart"] = now
+        rt["retryCount"] = 0
         rt["state"] = "ACTION_VERIFY_REVERT"
-        _auto_log(auto_id, f"Action {rt['currentActionIndex']+1} reverting")
         _emit_auto_update(auto)
         return
 
     if state == "ACTION_VERIFY_REVERT":
-        # Skip verification for revert (next action will set correct state)
-        rt["bufferStart"] = now
-        rt["state"] = "BUFFER"
-        _auto_log(auto_id, f"Action {rt['currentActionIndex']+1} → BUFFER")
-        _emit_auto_update(auto)
+        # Verify the switch reverted to opposite state
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        if idx < len(actions):
+            action = actions[idx]
+            revert_state = "OFF" if action.get("state", "").upper() == "ON" else "ON"
+            revert_check = {"switchStateTopic": action.get("switchStateTopic", ""), "state": revert_state}
+            if _verify_switches([revert_check], auto):
+                rt["bufferStart"] = now
+                rt["state"] = "BUFFER"
+                _auto_log(auto_id, f"Action {idx+1} revert verified → BUFFER")
+                _emit_auto_update(auto)
+            elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                # Timeout on revert verify — still move to buffer
+                rt["bufferStart"] = now
+                rt["state"] = "BUFFER"
+                _auto_log(auto_id, f"Action {idx+1} revert verify timeout → BUFFER", "warning")
+                _emit_auto_update(auto)
+        else:
+            rt["bufferStart"] = now
+            rt["state"] = "BUFFER"
+            _emit_auto_update(auto)
         return
 
     if state == "BUFFER":
-        if now - (rt.get("bufferStart") or now) >= BUFFER_SECONDS:
+        buffer_time = auto.get("bufferTime", BUFFER_SECONDS)
+        if now - (rt.get("bufferStart") or now) >= buffer_time:
             idx = rt.get("currentActionIndex", 0) + 1
             actions = auto.get("actions", [])
             if idx < len(actions):
                 rt["currentActionIndex"] = idx
                 rt["state"] = "ACTION_SET"
-                _auto_log(auto_id, f"Buffer done → next action {idx+1}")
+                _auto_log(auto_id, f"Buffer ({buffer_time}s) done → next action {idx+1}")
             else:
                 rt["state"] = "COMPLETED"
                 _auto_log(auto_id, "All actions completed → COMPLETED")
@@ -802,6 +827,7 @@ def handle_create_automation(data):
         "initialization": data.get("initialization", []),
         "actions": data.get("actions", []),
         "errorState": data.get("errorState", []),
+        "bufferTime": data.get("bufferTime", BUFFER_SECONDS),
         "runtime": _new_runtime(),
     }
     automations[auto_id] = auto
@@ -822,7 +848,7 @@ def handle_update_automation(data):
     auto = automations[auto_id]
     # Only update config fields, not runtime
     for key in ("name", "description", "schedule", "condition",
-                "initialization", "actions", "errorState"):
+                "initialization", "actions", "errorState", "bufferTime"):
         if key in data:
             auto[key] = data[key]
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")

@@ -183,11 +183,37 @@
       <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${sched.startTime||"—"} → ${sched.endTime||"—"}</div></div>
     </div>`;
 
-    // Live switches
+    // Live switches — show actual ON/OFF from MQTT entities
     const liveSw = $("#irr-live-switches");
-    const allSwitches = new Set();
-    [...inits, ...actions, ...errs].forEach(s => { if(s.switchName) allSwitches.add(s.switchName); });
-    liveSw.innerHTML = allSwitches.size > 0 ? `<div class="irr-live-grid">${[...allSwitches].map(name => `<div class="irr-live-sw"><span class="material-symbols-outlined irr-live-sw-icon">water_drop</span><span class="irr-live-sw-name">${escHtml(name)}</span></div>`).join("")}</div>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No switches</span>';
+    const switchMap = new Map(); // name -> stateTopic
+    [...inits, ...actions, ...errs].forEach(s => {
+      if (s.switchName && s.switchStateTopic) switchMap.set(s.switchName, s.switchStateTopic);
+    });
+    if (switchMap.size > 0) {
+      liveSw.innerHTML = `<div class="irr-live-grid">${[...switchMap.entries()].map(([name, stateTopic]) => {
+        // Read actual state from dashboard entities
+        let liveState = "?";
+        if (window._dashboardEntities) {
+          for (const eid in window._dashboardEntities) {
+            const e = window._dashboardEntities[eid];
+            if (e.stateTopic === stateTopic) {
+              const st = e.state;
+              if (typeof st === "object") liveState = (st?.state || "?").toUpperCase();
+              else liveState = (st || "?").toString().toUpperCase();
+              break;
+            }
+          }
+        }
+        const isOn = liveState === "ON";
+        return `<div class="irr-live-sw">
+          <span class="material-symbols-outlined irr-live-sw-icon ${isOn?'on':''}">${isOn?'water_drop':'water_drop'}</span>
+          <span class="irr-live-sw-name">${escHtml(name)}</span>
+          <span class="irr-live-sw-state" style="color:${isOn?'#4caf50':'#f44336'}">${liveState}</span>
+        </div>`;
+      }).join("")}</div>`;
+    } else {
+      liveSw.innerHTML = '<span style="color:var(--ha-text-disabled);font-size:12px">No switches</span>';
+    }
 
     // Activity log
     const logEl = $("#irr-activity-log");
@@ -219,6 +245,7 @@
 
     $("#auto-f-start").value = auto?.schedule?.startTime || "";
     $("#auto-f-end").value = auto?.schedule?.endTime || "";
+    $("#auto-f-buffer").value = auto?.bufferTime ?? 5;
 
     // Init rows
     renderFormRows("auto-f-init", auto?.initialization || [], "switch");
@@ -301,6 +328,7 @@
       initialization: collectSwitchRows("auto-f-init"),
       actions,
       errorState: collectSwitchRows("auto-f-error"),
+      bufferTime: parseInt($("#auto-f-buffer")?.value || "5", 10),
     };
   }
 
