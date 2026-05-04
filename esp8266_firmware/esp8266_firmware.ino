@@ -16,6 +16,10 @@
 #include "credentials.h"
 #include "webpages.h"
 
+// Forward declarations (prevent Arduino IDE auto-prototype issues)
+void jsonAppendStr(String &j, const char *s);
+void jsonAppendInt(String &j, int v);
+
 CredentialStore credStore;
 AppCredentials  creds;
 
@@ -43,23 +47,12 @@ int msgBufHead = 0;
 //  Device discovery — parsed from homeassistant MQTT config messages
 // ---------------------------------------------------------------------------
 #define MAX_DEVICES     20
-#define DEV_NAME_LEN    32
-#define DEV_ID_LEN      20
-#define DEV_SERIAL_LEN  32
+#define DEV_NAME_LEN    48
+#define DEV_ID_LEN      48
+#define DEV_SERIAL_LEN  48
 #define DEV_TYPE_LEN    16
-#define DEV_TOPIC_LEN   80
-#define DEV_STATE_LEN   32
-#define DEV_VALKEY_LEN  20
-
-// Separate small table for physical unit names (shared across entities)
-#define MAX_UNITS       4
-#define UNIT_NAME_LEN   32
-struct UnitInfo {
-  char deviceId[DEV_ID_LEN];
-  char name[UNIT_NAME_LEN];
-};
-UnitInfo units[MAX_UNITS];
-int unitCount = 0;
+#define DEV_TOPIC_LEN   96
+#define DEV_STATE_LEN   48
 
 struct IoTDevice {
   bool   active;
@@ -72,15 +65,23 @@ struct IoTDevice {
   char   name[DEV_NAME_LEN];
   char   deviceId[DEV_ID_LEN];
   char   serialId[DEV_SERIAL_LEN];
-  char   type[DEV_TYPE_LEN];
+  char   type[DEV_TYPE_LEN];       // switch, light, sensor, binary_sensor ...
   char   stateTopic[DEV_TOPIC_LEN];
   char   cmdTopic[DEV_TOPIC_LEN];
   char   state[DEV_STATE_LEN];
-  char   valueKey[DEV_VALKEY_LEN];
+  char   valueKey[20];              // JSON key for shared-topic sensors
 };
 
 IoTDevice devices[MAX_DEVICES];
 int deviceCount = 0;
+
+// Tiny lookup: map deviceId -> physical unit name (shared, max 4 units)
+#define MAX_UNITS    4
+#define UNIT_ID_LEN  20
+#define UNIT_NM_LEN  32
+struct UnitName { char id[UNIT_ID_LEN]; char nm[UNIT_NM_LEN]; };
+UnitName unitNames[MAX_UNITS];
+int unitNameCount = 0;
 
 String chipID() {
   char id[9];
@@ -175,98 +176,96 @@ void handleSetupPage() {
 }
 
 // ---------------------------------------------------------------------------
-//  /api/data — lightweight JSON endpoint polled by JS every 10s
-//  Keeps heap usage low by never rebuilding the full HTML page
+//  /api/data — lightweight JSON endpoint polled by JS every 2s
+//  Pre-allocated buffer to prevent heap fragmentation
 // ---------------------------------------------------------------------------
-
-// Append a JSON-safe string (escape \ and ") directly into dest
-static void jsonStr(String &dest, const char *src) {
-  while (*src) {
-    if (*src == '"') dest += '\'';
-    else if (*src == '\\') dest += '/';
-    else dest += *src;
-    src++;
+// Append char array to json, replacing " with ' and \ with /
+void jsonAppendStr(String &j, const char *s) {
+  while (*s) {
+    char c = *s++;
+    if (c == '"') j += '\'';
+    else if (c == '\\') j += '/';
+    else j += c;
   }
 }
+void jsonAppendInt(String &j, int v) { char b[12]; itoa(v, b, 10); j += b; }
 
 void handleApiData() {
   String json;
-  json.reserve(2048);  // Pre-allocate to avoid heap fragmentation
+  json.reserve(2048);
 
-  json = "{\"rssi\":";
-  json += String(WiFi.RSSI());
+  json = "{\"ssid\":\"";
+  jsonAppendStr(json, creds.wifiSSID);
+  json += "\",\"ip\":\"";
+  jsonAppendStr(json, WiFi.localIP().toString().c_str());
+  json += "\",\"broker\":\"";
+  jsonAppendStr(json, creds.mqttBroker);
+  json += "\",\"port\":";
+  jsonAppendInt(json, creds.mqttPort);
+  json += ",\"email\":\"";
+  jsonAppendStr(json, creds.mqttEmail);
+  json += "\",\"rssi\":";
+  jsonAppendInt(json, WiFi.RSSI());
   json += ",\"heap\":";
-  json += String(ESP.getFreeHeap() / 1024);
+  jsonAppendInt(json, ESP.getFreeHeap() / 1024);
   json += ",\"uptime\":\"";
   json += uptimeStr();
   json += "\",\"mqtt\":";
   json += mqttConnected ? "true" : "false";
   json += ",\"msg_count\":";
-  json += String(msgCount);
+  jsonAppendInt(json, msgCount);
 
-  // Recent messages (last 5 to keep small)
+  // Messages (last 5)
   json += ",\"messages\":[";
-  bool first = true;
+  bool f = true;
   for (int i = 0; i < 5; i++) {
     int idx = ((msgBufHead - 1 - i) + MSG_BUF_SIZE) % MSG_BUF_SIZE;
     if (msgBuf[idx].topic.isEmpty()) continue;
-    if (!first) json += ',';
-    first = false;
+    if (!f) json += ',';
+    f = false;
     json += "{\"t\":\"";
-    jsonStr(json, msgBuf[idx].topic.substring(0, 60).c_str());
+    jsonAppendStr(json, msgBuf[idx].topic.substring(0, 50).c_str());
     json += "\",\"p\":\"";
-    jsonStr(json, msgBuf[idx].payload.substring(0, 50).c_str());
+    jsonAppendStr(json, msgBuf[idx].payload.substring(0, 40).c_str());
     json += "\"}";
   }
 
   // Devices
   json += "],\"devices\":[";
-  first = true;
-  char buf[16];
+  f = true;
   for (int i = 0; i < deviceCount; i++) {
     if (!devices[i].active) continue;
-    if (!first) json += ',';
-    first = false;
+    if (!f) json += ',';
+    f = false;
 
-    // Look up unit name
-    const char *dname = "";
-    for (int u = 0; u < unitCount; u++) {
-      if (strncmp(units[u].deviceId, devices[i].deviceId, DEV_ID_LEN) == 0) {
-        dname = units[u].name; break;
-      }
+    // Find unit name by base serial
+    const char *uname = "";
+    char baseS[20] = {0};
+    strncpy(baseS, devices[i].serialId, 19);
+    char *usc = strchr(baseS, '_');
+    if (usc) *usc = '\0';
+    for (int u = 0; u < unitNameCount; u++) {
+      if (strcmp(unitNames[u].id, baseS) == 0) { uname = unitNames[u].nm; break; }
     }
 
-    json += "{\"id\":\"";
-    jsonStr(json, devices[i].stateTopic);
-    json += "\",\"device_id\":\"";
-    jsonStr(json, devices[i].deviceId);
-    json += "\",\"serial\":\"";
-    jsonStr(json, devices[i].serialId);
-    json += "\",\"device_name\":\"";
-    jsonStr(json, dname);
-    json += "\",\"name\":\"";
-    jsonStr(json, devices[i].name);
-    json += "\",\"type\":\"";
-    jsonStr(json, devices[i].type);
-    json += "\",\"state\":\"";
-    jsonStr(json, devices[i].state);
-    json += "\",\"cmd\":\"";
-    jsonStr(json, devices[i].cmdTopic);
+    json += "{\"id\":\"";       jsonAppendStr(json, devices[i].stateTopic);
+    json += "\",\"device_id\":\""; jsonAppendStr(json, devices[i].deviceId);
+    json += "\",\"serial\":\"";    jsonAppendStr(json, devices[i].serialId);
+    json += "\",\"device_name\":\""; jsonAppendStr(json, uname);
+    json += "\",\"name\":\"";     jsonAppendStr(json, devices[i].name);
+    json += "\",\"type\":\"";     jsonAppendStr(json, devices[i].type);
+    json += "\",\"state\":\"";    jsonAppendStr(json, devices[i].state);
+    json += "\",\"cmd\":\"";      jsonAppendStr(json, devices[i].cmdTopic);
     json += "\",\"supports_brightness\":";
     json += devices[i].supportsBrightness ? "true" : "false";
     json += ",\"supports_rgb\":";
     json += devices[i].supportsRgb ? "true" : "false";
-    json += ",\"brightness\":";
-    itoa(devices[i].brightness, buf, 10); json += buf;
-    json += ",\"color_r\":";
-    itoa(devices[i].colorR, buf, 10); json += buf;
-    json += ",\"color_g\":";
-    itoa(devices[i].colorG, buf, 10); json += buf;
-    json += ",\"color_b\":";
-    itoa(devices[i].colorB, buf, 10); json += buf;
+    json += ",\"brightness\":"; jsonAppendInt(json, devices[i].brightness);
+    json += ",\"color_r\":";    jsonAppendInt(json, devices[i].colorR);
+    json += ",\"color_g\":";    jsonAppendInt(json, devices[i].colorG);
+    json += ",\"color_b\":";    jsonAppendInt(json, devices[i].colorB);
     json += '}';
-
-    yield();  // Prevent watchdog reset on large device lists
+    yield();
   }
   json += "]}";
 
@@ -326,16 +325,10 @@ void handleCmd() {
 }
 
 void handleDashboard() {
-  // Send the static HTML shell with a few baked-in fields.
-  // Dynamic data (devices, messages, states) is fetched by JS via /api/data.
-  String html = FPSTR(DASHBOARD_HTML);
-  html.replace("__WIFI_SSID__", creds.wifiSSID);
-  html.replace("__IP__",        WiFi.localIP().toString());
-  html.replace("__BROKER__",    creds.mqttBroker);
-  html.replace("__PORT__",      String(creds.mqttPort));
-  html.replace("__EMAIL__",     creds.mqttEmail);
+  // Send directly from PROGMEM — zero heap allocation.
+  // Config values (SSID, IP, broker etc.) are now fetched by JS via /api/data.
   server.sendHeader("Cache-Control", "no-cache");
-  server.send(200, "text/html", html);
+  server.send_P(200, "text/html", DASHBOARD_HTML);
 }
 
 void handleReset() {
@@ -429,58 +422,48 @@ void parseConfigMsg(const String &topic, const String &payload) {
   const char *name       = doc["name"]          | "";
   const char *stateTopic = doc["state_topic"]   | "";
   const char *cmdTopic   = doc["command_topic"] | "";
-  const char *devName    = "";
-  if (doc["device"].is<JsonObject>()) {
-    devName = doc["device"]["name"] | "";
-  } else if (doc["dev"].is<JsonObject>()) {
-    devName = doc["dev"]["name"] | "";
+
+  // Extract physical unit name from device object, keyed by base serial (MAC)
+  const char *devNm = "";
+  if (doc["device"].is<JsonObject>()) devNm = doc["device"]["name"] | "";
+  else if (doc["dev"].is<JsonObject>()) devNm = doc["dev"]["name"] | "";
+  if (strlen(devNm) > 0) {
+    // Base serial = part before first '_' in serialId (e.g. A4CF12F03246 from A4CF12F03246_0)
+    String baseSerial = serialId;
+    int uscore = baseSerial.indexOf('_');
+    if (uscore > 0) baseSerial = baseSerial.substring(0, uscore);
+
+    bool found = false;
+    for (int u = 0; u < unitNameCount; u++) {
+      if (strncmp(unitNames[u].id, baseSerial.c_str(), UNIT_ID_LEN) == 0) { found = true; break; }
+    }
+    if (!found && unitNameCount < MAX_UNITS) {
+      strncpy(unitNames[unitNameCount].id, baseSerial.c_str(), UNIT_ID_LEN - 1);
+      unitNames[unitNameCount].id[UNIT_ID_LEN - 1] = '\0';
+      strncpy(unitNames[unitNameCount].nm, devNm, UNIT_NM_LEN - 1);
+      unitNames[unitNameCount].nm[UNIT_NM_LEN - 1] = '\0';
+      unitNameCount++;
+    }
   }
+
   bool brightnessFlag = doc["brightness"] | false;
   if (strlen(stateTopic) == 0) return;
 
-  // Copy devName to a safe String before doc gets reused
-  String devNameStr = String(devName);
-
-  // Extract value_template key for sensors sharing a state_topic
-  String valueKey = "";
-  const char *vtRaw = doc["value_template"] | "";
-  if (strlen(vtRaw) == 0) vtRaw = doc["val_tpl"] | "";
-  if (strlen(vtRaw) > 0) {
-    String vt = String(vtRaw);
-    int dotIdx = vt.indexOf("value_json.");
-    if (dotIdx >= 0) {
-      int start = dotIdx + 11;
-      int end = start;
-      while (end < (int)vt.length() && vt[end] != ' ' && vt[end] != '}' && vt[end] != '|' && vt[end] != ')') end++;
-      valueKey = vt.substring(start, end);
-      valueKey.trim();
-    } else {
-      int bIdx = vt.indexOf("value_json['");
-      if (bIdx >= 0) {
-        int start = bIdx + 12;
-        int end = vt.indexOf("']", start);
-        if (end > start) valueKey = vt.substring(start, end);
-      }
+  // Extract value_template key (e.g. "consumption" from "{{ value_json.consumption }}")
+  char valKey[20] = {0};
+  const char *vt = doc["value_template"] | "";
+  if (strlen(vt) == 0) vt = doc["val_tpl"] | "";
+  if (strlen(vt) > 0) {
+    const char *dot = strstr(vt, "value_json.");
+    if (dot) {
+      dot += 11;
+      int k = 0;
+      while (*dot && *dot != ' ' && *dot != '}' && *dot != '|' && k < 18) valKey[k++] = *dot++;
+      valKey[k] = '\0';
     }
   }
 
-  // Store unit name in shared lookup table
-  if (devNameStr.length() > 0) {
-    bool found = false;
-    for (int u = 0; u < unitCount; u++) {
-      if (strncmp(units[u].deviceId, deviceId.c_str(), DEV_ID_LEN) == 0) { found = true; break; }
-    }
-    if (!found && unitCount < MAX_UNITS) {
-      strncpy(units[unitCount].deviceId, deviceId.c_str(), DEV_ID_LEN - 1);
-      units[unitCount].deviceId[DEV_ID_LEN - 1] = '\0';
-      strncpy(units[unitCount].name, devNameStr.c_str(), UNIT_NAME_LEN - 1);
-      units[unitCount].name[UNIT_NAME_LEN - 1] = '\0';
-      unitCount++;
-      Serial.printf("[UNIT] Registered unit: %s (id=%s)\n", units[unitCount-1].name, units[unitCount-1].deviceId);
-    }
-  }
-
-  // Find existing slot by serialId (unique entity identifier from topic path)
+  // Find existing slot by serialId (unique per entity in topic path)
   int slot = -1;
   bool isExisting = false;
   for (int i = 0; i < deviceCount; i++) {
@@ -523,8 +506,7 @@ void parseConfigMsg(const String &topic, const String &payload) {
   strncpy(devices[slot].type,       entityType.c_str(),                   DEV_TYPE_LEN - 1);
   strncpy(devices[slot].stateTopic, stateTopic,                            DEV_TOPIC_LEN - 1);
   strncpy(devices[slot].cmdTopic,   cmdTopic,                              DEV_TOPIC_LEN - 1);
-  strncpy(devices[slot].valueKey,   valueKey.c_str(),                       DEV_VALKEY_LEN - 1);
-  devices[slot].valueKey[DEV_VALKEY_LEN - 1]  = '\0';
+  memcpy(devices[slot].valueKey, valKey, 20);
   devices[slot].name[DEV_NAME_LEN - 1]       = '\0';
   devices[slot].deviceId[DEV_ID_LEN - 1]     = '\0';
   devices[slot].serialId[DEV_SERIAL_LEN - 1] = '\0';
@@ -546,7 +528,6 @@ void parseConfigMsg(const String &topic, const String &payload) {
 //  Update device state when a state message arrives
 // ---------------------------------------------------------------------------
 void updateDeviceState(const String &topic, const String &payload) {
-  // Parse JSON once, reuse for all matching devices
   JsonDocument doc;
   bool jsonOk = (deserializeJson(doc, payload) == DeserializationError::Ok);
 
@@ -555,24 +536,20 @@ void updateDeviceState(const String &topic, const String &payload) {
     if (topic != String(devices[i].stateTopic)) continue;
 
     String stateVal = payload;
-
     if (jsonOk) {
-      // If device has a valueKey, extract that specific field from shared JSON
-      if (strlen(devices[i].valueKey) > 0) {
-        if (doc.containsKey(devices[i].valueKey)) {
-          if (doc[devices[i].valueKey].is<float>())
-            stateVal = String(doc[devices[i].valueKey].as<float>(), 2);
-          else
-            stateVal = doc[devices[i].valueKey].as<String>();
+      // If device has a valueKey, extract that specific field
+      if (devices[i].valueKey[0] != '\0') {
+        const char *vk = devices[i].valueKey;
+        if (doc.containsKey(vk)) {
+          if (doc[vk].is<float>()) stateVal = String(doc[vk].as<float>(), 2);
+          else stateVal = doc[vk].as<String>();
         }
       } else {
-        // No valueKey — use generic extraction
         if (doc.containsKey("state"))            stateVal = doc["state"].as<String>();
         else if (doc.containsKey("temperature")) stateVal = String(doc["temperature"].as<float>(), 1) + " C";
         else if (doc.containsKey("humidity"))     stateVal = String(doc["humidity"].as<float>(), 1) + " %";
         else if (doc.containsKey("value"))        stateVal = doc["value"].as<String>();
       }
-
       if (doc.containsKey("brightness")) {
         devices[i].brightness = constrain(doc["brightness"].as<int>(), 0, 100);
       }
