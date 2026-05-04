@@ -40,6 +40,7 @@
     if (auto.status !== "ON") return "Off";
     const map = { IDLE:"Off", WAIT_CONDITION:"Waiting", INIT_SET:"Initializing", INIT_VERIFY:"Verifying Init",
       ACTION_SET:"Setting Action", ACTION_VERIFY:"Verifying", ACTION_RUN:"Running",
+      OVERLAP_NEXT_SET:"Setting Next", OVERLAP_NEXT_VERIFY:"Verifying Next",
       ACTION_REVERT:"Reverting", ACTION_VERIFY_REVERT:"Verifying Revert", BUFFER:"Buffer",
       PAUSED_CONDITION:"Paused (Condition)", PAUSED_SCHEDULE:"Paused (Schedule)",
       COMPLETED:"Completed", ERROR_SET:"Error Recovery", ERROR_VERIFY:"Error Verify", ERROR:"Error" };

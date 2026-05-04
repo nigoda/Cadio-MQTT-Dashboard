@@ -648,8 +648,14 @@ def engine_tick(auto):
         elapsed = now - (rt.get("timerStart") or now)
         remaining = (rt.get("remainingTime") or 0) - elapsed
         if remaining <= 0:
-            rt["state"] = "ACTION_REVERT"
-            _auto_log(auto_id, f"Action {rt['currentActionIndex']+1} timer done → ACTION_REVERT")
+            actions = auto.get("actions", [])
+            idx = rt.get("currentActionIndex", 0)
+            if idx + 1 < len(actions):
+                rt["state"] = "OVERLAP_NEXT_SET"
+                _auto_log(auto_id, f"Action {idx+1} timer done → OVERLAP_NEXT_SET")
+            else:
+                rt["state"] = "ACTION_REVERT"
+                _auto_log(auto_id, f"Action {idx+1} timer done → ACTION_REVERT")
             _emit_auto_update(auto)
             return
         # State enforcement: ensure switch is still in expected state
@@ -660,6 +666,49 @@ def engine_tick(auto):
             if not _verify_switches([action], auto):
                 _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""))
                 _auto_log(auto_id, "State enforcement: correcting switch drift", "warning")
+        return
+
+    if state == "OVERLAP_NEXT_SET":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        next_idx = idx + 1
+        action = actions[next_idx]
+        _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
+        rt["verifyStart"] = now
+        rt["retryCount"] = 0
+        rt["state"] = "OVERLAP_NEXT_VERIFY"
+        _auto_log(auto_id, f"Overlap Action {next_idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
+        _emit_auto_update(auto)
+        return
+
+    if state == "OVERLAP_NEXT_VERIFY":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        next_idx = idx + 1
+        action = actions[next_idx]
+        if _verify_switches([action], auto):
+            rt["bufferStart"] = now
+            rt["state"] = "BUFFER"
+            _auto_log(auto_id, f"Overlap Action {next_idx+1} verified → BUFFER")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+            rt["retryCount"] = rt.get("retryCount", 0) + 1
+            if rt["retryCount"] >= MAX_RETRIES:
+                rt["state"] = "ERROR_SET"
+                _auto_log(auto_id, f"Overlap Action {next_idx+1} verify timeout → ERROR_SET", "error")
+                _emit_auto_update(auto)
+            else:
+                rt["state"] = "OVERLAP_NEXT_SET"
+                _auto_log(auto_id, f"Overlap Action {next_idx+1} verify retry {rt['retryCount']}")
+                _emit_auto_update(auto)
+        return
+
+    if state == "BUFFER":
+        buffer_time = auto.get("bufferTime", BUFFER_SECONDS)
+        if now - (rt.get("bufferStart") or now) >= buffer_time:
+            rt["state"] = "ACTION_REVERT"
+            _auto_log(auto_id, f"Buffer ({buffer_time}s) done → ACTION_REVERT")
+            _emit_auto_update(auto)
         return
 
     if state == "ACTION_REVERT":
@@ -681,40 +730,34 @@ def engine_tick(auto):
         # Verify the switch reverted to opposite state
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
+        
+        def _finish_revert():
+            if idx + 1 < len(actions):
+                # Make-Before-Break finished. Advance to next action and start its timer.
+                next_idx = idx + 1
+                rt["currentActionIndex"] = next_idx
+                duration = actions[next_idx].get("duration", 0)
+                rt["timerStart"] = now
+                rt["remainingTime"] = duration
+                rt["state"] = "ACTION_RUN"
+                _auto_log(auto_id, f"Advanced to Action {next_idx+1} → ACTION_RUN ({duration}s)")
+            else:
+                rt["state"] = "COMPLETED"
+                _auto_log(auto_id, "All actions completed → COMPLETED")
+            _emit_auto_update(auto)
+
         if idx < len(actions):
             action = actions[idx]
             revert_state = "OFF" if action.get("state", "").upper() == "ON" else "ON"
             revert_check = {"switchStateTopic": action.get("switchStateTopic", ""), "state": revert_state}
             if _verify_switches([revert_check], auto):
-                rt["bufferStart"] = now
-                rt["state"] = "BUFFER"
-                _auto_log(auto_id, f"Action {idx+1} revert verified → BUFFER")
-                _emit_auto_update(auto)
+                _auto_log(auto_id, f"Action {idx+1} revert verified")
+                _finish_revert()
             elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
-                # Timeout on revert verify — still move to buffer
-                rt["bufferStart"] = now
-                rt["state"] = "BUFFER"
-                _auto_log(auto_id, f"Action {idx+1} revert verify timeout → BUFFER", "warning")
-                _emit_auto_update(auto)
+                _auto_log(auto_id, f"Action {idx+1} revert verify timeout", "warning")
+                _finish_revert()
         else:
-            rt["bufferStart"] = now
-            rt["state"] = "BUFFER"
-            _emit_auto_update(auto)
-        return
-
-    if state == "BUFFER":
-        buffer_time = auto.get("bufferTime", BUFFER_SECONDS)
-        if now - (rt.get("bufferStart") or now) >= buffer_time:
-            idx = rt.get("currentActionIndex", 0) + 1
-            actions = auto.get("actions", [])
-            if idx < len(actions):
-                rt["currentActionIndex"] = idx
-                rt["state"] = "ACTION_SET"
-                _auto_log(auto_id, f"Buffer ({buffer_time}s) done → next action {idx+1}")
-            else:
-                rt["state"] = "COMPLETED"
-                _auto_log(auto_id, "All actions completed → COMPLETED")
-            _emit_auto_update(auto)
+            _finish_revert()
         return
 
     if state == "PAUSED_CONDITION":
