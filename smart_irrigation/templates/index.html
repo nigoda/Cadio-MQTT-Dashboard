@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Irrigation Dashboard</title>
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+<!-- Sidebar -->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-header">
+    <h1>&#127793; Irrigation</h1>
+  </div>
+  <nav class="sidebar-nav">
+    <a class="nav-item active" data-tab="dashboard"><span class="nav-icon">&#9632;</span> Dashboard</a>
+    <a class="nav-item" data-tab="automations"><span class="nav-icon">&#9881;</span> Automations</a>
+    <a class="nav-item" data-tab="sensors"><span class="nav-icon">&#128225;</span> Sensors</a>
+    <a class="nav-item" data-tab="switches"><span class="nav-icon">&#9889;</span> Switches</a>
+    <a class="nav-item" data-tab="logs"><span class="nav-icon">&#128196;</span> Logs</a>
+    <a class="nav-item" data-tab="system"><span class="nav-icon">&#128295;</span> System</a>
+  </nav>
+  <div class="sidebar-footer">
+    <span class="mqtt-dot" id="mqtt-dot"></span>
+    <span id="mqtt-label">Connecting...</span>
+  </div>
+</aside>
+
+<!-- Main Content -->
+<main class="main-content">
+
+  <!-- Dashboard Tab -->
+  <section class="tab-content active" id="tab-dashboard">
+    <div class="page-header">
+      <h2>Dashboard</h2>
+      <span class="header-sub">System Overview</span>
+    </div>
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Automations</div>
+        <div class="summary-value" id="sum-automations">0</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Running</div>
+        <div class="summary-value green" id="sum-running">0</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Paused</div>
+        <div class="summary-value yellow" id="sum-paused">0</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Errors</div>
+        <div class="summary-value red" id="sum-errors">0</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Switches</div>
+        <div class="summary-value" id="sum-switches">0</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Sensors</div>
+        <div class="summary-value" id="sum-sensors">0</div>
+      </div>
+    </div>
+    <div class="dash-section">
+      <h3>Active Automations</h3>
+      <div id="dash-active-list" class="auto-mini-list">
+        <p class="empty-msg">No automations running</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Automations Tab -->
+  <section class="tab-content" id="tab-automations">
+    <div class="page-header">
+      <h2>Automations</h2>
+      <button class="btn btn-primary" id="btn-new-auto">+ New Automation</button>
+    </div>
+    <div class="auto-layout">
+      <!-- Left: List -->
+      <div class="auto-list-panel" id="auto-list-panel">
+        <div id="auto-list" class="auto-list">
+          <p class="empty-msg">No automations yet</p>
+        </div>
+      </div>
+      <!-- Right: Detail -->
+      <div class="auto-detail-panel" id="auto-detail-panel">
+        <div class="auto-detail-empty" id="auto-detail-empty">
+          <p>Select an automation to view details</p>
+        </div>
+        <div class="auto-detail" id="auto-detail" style="display:none">
+          <!-- Filled by JS -->
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Sensors Tab -->
+  <section class="tab-content" id="tab-sensors">
+    <div class="page-header">
+      <h2>Sensors</h2>
+      <span class="header-sub">Live sensor states</span>
+    </div>
+    <div class="device-grid" id="sensor-grid">
+      <p class="empty-msg">No sensors discovered</p>
+    </div>
+  </section>
+
+  <!-- Switches Tab -->
+  <section class="tab-content" id="tab-switches">
+    <div class="page-header">
+      <h2>Switches</h2>
+      <span class="header-sub">Manual control</span>
+    </div>
+    <div class="device-grid" id="switch-grid">
+      <p class="empty-msg">No switches discovered</p>
+    </div>
+  </section>
+
+  <!-- Logs Tab -->
+  <section class="tab-content" id="tab-logs">
+    <div class="page-header">
+      <h2>Logs</h2>
+      <button class="btn btn-secondary" id="btn-clear-logs">Clear</button>
+    </div>
+    <div class="log-container" id="log-container">
+      <p class="empty-msg">No logs yet</p>
+    </div>
+  </section>
+
+  <!-- System Tab -->
+  <section class="tab-content" id="tab-system">
+    <div class="page-header">
+      <h2>System</h2>
+    </div>
+    <div class="system-info">
+      <div class="info-row"><span class="info-label">MQTT Status</span><span class="info-value" id="sys-mqtt">--</span></div>
+      <div class="info-row"><span class="info-label">Broker</span><span class="info-value" id="sys-broker">--</span></div>
+      <div class="info-row"><span class="info-label">Switches</span><span class="info-value" id="sys-switches">--</span></div>
+      <div class="info-row"><span class="info-label">Sensors</span><span class="info-value" id="sys-sensors">--</span></div>
+      <div class="info-row"><span class="info-label">Automations</span><span class="info-value" id="sys-autos">--</span></div>
+    </div>
+  </section>
+
+  <!-- New/Edit Automation Modal -->
+  <div class="modal-overlay hidden" id="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">New Automation</h3>
+        <button class="modal-close" id="modal-close">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <label>Name</label>
+        <input type="text" id="auto-name" placeholder="e.g. Zone 1 Morning">
+
+        <label>Schedule — Days</label>
+        <div class="day-picker" id="day-picker">
+          <button class="day-btn" data-day="Mon">Mon</button>
+          <button class="day-btn" data-day="Tue">Tue</button>
+          <button class="day-btn" data-day="Wed">Wed</button>
+          <button class="day-btn" data-day="Thu">Thu</button>
+          <button class="day-btn" data-day="Fri">Fri</button>
+          <button class="day-btn" data-day="Sat">Sat</button>
+          <button class="day-btn" data-day="Sun">Sun</button>
+        </div>
+        <div class="time-row">
+          <div><label>Start</label><input type="time" id="sched-start" value="06:00"></div>
+          <div><label>End</label><input type="time" id="sched-end" value="09:00"></div>
+        </div>
+
+        <label>Conditions</label>
+        <div id="cond-list" class="cond-list"></div>
+        <button class="btn btn-small" id="btn-add-cond">+ Add Condition</button>
+
+        <label>Initialization (Safe Start State)</label>
+        <div id="init-list" class="action-list"></div>
+        <button class="btn btn-small" id="btn-add-init">+ Add Init</button>
+
+        <label>Actions (Sequential)</label>
+        <div id="action-list" class="action-list"></div>
+        <button class="btn btn-small" id="btn-add-action">+ Add Action</button>
+
+        <label>Buffer Time (seconds between actions)</label>
+        <input type="number" id="buffer-time" value="5" min="1" max="300">
+
+        <label>Error State (Fail-Safe)</label>
+        <div id="error-list" class="action-list"></div>
+        <button class="btn btn-small" id="btn-add-error">+ Add Error State</button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+        <button class="btn btn-primary" id="modal-save">Save</button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>
