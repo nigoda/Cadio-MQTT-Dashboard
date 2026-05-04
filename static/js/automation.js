@@ -137,7 +137,14 @@
     badge.className = "irr-status-badge " + cls;
 
     // State bar
-    $("#irr-cur-state").textContent = stateLabel(auto).toUpperCase();
+    // Helper to format seconds nicely
+    function formatTime(sec) {
+        if (sec < 60) return Math.round(sec) + " sec";
+        return Math.round(sec / 60) + " min";
+    }
+
+    // State bar
+    $("#irr-cur-state").textContent = (rt.state || "IDLE").replace(/_/g, " ");
     
     let curSub = "—";
     let pct = 0;
@@ -145,41 +152,61 @@
     let nextStep = "—";
     let nextSub = "—";
 
-    if (idx < actions.length) {
-      const curAction = actions[idx];
+    if (actions.length > 0) {
+      let totalAutoSec = 0;
+      for (let i = 0; i < actions.length; i++) {
+          totalAutoSec += (actions[i].duration || 0);
+      }
+      
+      let elapsedPreviousSec = 0;
+      for (let i = 0; i < idx && i < actions.length; i++) {
+          elapsedPreviousSec += (actions[i].duration || 0);
+      }
+
+      const curAction = idx < actions.length ? actions[idx] : actions[actions.length - 1];
       const dur = curAction.duration || 0;
       
+      let elapsedCurSec = 0;
+      let remainingCurSec = dur;
+
       if (rt.state === "ACTION_RUN") {
-         const totalMin = Math.round(dur / 60);
-         curSub = `${curAction.switchName||'Switch'} ${curAction.state} for ${totalMin} min`;
-         
          const timerStart = rt.timerStart || Date.now();
-         const elapsedSec = Math.max(0, (Date.now() - timerStart) / 1000);
-         const elapsedMin = Math.floor(elapsedSec / 60);
+         elapsedCurSec = Math.max(0, Math.min(dur, (Date.now() - timerStart) / 1000));
+         remainingCurSec = Math.max(0, dur - elapsedCurSec);
          
-         pct = dur > 0 ? Math.min(100, Math.round((elapsedSec / dur) * 100)) : 100;
-         progText = `${elapsedMin} min / ${totalMin} min`;
+         curSub = `${curAction.switchName||'Switch'} ${curAction.state} for ${formatTime(elapsedCurSec)}`;
          
          if (idx + 1 < actions.length) {
              const nextAction = actions[idx+1];
              nextStep = `${nextAction.switchName||'Switch'} ${nextAction.state}`;
-             nextSub = `After ${totalMin} min`;
          } else {
              const revertState = curAction.state === "ON" ? "OFF" : "ON";
              nextStep = `${curAction.switchName||'Switch'} ${revertState}`;
-             nextSub = `After ${totalMin} min`;
          }
+         nextSub = `In ${formatTime(remainingCurSec)}`;
+         
+      } else if (rt.state === "BUFFER") {
+         elapsedCurSec = dur;
+         const bufTime = auto.bufferTime || 5;
+         const bufStart = rt.bufferStart || Date.now();
+         const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() - bufStart) / 1000));
+         
+         curSub = `Waiting for buffer`;
+         nextSub = `In ${formatTime(Math.max(0, bufTime - bufElapsed))}`;
+         nextStep = `Revert ${curAction.switchName||'Switch'}`;
+         
+      } else if (rt.state === "IDLE" || rt.state === "COMPLETED") {
+         curSub = rt.state === "COMPLETED" ? "Finished cycle" : "Waiting for start";
+         if (rt.state === "COMPLETED") elapsedPreviousSec = totalAutoSec;
       } else {
-         pct = actions.length > 0 ? Math.round((idx / actions.length) * 100) : 0;
-         if (rt.state === "IDLE" || rt.state === "COMPLETED") {
-             pct = rt.state === "COMPLETED" ? 100 : 0;
-             curSub = rt.state === "COMPLETED" ? "Finished cycle" : "Waiting for start";
-         } else if (rt.state === "BUFFER") {
-             curSub = "Waiting for buffer";
-         } else {
-             curSub = `Action ${idx+1}: ${curAction.switchName||'Switch'} ${curAction.state}`;
-         }
+         if (rt.state.includes("OVERLAP") || rt.state.includes("REVERT")) elapsedCurSec = dur;
+         curSub = `Action ${Math.min(idx+1, actions.length)}: ${curAction.switchName||'Switch'} ${curAction.state}`;
       }
+      
+      const totalElapsedSec = elapsedPreviousSec + elapsedCurSec;
+      pct = totalAutoSec > 0 ? Math.min(100, Math.round((totalElapsedSec / totalAutoSec) * 100)) : 0;
+      progText = `${formatTime(totalElapsedSec)} / ${formatTime(totalAutoSec)}`;
+      if (rt.state === "COMPLETED") pct = 100;
     }
     
     $("#irr-cur-state-sub").textContent = curSub;
