@@ -91,15 +91,19 @@
   }
 
   function switchOptions(selectedCmd) {
-    return getSwitchEntities().map(e =>
-      `<option value="${escHtml(e.cmdTopic)}" data-state="${escHtml(e.stateTopic||"")}" data-name="${escHtml(e.name)}" ${e.cmdTopic===selectedCmd?"selected":""}>${escHtml(e.name)}</option>`
-    ).join("");
+    return getSwitchEntities().map(e => {
+      const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
+      const dName = `${e.name} (${devName})`;
+      return `<option value="${escHtml(e.cmdTopic)}" data-state="${escHtml(e.stateTopic||"")}" data-name="${escHtml(dName)}" ${e.cmdTopic===selectedCmd?"selected":""}>${escHtml(dName)}</option>`;
+    }).join("");
   }
 
   function sensorOptions(selectedTopic) {
-    return getSensorEntities().map(e =>
-      `<option value="${escHtml(e.stateTopic)}" data-name="${escHtml(e.name)}" ${e.stateTopic===selectedTopic?"selected":""}>${escHtml(e.name)}</option>`
-    ).join("");
+    return getSensorEntities().map(e => {
+      const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
+      const dName = `${e.name} (${devName})`;
+      return `<option value="${escHtml(e.stateTopic)}" data-name="${escHtml(dName)}" ${e.stateTopic===selectedTopic?"selected":""}>${escHtml(dName)}</option>`;
+    }).join("");
   }
 
   // ─── Render List ───
@@ -227,6 +231,99 @@
     $("#irr-next-step-sub").textContent = nextSub;
   }
 
+  setInterval(() => {
+    if (_selectedId && _autos && _autos[_selectedId]) {
+      updateLiveTimers();
+      updateLivePanels();
+    }
+  }, 1000);
+
+  function updateLivePanels() {
+    const auto = _autos[_selectedId];
+    if (!auto) return;
+    
+    const inits = auto.initialization || [];
+    const actions = auto.actions || [];
+    const errs = auto.errorState || [];
+    const conds = auto.condition || [];
+
+    // Live Switches
+    const liveSw = $("#irr-live-switches");
+    if (liveSw) {
+        const switchMap = new Map();
+        [...inits, ...actions, ...errs].forEach(s => {
+           if (s.switchName) switchMap.set(s.switchName, s.switchStateTopic || s.switchCmdTopic);
+        });
+        if (switchMap.size > 0) {
+          liveSw.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap;">${Array.from(switchMap.entries()).map(([name, topic]) => {
+            let liveState = "Unknown";
+            if (window._dashboardEntities) {
+                for (const eid in window._dashboardEntities) {
+                    const e = window._dashboardEntities[eid];
+                    if (e.stateTopic === topic || e.cmdTopic === topic) { liveState = (e.state||"Unknown").toUpperCase(); break; }
+                }
+            }
+            const isOn = liveState === "ON";
+            return `<div class="irr-live-sw">
+              <span class="material-symbols-outlined irr-live-sw-icon ${isOn?'on':''}">${isOn?'water_drop':'water_drop'}</span>
+              <span class="irr-live-sw-name">${escHtml(name)}</span>
+              <span class="irr-live-sw-state" style="color:${isOn?'#4caf50':'#f44336'}">${liveState}</span>
+            </div>`;
+          }).join("")}</div>`;
+        } else {
+          liveSw.innerHTML = '<span style="color:var(--ha-text-disabled);font-size:12px">No switches</span>';
+        }
+    }
+
+    // Live Sensors
+    const liveSen = $("#irr-live-sensors");
+    if (liveSen) {
+        const sensorMap = new Map();
+        conds.forEach(c => {
+           if (c.sensorName || c.sensorStateTopic) sensorMap.set(c.sensorName || "Sensor", c.sensorStateTopic);
+        });
+        if (sensorMap.size > 0) {
+          liveSen.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap;">${Array.from(sensorMap.entries()).map(([name, topic]) => {
+            let liveState = "Unknown";
+            if (window._dashboardEntities) {
+                for (const eid in window._dashboardEntities) {
+                    const e = window._dashboardEntities[eid];
+                    if (e.stateTopic === topic || e.cmdTopic === topic) { liveState = (e.state||"Unknown").toUpperCase(); break; }
+                }
+            }
+            const isOn = liveState === "ON";
+            return `<div class="irr-live-sw">
+              <span class="material-symbols-outlined irr-live-sw-icon ${isOn?'on':''}">sensors</span>
+              <span class="irr-live-sw-name">${escHtml(name)}</span>
+              <span class="irr-live-sw-state" style="color:${isOn?'#4caf50':(liveState==='OFF'?'#f44336':'var(--ha-text-secondary)')}">${liveState}</span>
+            </div>`;
+          }).join("")}</div>`;
+        } else {
+          liveSen.innerHTML = '<span style="color:var(--ha-text-disabled);font-size:12px">No sensors</span>';
+        }
+    }
+    
+    // Also update condition live state text if visible
+    const condBody = $("#irr-cond-body");
+    if (condBody) {
+      const rows = condBody.querySelectorAll(".irr-cond-live");
+      rows.forEach((span, i) => {
+         if(conds[i]) {
+            const topic = conds[i].sensorStateTopic || "";
+            let lState = "Unknown";
+            if (window._dashboardEntities) {
+                for (const eid in window._dashboardEntities) {
+                    const e = window._dashboardEntities[eid];
+                    if (e.stateTopic === topic || e.cmdTopic === topic) { lState = (e.state||"Unknown").toUpperCase(); break; }
+                }
+            }
+            const lColor = lState === "ON" ? "color:var(--ha-state-on)" : (lState === "OFF" ? "color:var(--ha-state-off)" : "");
+            span.innerHTML = `(Live: <span style="font-weight:600; ${lColor}">${lState}</span>)`;
+         }
+      });
+    }
+  }
+
   // ─── Render Detail ───
   function renderDetail() {
     const auto = _autos[_selectedId];
@@ -264,7 +361,7 @@
     const conds = auto.condition || [];
     condBody.innerHTML = conds.map((c,i) => {
       const logicBadge = c.logic && i < conds.length-1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName||c.sensorStateTopic||"Sensor")}</span><span class="irr-cond-op">=</span><span class="irr-cond-val">${escHtml(c.value||"")}</span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName||c.sensorStateTopic||"Sensor")}</span><span class="irr-cond-op">=</span><span class="irr-cond-val">${escHtml(c.value||"")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
     }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">No conditions (always true)</span>';
 
     // Actions
@@ -287,42 +384,13 @@
     const schedBody = $("#irr-sched-body");
     const sched = auto.schedule || {};
     const days = sched.days || [];
+    const is24Hr = !sched.startTime && !sched.endTime;
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
       <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d)?'active':''}">${d}</span>`).join("")}</div></div>
-      <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${sched.startTime||"—"} → ${sched.endTime||"—"}</div></div>
+      <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${is24Hr ? "24-Hour Active" : `${sched.startTime||"—"} → ${sched.endTime||"—"}`}</div></div>
     </div>`;
 
-    // Live switches — show actual ON/OFF from MQTT entities
-    const liveSw = $("#irr-live-switches");
-    const switchMap = new Map(); // name -> stateTopic
-    [...inits, ...actions, ...errs].forEach(s => {
-      if (s.switchName && s.switchStateTopic) switchMap.set(s.switchName, s.switchStateTopic);
-    });
-    if (switchMap.size > 0) {
-      liveSw.innerHTML = `<div class="irr-live-grid">${[...switchMap.entries()].map(([name, stateTopic]) => {
-        // Read actual state from dashboard entities
-        let liveState = "?";
-        if (window._dashboardEntities) {
-          for (const eid in window._dashboardEntities) {
-            const e = window._dashboardEntities[eid];
-            if (e.stateTopic === stateTopic) {
-              const st = e.state;
-              if (typeof st === "object") liveState = (st?.state || "?").toUpperCase();
-              else liveState = (st || "?").toString().toUpperCase();
-              break;
-            }
-          }
-        }
-        const isOn = liveState === "ON";
-        return `<div class="irr-live-sw">
-          <span class="material-symbols-outlined irr-live-sw-icon ${isOn?'on':''}">${isOn?'water_drop':'water_drop'}</span>
-          <span class="irr-live-sw-name">${escHtml(name)}</span>
-          <span class="irr-live-sw-state" style="color:${isOn?'#4caf50':'#f44336'}">${liveState}</span>
-        </div>`;
-      }).join("")}</div>`;
-    } else {
-      liveSw.innerHTML = '<span style="color:var(--ha-text-disabled);font-size:12px">No switches</span>';
-    }
+    updateLivePanels();
 
     // Activity log
     const logEl = $("#irr-activity-log");
@@ -352,8 +420,28 @@
     daysEl.innerHTML = DAY_NAMES.map(d => `<button type="button" class="irr-day-btn ${selDays.has(d)?'active':''}" data-day="${d}">${d}</button>`).join("");
     daysEl.querySelectorAll(".irr-day-btn").forEach(b => b.addEventListener("click", () => b.classList.toggle("active")));
 
-    $("#auto-f-start").value = auto?.schedule?.startTime || "";
-    $("#auto-f-end").value = auto?.schedule?.endTime || "";
+    const sStart = auto?.schedule?.startTime || "";
+    const sEnd = auto?.schedule?.endTime || "";
+    $("#auto-f-start").value = sStart;
+    $("#auto-f-end").value = sEnd;
+    
+    const cb24 = $("#auto-f-24hr");
+    if (cb24) {
+        cb24.checked = (!sStart && !sEnd);
+        cb24.onchange = (e) => {
+            if(e.target.checked) {
+                $("#auto-f-start").value = "";
+                $("#auto-f-end").value = "";
+                $("#auto-f-start").disabled = true;
+                $("#auto-f-end").disabled = true;
+            } else {
+                $("#auto-f-start").disabled = false;
+                $("#auto-f-end").disabled = false;
+            }
+        };
+        // trigger initial state
+        cb24.onchange({target:cb24});
+    }
     
     // Auto-detect browser offset if no offset is configured yet
     const tzSelect = $("#auto-f-tz");

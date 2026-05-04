@@ -214,7 +214,8 @@
                         <!-- Live switches + Logs -->
                         <div class="irr-bottom-grid">
                             <div class="irr-section"><h3>Live Switch States</h3><div id="irr-live-switches"></div></div>
-                            <div class="irr-section"><h3>Recent Activity</h3><div id="irr-activity-log"></div></div>
+                            <div class="irr-section"><h3>Live Sensor States</h3><div id="irr-live-sensors"></div></div>
+                            <div class="irr-section" style="grid-column: span 2;"><h3>Recent Activity</h3><div id="irr-activity-log"></div></div>
                         </div>
                     </div>
                 </div>
@@ -242,6 +243,11 @@
 
                     <h3 class="irr-form-heading">Schedule</h3>
                     <div class="irr-day-picker" id="auto-f-days"></div>
+                    <div class="irr-form-row" style="margin-top:12px; margin-bottom: 4px;">
+                        <label class="ha-checkbox-label" style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
+                            <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
+                        </label>
+                    </div>
                     <div class="irr-time-range">
                         <div class="ha-field"><input type="time" id="auto-f-start" placeholder=" "><label>Start Time</label></div>
                         <span style="padding-top:12px">→</span>
