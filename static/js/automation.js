@@ -137,13 +137,61 @@
     badge.className = "irr-status-badge " + cls;
 
     // State bar
-    $("#irr-cur-state").textContent = rt.state || "IDLE";
-    $("#irr-progress-bar").style.width = progress + "%";
-    $("#irr-progress-text").textContent = actions.length > 0 ? `Action ${Math.min(idx+1,actions.length)} of ${actions.length}` : "No actions";
-    const nextIdx = idx + 1;
-    $("#irr-next-step").textContent = nextIdx < actions.length ? `${actions[nextIdx]?.switchName||"Switch"} ${actions[nextIdx]?.state||""}` : "—";
+    $("#irr-cur-state").textContent = stateLabel(auto).toUpperCase();
+    
+    let curSub = "—";
+    let pct = 0;
+    let progText = actions.length > 0 ? `Action ${Math.min(idx+1,actions.length)} of ${actions.length}` : "No actions";
+    let nextStep = "—";
+    let nextSub = "—";
+
+    if (idx < actions.length) {
+      const curAction = actions[idx];
+      const dur = curAction.duration || 0;
+      
+      if (rt.state === "ACTION_RUN") {
+         const totalMin = Math.round(dur / 60);
+         curSub = `${curAction.switchName||'Switch'} ${curAction.state} for ${totalMin} min`;
+         
+         const timerStart = rt.timerStart || Date.now();
+         const elapsedSec = Math.max(0, (Date.now() - timerStart) / 1000);
+         const elapsedMin = Math.floor(elapsedSec / 60);
+         
+         pct = dur > 0 ? Math.min(100, Math.round((elapsedSec / dur) * 100)) : 100;
+         progText = `${elapsedMin} min / ${totalMin} min`;
+         
+         if (idx + 1 < actions.length) {
+             const nextAction = actions[idx+1];
+             nextStep = `${nextAction.switchName||'Switch'} ${nextAction.state}`;
+             nextSub = `After ${totalMin} min`;
+         } else {
+             const revertState = curAction.state === "ON" ? "OFF" : "ON";
+             nextStep = `${curAction.switchName||'Switch'} ${revertState}`;
+             nextSub = `After ${totalMin} min`;
+         }
+      } else {
+         pct = actions.length > 0 ? Math.round((idx / actions.length) * 100) : 0;
+         if (rt.state === "IDLE" || rt.state === "COMPLETED") {
+             pct = rt.state === "COMPLETED" ? 100 : 0;
+             curSub = rt.state === "COMPLETED" ? "Finished cycle" : "Waiting for start";
+         } else if (rt.state === "BUFFER") {
+             curSub = "Waiting for buffer";
+         } else {
+             curSub = `Action ${idx+1}: ${curAction.switchName||'Switch'} ${curAction.state}`;
+         }
+      }
+    }
+    
+    $("#irr-cur-state-sub").textContent = curSub;
+    $("#irr-progress-pct").textContent = pct + "%";
+    $("#irr-progress-bar").style.width = pct + "%";
+    $("#irr-progress-text").textContent = progText;
+    $("#irr-next-step").textContent = nextStep;
+    $("#irr-next-step-sub").textContent = nextSub;
+
     const toggle = $("#irr-status-toggle");
     toggle.checked = auto.status === "ON";
+    $(".toggle-text-on").textContent = auto.status === "ON" ? "ON" : "OFF";
     toggle.onchange = () => socket.emit("toggle_automation", { id: auto.id, status: toggle.checked ? "ON" : "OFF" });
 
     // Init

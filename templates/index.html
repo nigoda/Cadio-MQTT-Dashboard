@@ -170,10 +170,37 @@
                         </div>
                         <!-- State summary bar -->
                         <div class="irr-state-bar">
-                            <div class="irr-state-cell"><span class="irr-label">Current State</span><span id="irr-cur-state" class="irr-state-value"></span></div>
-                            <div class="irr-state-cell"><span class="irr-label">Progress</span><div id="irr-progress-wrap" class="irr-progress-wrap"><div id="irr-progress-bar" class="irr-progress-bar"></div></div><span id="irr-progress-text" class="irr-progress-text"></span></div>
-                            <div class="irr-state-cell"><span class="irr-label">Next Step</span><span id="irr-next-step" class="irr-state-value"></span></div>
-                            <div class="irr-state-cell"><span class="irr-label">Status</span><label class="ha-toggle" id="irr-toggle-wrap"><input type="checkbox" id="irr-status-toggle"><span class="ha-toggle-track"></span><span class="ha-toggle-thumb"></span></label></div>
+                            <div class="irr-state-cell">
+                                <div class="irr-cell-content">
+                                    <span class="irr-label">Current State</span>
+                                    <span id="irr-cur-state" class="irr-state-value" style="color:var(--ha-primary)"></span>
+                                    <span id="irr-cur-state-sub" class="irr-cell-sub"></span>
+                                </div>
+                                <div class="irr-cell-icon blue-bg"><span class="material-symbols-outlined">polyline</span></div>
+                            </div>
+                            <div class="irr-state-cell">
+                                <span class="irr-label">Progress</span>
+                                <span id="irr-progress-pct" class="irr-progress-pct">0%</span>
+                                <div id="irr-progress-wrap" class="irr-progress-wrap"><div id="irr-progress-bar" class="irr-progress-bar"></div></div>
+                                <span id="irr-progress-text" class="irr-cell-sub"></span>
+                            </div>
+                            <div class="irr-state-cell">
+                                <div class="irr-cell-content">
+                                    <span class="irr-label">Next Step</span>
+                                    <span id="irr-next-step" class="irr-state-value"></span>
+                                    <span id="irr-next-step-sub" class="irr-cell-sub"></span>
+                                </div>
+                                <div class="irr-cell-icon green-bg"><span class="material-symbols-outlined">play_arrow</span></div>
+                            </div>
+                            <div class="irr-state-cell" style="justify-content:center;">
+                                <span class="irr-label" style="margin-bottom:2px">Status</span>
+                                <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap">
+                                    <input type="checkbox" id="irr-status-toggle">
+                                    <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
+                                    <span class="ha-toggle-thumb"></span>
+                                </label>
+                                <span class="irr-cell-sub" style="margin-top:2px">Automation Enabled</span>
+                            </div>
                         </div>
                         <!-- Sections grid -->
                         <div class="irr-sections-grid">
