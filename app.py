@@ -548,7 +548,46 @@ def engine_tick(auto):
             _emit_auto_update(auto)
         return
 
-    # Priority 2: ERROR state — only RESET or OFF can exit
+    # Priority 2: User Pause
+    if auto.get("isPaused"):
+        if state != "PAUSED_USER" and state != "IDLE" and state != "ERROR":
+            rt["prePauseState"] = state
+            # freeze timers
+            if "timerStart" in rt and rt["timerStart"]:
+                elapsed = now - rt["timerStart"]
+                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed)
+                rt["timerStart"] = None
+            if "bufferStart" in rt and rt["bufferStart"]:
+                elapsed = now - rt["bufferStart"]
+                rt["remainingBuffer"] = max(0, auto.get("bufferTime", BUFFER_SECONDS) - elapsed)
+                rt["bufferStart"] = None
+            if "verifyStart" in rt and rt["verifyStart"]:
+                elapsed = now - rt["verifyStart"]
+                rt["remainingVerify"] = max(0, VERIFY_TIMEOUT - elapsed)
+                rt["verifyStart"] = None
+                
+            rt["state"] = "PAUSED_USER"
+            _auto_log(auto_id, "User paused the automation")
+            _emit_auto_update(auto)
+        return
+
+    # Priority 3: User Resume
+    if not auto.get("isPaused") and state == "PAUSED_USER":
+        rt["state"] = rt.get("prePauseState", "IDLE")
+        # resume timers
+        if "remainingTime" in rt and rt["remainingTime"] is not None:
+            rt["timerStart"] = now
+        if "remainingBuffer" in rt and rt["remainingBuffer"] is not None:
+            rt["bufferStart"] = now - (auto.get("bufferTime", BUFFER_SECONDS) - rt["remainingBuffer"])
+            del rt["remainingBuffer"]
+        if "remainingVerify" in rt and rt["remainingVerify"] is not None:
+            rt["verifyStart"] = now - (VERIFY_TIMEOUT - rt["remainingVerify"])
+            del rt["remainingVerify"]
+        _auto_log(auto_id, f"User resumed → {rt['state']}")
+        _emit_auto_update(auto)
+        return
+
+    # Priority 4: ERROR state — only RESET or OFF can exit
     if state == "ERROR":
         return
 
@@ -566,6 +605,7 @@ def engine_tick(auto):
         sched = check_schedule(auto)
         if cond and sched:
             rt["state"] = "INIT_SET"
+            rt["retryCount"] = 0
             _auto_log(auto_id, "Condition satisfied + Schedule active → INIT_SET")
             _emit_auto_update(auto)
         return
@@ -575,7 +615,6 @@ def engine_tick(auto):
         for item in inits:
             _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
         rt["verifyStart"] = now
-        rt["retryCount"] = 0
         rt["state"] = "INIT_VERIFY"
         _auto_log(auto_id, "Initialization commands sent → INIT_VERIFY")
         _emit_auto_update(auto)
@@ -585,6 +624,7 @@ def engine_tick(auto):
         inits = auto.get("initialization", [])
         if not inits or _verify_switches(inits, auto):
             rt["state"] = "ACTION_SET"
+            rt["retryCount"] = 0
             rt["currentActionIndex"] = 0
             _auto_log(auto_id, "Initialization verified → ACTION_SET")
             _emit_auto_update(auto)
@@ -611,7 +651,6 @@ def engine_tick(auto):
         action = actions[idx]
         _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
         rt["verifyStart"] = now
-        rt["retryCount"] = 0
         rt["state"] = "ACTION_VERIFY"
         _auto_log(auto_id, f"Action {idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
         _emit_auto_update(auto)
@@ -667,10 +706,22 @@ def engine_tick(auto):
             idx = rt.get("currentActionIndex", 0)
             if idx + 1 < len(actions):
                 rt["state"] = "OVERLAP_NEXT_SET"
+                rt["retryCount"] = 0
                 _auto_log(auto_id, f"Action {idx+1} timer done → OVERLAP_NEXT_SET")
             else:
-                rt["state"] = "ACTION_REVERT"
-                _auto_log(auto_id, f"Action {idx+1} timer done → ACTION_REVERT")
+                # We reached the end. Can we loop?
+                cond = evaluate_condition(auto)
+                sched = check_schedule(auto)
+                if cond and sched and len(actions) > 1:
+                    rt["loopingToFirst"] = True
+                    rt["state"] = "OVERLAP_NEXT_SET"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Action {idx+1} timer done → Looping to Action 1")
+                else:
+                    rt["loopingToFirst"] = False
+                    rt["state"] = "ACTION_REVERT"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Action {idx+1} timer done → ACTION_REVERT")
             _emit_auto_update(auto)
             return
         # State enforcement: ensure switch is still in expected state
@@ -686,11 +737,17 @@ def engine_tick(auto):
     if state == "OVERLAP_NEXT_SET":
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
-        next_idx = idx + 1
+        next_idx = (idx + 1) % len(actions)
+        
+        if next_idx == 0 and rt.get("loopingToFirst"):
+            inits = auto.get("initialization", [])
+            for item in inits:
+                _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
+            _auto_log(auto_id, "Looping: Initialization commands sent")
+
         action = actions[next_idx]
         _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
         rt["verifyStart"] = now
-        rt["retryCount"] = 0
         rt["state"] = "OVERLAP_NEXT_VERIFY"
         _auto_log(auto_id, f"Overlap Action {next_idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
         _emit_auto_update(auto)
@@ -699,9 +756,15 @@ def engine_tick(auto):
     if state == "OVERLAP_NEXT_VERIFY":
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
-        next_idx = idx + 1
+        next_idx = (idx + 1) % len(actions)
         action = actions[next_idx]
-        if _verify_switches([action], auto):
+        
+        switches_to_verify = [action]
+        if next_idx == 0 and rt.get("loopingToFirst"):
+            inits = auto.get("initialization", [])
+            switches_to_verify.extend(inits)
+            
+        if _verify_switches(switches_to_verify, auto):
             rt["bufferStart"] = now
             rt["state"] = "BUFFER"
             _auto_log(auto_id, f"Overlap Action {next_idx+1} verified → BUFFER")
@@ -722,6 +785,7 @@ def engine_tick(auto):
         buffer_time = auto.get("bufferTime", BUFFER_SECONDS)
         if now - (rt.get("bufferStart") or now) >= buffer_time:
             rt["state"] = "ACTION_REVERT"
+            rt["retryCount"] = 0
             _auto_log(auto_id, f"Buffer ({buffer_time}s) done → ACTION_REVERT")
             _emit_auto_update(auto)
         return
@@ -736,7 +800,6 @@ def engine_tick(auto):
             _mqtt_set_switch(action.get("switchCmdTopic", ""), revert_state)
             _auto_log(auto_id, f"Action {idx+1}: Reverting {action.get('switchName','')} → {revert_state}")
         rt["verifyStart"] = now
-        rt["retryCount"] = 0
         rt["state"] = "ACTION_VERIFY_REVERT"
         _emit_auto_update(auto)
         return
@@ -747,7 +810,17 @@ def engine_tick(auto):
         idx = rt.get("currentActionIndex", 0)
         
         def _finish_revert():
-            if idx + 1 < len(actions):
+            if rt.get("loopingToFirst"):
+                rt["loopingToFirst"] = False
+                next_idx = 0
+                rt["currentActionIndex"] = next_idx
+                duration = actions[next_idx].get("duration", 0)
+                rt["timerStart"] = now
+                rt["remainingTime"] = duration
+                rt["state"] = "ACTION_RUN"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, f"Looped to Action 1 → ACTION_RUN ({duration}s)")
+            elif idx + 1 < len(actions):
                 # Make-Before-Break finished. Advance to next action and start its timer.
                 next_idx = idx + 1
                 rt["currentActionIndex"] = next_idx
@@ -755,6 +828,7 @@ def engine_tick(auto):
                 rt["timerStart"] = now
                 rt["remainingTime"] = duration
                 rt["state"] = "ACTION_RUN"
+                rt["retryCount"] = 0
                 _auto_log(auto_id, f"Advanced to Action {next_idx+1} → ACTION_RUN ({duration}s)")
             else:
                 rt["state"] = "COMPLETED"
@@ -911,6 +985,16 @@ def handle_update_automation(data):
             auto[key] = data[key]
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")
     _emit_auto_update(auto)
+
+
+@socketio.on("pause_automation")
+def handle_pause_automation(data):
+    auto_id = data.get("id")
+    is_paused = data.get("isPaused", False)
+    if auto_id in automations:
+        automations[auto_id]["isPaused"] = is_paused
+        _emit_auto_update(automations[auto_id])
+        start_engine()
 
 
 @socketio.on("toggle_automation")

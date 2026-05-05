@@ -158,7 +158,12 @@
                         <!-- Header -->
                         <div class="irr-header">
                             <div class="irr-header-left">
-                                <h2 id="irr-detail-name"></h2>
+                                <div style="display:flex;align-items:center;gap:12px;">
+                                    <h2 id="irr-detail-name"></h2>
+                                    <button id="irr-btn-playpause" style="display:none;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:none;background:var(--ha-primary);color:white;cursor:pointer;transition:transform 0.1s;">
+                                        <span class="material-symbols-outlined" id="irr-icon-playpause" style="font-size:18px;">pause</span>
+                                    </button>
+                                </div>
                                 <span id="irr-detail-desc" class="irr-desc"></span>
                             </div>
                             <div class="irr-header-right">
@@ -194,7 +199,7 @@
                             </div>
                             <div class="irr-state-cell" style="justify-content:center;">
                                 <span class="irr-label" style="margin-bottom:2px">Status</span>
-                                <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap">
+                                <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap" style="margin: 0 12px;">
                                     <input type="checkbox" id="irr-status-toggle">
                                     <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
                                     <span class="ha-toggle-thumb"></span>
@@ -241,25 +246,6 @@
                     <div id="auto-f-cond" class="irr-form-list"></div>
                     <button id="auto-f-cond-add" class="ha-btn-text">+ Add Condition</button>
 
-                    <h3 class="irr-form-heading">Schedule</h3>
-                    <div class="irr-day-picker" id="auto-f-days"></div>
-                    <div class="irr-form-row" style="margin-top:12px; margin-bottom: 4px;">
-                        <label class="ha-checkbox-label" style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
-                            <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
-                        </label>
-                    </div>
-                    <div class="irr-time-range">
-                        <div class="ha-field"><input type="time" id="auto-f-start" placeholder=" "><label>Start Time</label></div>
-                        <span style="padding-top:12px">→</span>
-                        <div class="ha-field"><input type="time" id="auto-f-end" placeholder=" "><label>End Time</label></div>
-                    </div>
-                    <div class="irr-form-row">
-                        <div class="ha-field" style="max-width:350px; margin-top:8px">
-                            <select id="auto-f-tz" placeholder=" "></select>
-                            <label>Timezone (Local offset)</label>
-                        </div>
-                    </div>
-
                     <h3 class="irr-form-heading">Actions (Sequential)</h3>
                     <div id="auto-f-actions" class="irr-form-list"></div>
                     <button id="auto-f-actions-add" class="ha-btn-text">+ Add Action</button>
@@ -270,9 +256,36 @@
                         <span style="font-size:12px;color:var(--ha-text-secondary);padding-top:8px">Wait time between actions after revert</span>
                     </div>
 
-                    <h3 class="irr-form-heading">Error State (Fail-Safe)</h3>
-                    <div id="auto-f-error" class="irr-form-list"></div>
-                    <button id="auto-f-error-add" class="ha-btn-text">+ Add Switch</button>
+                    <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+                        <!-- Left Column: Scheduler -->
+                        <div style="flex: 1; min-width: 250px;">
+                            <h3 class="irr-form-heading">Scheduler</h3>
+                            <div class="irr-day-picker" id="auto-f-days"></div>
+                            <div class="irr-form-row" style="margin-top:12px; margin-bottom: 16px;">
+                                <label class="ha-checkbox-label" style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
+                                    <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
+                                </label>
+                            </div>
+                            <div class="irr-time-range">
+                                <div class="ha-field"><input type="time" id="auto-f-start" placeholder=" "><label>Start Time</label></div>
+                                <span style="padding-top:12px">→</span>
+                                <div class="ha-field"><input type="time" id="auto-f-end" placeholder=" "><label>End Time</label></div>
+                            </div>
+                            <div class="irr-form-row">
+                                <div class="ha-field" style="max-width:350px; margin-top:8px">
+                                    <select id="auto-f-tz" placeholder=" "></select>
+                                    <label>Timezone (Local offset)</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Error State -->
+                        <div style="flex: 1; min-width: 250px;">
+                            <h3 class="irr-form-heading">Error State (Fail-Safe)</h3>
+                            <div id="auto-f-error" class="irr-form-list"></div>
+                            <button id="auto-f-error-add" class="ha-btn-text">+ Add Switch</button>
+                        </div>
+                    </div>
                 </div>
                 <div class="irr-modal-footer">
                     <button id="auto-modal-cancel" class="ha-btn-secondary" style="width:auto;padding:10px 24px">Cancel</button>

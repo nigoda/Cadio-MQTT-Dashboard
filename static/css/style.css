@@ -89,7 +89,7 @@ body {
     position: relative;
     margin-bottom: 16px;
 }
-.ha-field input {
+.ha-field input, .ha-field select {
     width: 100%;
     padding: 16px 12px 6px;
     font-size: 14px;
@@ -101,19 +101,31 @@ body {
     outline: none;
     transition: border-color var(--ha-transition);
 }
-.ha-field input:focus { border-color: var(--ha-primary); }
+.ha-field select { padding-right: 24px; appearance: none; }
+.ha-field input:focus, .ha-field select:focus { border-color: var(--ha-primary); }
 .ha-field label {
     position: absolute; left: 12px; top: 12px;
     color: var(--ha-text-secondary);
     font-size: 14px;
     pointer-events: none;
     transition: all var(--ha-transition);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: calc(100% - 24px);
+    background-color: transparent;
+    padding: 0 4px;
+    margin-left: -4px;
+    border-radius: 4px;
 }
 .ha-field input:focus + label,
 .ha-field input:not(:placeholder-shown) + label,
-.ha-field input[readonly] + label {
-    top: 4px; font-size: 10px;
+.ha-field input[readonly] + label,
+.ha-field select + label,
+.ha-field input[type="number"] + label {
+    top: -6px; font-size: 11px;
     color: var(--ha-primary);
+    background-color: var(--ha-surface);
 }
 
 /* Buttons */
@@ -1185,10 +1197,11 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-state-cell:nth-child(2) { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; }
 
 /* Custom toggle */
-.irr-custom-toggle .ha-toggle-track { width: 60px; height: 28px; border-radius: 14px; position: relative; }
+.irr-custom-toggle { width: 60px !important; height: 28px !important; display: inline-block; vertical-align: middle; }
+.irr-custom-toggle .ha-toggle-track { width: 100% !important; height: 100% !important; border-radius: 14px; position: relative; }
 .irr-custom-toggle input:checked + .ha-toggle-track { background: #1b8a34; }
-.irr-custom-toggle .ha-toggle-thumb { width: 22px; height: 22px; left: 3px; top: 3px; }
-.irr-custom-toggle input:checked ~ .ha-toggle-thumb { left: calc(100% - 25px); }
+.irr-custom-toggle .ha-toggle-thumb { width: 22px !important; height: 22px !important; left: 3px !important; top: 3px !important; transform: none !important; }
+.irr-custom-toggle input:checked ~ .ha-toggle-thumb { left: calc(100% - 25px) !important; transform: none !important; }
 .irr-custom-toggle .toggle-text-on { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 700; color: white; opacity: 0; transition: opacity .2s; }
 .irr-custom-toggle input:checked + .ha-toggle-track .toggle-text-on { opacity: 1; }
 

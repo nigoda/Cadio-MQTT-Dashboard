@@ -61,9 +61,10 @@
     if (auto.status !== "ON") return "Off";
     const map = { IDLE:"Off", WAIT_CONDITION:"Waiting", INIT_SET:"Initializing", INIT_VERIFY:"Verifying Init",
       ACTION_SET:"Setting Action", ACTION_VERIFY:"Verifying", ACTION_RUN:"Running",
-      OVERLAP_NEXT_SET:"Setting Next", OVERLAP_NEXT_VERIFY:"Verifying Next",
+      OVERLAP_NEXT_SET: auto.runtime?.loopingToFirst ? "Init & Setting Next" : "Setting Next", 
+      OVERLAP_NEXT_VERIFY: auto.runtime?.loopingToFirst ? "Verify Init & Next" : "Verifying Next",
       ACTION_REVERT:"Reverting", ACTION_VERIFY_REVERT:"Verifying Revert", BUFFER:"Buffer",
-      PAUSED_CONDITION:"Paused (Condition)", PAUSED_SCHEDULE:"Paused (Schedule)",
+      PAUSED_CONDITION:"Paused (Condition)", PAUSED_SCHEDULE:"Paused (Schedule)", PAUSED_USER:"Paused (User)",
       COMPLETED:"Completed", ERROR_SET:"Error Recovery", ERROR_VERIFY:"Error Verify", ERROR:"Error" };
     return map[rs] || rs;
   }
@@ -127,10 +128,17 @@
 
     autoList.querySelectorAll(".irr-auto-item").forEach(el => {
       el.addEventListener("click", (e) => {
-        if (e.target.closest(".ha-toggle")) return;
+        if (e.target.closest(".ha-toggle") || e.target.closest(".irr-list-playpause")) return;
         _selectedId = el.dataset.id;
         renderList();
         renderDetail();
+      });
+    });
+    autoList.querySelectorAll(".irr-list-playpause").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const a = _autos[btn.dataset.id];
+        if (a) socket.emit("pause_automation", { id: a.id, isPaused: !a.isPaused });
       });
     });
     autoList.querySelectorAll(".ha-toggle input").forEach(inp => {
@@ -166,14 +174,21 @@
     let nextSub = "—";
 
     if (actions.length > 0) {
+      const bufTime = auto.bufferTime ?? 5;
       let totalAutoSec = 0;
       for (let i = 0; i < actions.length; i++) {
           totalAutoSec += (actions[i].duration || 0);
+      }
+      if (actions.length > 1) {
+          totalAutoSec += actions.length * bufTime;
       }
       
       let elapsedPreviousSec = 0;
       for (let i = 0; i < idx && i < actions.length; i++) {
           elapsedPreviousSec += (actions[i].duration || 0);
+      }
+      if (idx > 0) {
+          elapsedPreviousSec += idx * bufTime;
       }
 
       const curAction = idx < actions.length ? actions[idx] : actions[actions.length - 1];
@@ -194,16 +209,21 @@
              const nextAction = actions[idx+1];
              nextStep = `${nextAction.switchName||'Switch'} ${nextAction.state}`;
          } else {
-             const revertState = curAction.state === "ON" ? "OFF" : "ON";
-             nextStep = `${curAction.switchName||'Switch'} ${revertState}`;
+             // If looping, next step is Action 1
+             if (rt.loopingToFirst || (rt.state === "ACTION_RUN" && !rt.pauseReason)) {
+                 const nextAction = actions[0];
+                 nextStep = `Initialization & ${nextAction.switchName||'Switch'} ${nextAction.state}`;
+             } else {
+                 const revertState = curAction.state === "ON" ? "OFF" : "ON";
+                 nextStep = `${curAction.switchName||'Switch'} ${revertState}`;
+             }
          }
          nextSub = `In ${formatTime(remainingCurSec)}`;
          
       } else if (rt.state === "BUFFER") {
-         elapsedCurSec = dur;
-         const bufTime = auto.bufferTime || 5;
          const bufStart = rt.bufferStart || (Date.now() / 1000);
          const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
+         elapsedCurSec = dur + bufElapsed;
          
          curSub = `Waiting for buffer`;
          nextSub = `In ${formatTime(Math.max(0, bufTime - bufElapsed))}`;
@@ -213,8 +233,15 @@
          curSub = rt.state === "COMPLETED" ? "Finished cycle" : "Waiting for start";
          if (rt.state === "COMPLETED") elapsedPreviousSec = totalAutoSec;
       } else {
-         if (rt.state.includes("OVERLAP") || rt.state.includes("REVERT")) elapsedCurSec = dur;
+         if (rt.state.includes("OVERLAP")) {
+             elapsedCurSec = dur; 
+         } else if (rt.state.includes("REVERT")) {
+             elapsedCurSec = idx < actions.length - 1 || rt.loopingToFirst ? dur + bufTime : dur;
+         }
          curSub = `Action ${Math.min(idx+1, actions.length)}: ${curAction.switchName||'Switch'} ${curAction.state}`;
+         if (rt.loopingToFirst && rt.state.includes("OVERLAP")) {
+             curSub = `Looping: Initialization & Action 1`;
+         }
       }
       
       const totalElapsedSec = elapsedPreviousSec + elapsedCurSec;
@@ -322,6 +349,26 @@
          }
       });
     }
+
+    // Also update initialization live state text if visible
+    const initBody = $("#irr-init-body");
+    if (initBody) {
+      const rows = initBody.querySelectorAll(".irr-init-live");
+      rows.forEach((span, i) => {
+         if(inits[i]) {
+            const topic = inits[i].switchStateTopic || inits[i].switchCmdTopic || "";
+            let lState = "Unknown";
+            if (window._dashboardEntities) {
+                for (const eid in window._dashboardEntities) {
+                    const e = window._dashboardEntities[eid];
+                    if (e.stateTopic === topic || e.cmdTopic === topic) { lState = (e.state||"Unknown").toUpperCase(); break; }
+                }
+            }
+            const lColor = lState === "ON" ? "color:var(--ha-state-on)" : (lState === "OFF" ? "color:var(--ha-state-off)" : "");
+            span.innerHTML = `(Live: <span style="font-weight:600; ${lColor}">${lState}</span>)`;
+         }
+      });
+    }
   }
 
   // ─── Render Detail ───
@@ -338,6 +385,19 @@
 
     // Header
     $("#irr-detail-name").textContent = auto.name;
+    const btnPlayPause = $("#irr-btn-playpause");
+    const iconPlayPause = $("#irr-icon-playpause");
+    if (auto.status === "ON") {
+        btnPlayPause.style.display = "flex";
+        iconPlayPause.textContent = auto.isPaused ? "play_arrow" : "pause";
+        btnPlayPause.style.background = auto.isPaused ? "var(--ha-warning)" : "var(--ha-primary)";
+        btnPlayPause.onclick = () => {
+            socket.emit("pause_automation", { id: auto.id, isPaused: !auto.isPaused });
+        };
+    } else {
+        btnPlayPause.style.display = "none";
+    }
+    
     $("#irr-detail-desc").textContent = auto.description || "";
     const badge = $("#irr-detail-badge");
     badge.textContent = stateLabel(auto);
@@ -354,7 +414,7 @@
     // Init
     const initBody = $("#irr-init-body");
     const inits = auto.initialization || [];
-    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName||i.switchCmdTopic||"Switch")}</span><span class="irr-sw-state ${i.state==='ON'?'on':'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName||i.switchCmdTopic||"Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state==='ON'?'on':'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
 
     // Condition
     const condBody = $("#irr-cond-body");
