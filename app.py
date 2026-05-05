@@ -955,54 +955,72 @@ def _ai_scheduler_loop():
         time.sleep(60)  # check every minute
 
 
-def _run_ai_for_all_automations():
-    """Run the AI agent for every automation that has ai_enabled=True."""
+def _run_ai_for_automation(auto_id):
+    """Helper to run the AI engine for a single automation."""
     try:
         from ai_agent import get_7_day_forecast, build_automation_context, get_ai_schedule_decision
     except ImportError:
         logging.error("[AI-SCHEDULER] Could not import ai_agent module")
         return
 
-    for auto_id, auto in automations.items():
-        sched = auto.get("schedule", {})
-        if not sched.get("ai_enabled"):
-            continue
+    auto = automations.get(auto_id)
+    if not auto:
+        return
 
-        lat = sched.get("lat")
-        lon = sched.get("lon")
-        if not lat or not lon:
-            _auto_log(auto_id, "AI skipped: no Lat/Lon configured", level="warn")
-            continue
+    sched = auto.get("schedule", {})
+    if not sched.get("ai_enabled"):
+        return
 
-        logging.info(f"[AI-SCHEDULER] Running AI for '{auto.get('name', auto_id)}'")
-        _auto_log(auto_id, "🤖 AI Agent running...")
+    lat = sched.get("lat")
+    lon = sched.get("lon")
+    if not lat or not lon:
+        _auto_log(auto_id, "AI skipped: no Lat/Lon configured", level="warn")
+        return
 
-        forecast = get_7_day_forecast(lat=lat, lon=lon)
-        if not forecast:
-            _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
-            continue
+    logging.info(f"[AI-SCHEDULER] Running AI for '{auto.get('name', auto_id)}'")
+    _auto_log(auto_id, "🤖 AI Agent running...")
+    _emit_auto_update(auto) # force UI update to show log
 
-        ctx = build_automation_context(auto_id, auto)
-        decision = get_ai_schedule_decision(forecast, ctx)
-        if not decision:
-            _auto_log(auto_id, "AI failed: model returned no decision", level="error")
-            continue
+    forecast = get_7_day_forecast(lat=lat, lon=lon)
+    if not forecast:
+        _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
+        return
 
-        new_days = decision.get("selected_days", [])
-        reasoning = decision.get("reasoning", "")
-        old_days = sched.get("days", [])
+    ctx = build_automation_context(auto_id, auto)
+    decision = get_ai_schedule_decision(forecast, ctx)
+    if not decision:
+        _auto_log(auto_id, "AI failed: model returned no decision", level="error")
+        return
 
-        sched["days"] = new_days
-        _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
-        _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
-        logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
+    new_days = decision.get("selected_days", [])
+    reasoning = decision.get("reasoning", "")
+    old_days = sched.get("days", [])
 
-        _emit_auto_update(auto)
+    sched["days"] = new_days
+    _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
+    _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
+    logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
+
+    _emit_auto_update(auto)
+
+
+def _run_ai_for_all_automations():
+    """Run the AI agent for every automation that has ai_enabled=True."""
+    for auto_id in automations.keys():
+        _run_ai_for_automation(auto_id)
 
 
 # ---------------------------------------------------------------------------
 # Automation SocketIO events
 # ---------------------------------------------------------------------------
+
+@socketio.on("run_ai_now")
+def handle_run_ai_now(data):
+    """Immediately trigger the AI for a specific automation (called from UI)."""
+    auto_id = data.get("id")
+    if auto_id in automations:
+        # Run it in a background task so it doesn't block the socket thread
+        socketio.start_background_task(_run_ai_for_automation, auto_id)
 
 @socketio.on("get_automations")
 def handle_get_automations():
@@ -1055,6 +1073,11 @@ def handle_update_automation(data):
             auto[key] = data[key]
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")
     _emit_auto_update(auto)
+    
+    # Run AI immediately if enabled upon save
+    sched = auto.get("schedule", {})
+    if sched.get("ai_enabled"):
+        socketio.start_background_task(_run_ai_for_automation, auto_id)
 
 
 @socketio.on("pause_automation")

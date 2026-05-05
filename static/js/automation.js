@@ -11,8 +11,7 @@
   let _autos = {};       // id -> automation
   let _selectedId = null;
   let _editId = null;    // null = create, string = edit
-  let _aiLat = null;
-  let _aiLon = null;
+  let _aiLatLonTargetId = null;
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   // DOM
@@ -449,10 +448,54 @@
     const sched = auto.schedule || {};
     const days = sched.days || [];
     const is24Hr = !sched.startTime && !sched.endTime;
-    schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap">
-      <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d) ? 'active' : ''}">${d}</span>`).join("")}</div></div>
+    const aiEnabled = sched.ai_enabled || false;
+
+    const schedHeading = $("#main-sched-heading");
+    if (schedHeading) schedHeading.textContent = aiEnabled ? "🤖 AI Scheduler" : "Scheduler";
+
+    schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
+      <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px; ${aiEnabled ? 'opacity:0.4;pointer-events:none;' : ''}">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d) ? 'active' : ''}">${d}</span>`).join("")}</div></div>
       <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${is24Hr ? "24-Hour Active" : `${sched.startTime || "—"} → ${sched.endTime || "—"}`}</div></div>
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 14px; font-weight: bold; color: var(--ha-primary, #03a9f4); letter-spacing: 0.5px;">🤖 AI</span>
+        <label class="ha-toggle irr-custom-toggle" style="cursor: pointer; margin: 0;" title="Enable AI Dynamic Scheduling">
+            <input type="checkbox" id="irr-main-ai-toggle" ${aiEnabled ? 'checked' : ''}>
+            <span class="ha-toggle-track"></span>
+            <span class="ha-toggle-thumb"></span>
+        </label>
+      </div>
     </div>`;
+
+    // Use event delegation on the parent body to guarantee the click is captured regardless of CSS
+    schedBody.onclick = (e) => {
+      const toggleWrap = e.target.closest(".ha-toggle");
+      if (toggleWrap && toggleWrap.querySelector("#irr-main-ai-toggle")) {
+        const toggleInput = toggleWrap.querySelector("#irr-main-ai-toggle");
+        setTimeout(() => {
+          try {
+            const isChecked = toggleInput.checked;
+            const lat = sched.lat;
+            const lon = sched.lon;
+            const isMissing = !lat || !lon || isNaN(parseFloat(lat)) || isNaN(parseFloat(lon));
+            
+            if (isChecked && isMissing) {
+              // Revert toggle visually
+              toggleInput.checked = false;
+              // Simple, foolproof browser alert just like the Name Validation
+              alert("Location is missing!\n\nPlease click the 'Edit' button and enter your Latitude and Longitude to enable the AI Agronomist.");
+            } else if (isChecked && !isMissing) {
+              auto.schedule.ai_enabled = true;
+              socket.emit("update_automation", auto);
+            } else if (!isChecked) {
+              auto.schedule.ai_enabled = false;
+              socket.emit("update_automation", auto);
+            }
+          } catch (err) {
+            console.error("AI Toggle Error:", err);
+          }
+        }, 50);
+      }
+    };
 
     updateLivePanels();
 
@@ -489,30 +532,8 @@
     $("#auto-f-start").value = sStart;
     $("#auto-f-end").value = sEnd;
 
-    // AI toggle state
-    const cbAi = $("#auto-f-ai");
-    _aiLat = auto?.schedule?.lat || null;
-    _aiLon = auto?.schedule?.lon || null;
-    if (cbAi) {
-      cbAi.checked = !!auto?.schedule?.ai_enabled;
-      cbAi.onchange = (e) => {
-        if (e.target.checked) {
-          // Validate lat/lon before enabling
-          if (!_aiLat || !_aiLon) {
-            e.target.checked = false;
-            $("#ai-f-lat").value = _aiLat || "";
-            $("#ai-f-lon").value = _aiLon || "";
-            $("#ai-latlon-overlay").classList.remove("hidden");
-            return;
-          }
-          applyAiUiState(true);
-        } else {
-          applyAiUiState(false);
-        }
-      };
-      // trigger initial state
-      if (cbAi.checked) applyAiUiState(true);
-    }
+    $("#auto-f-lat").value = auto?.schedule?.lat || "";
+    $("#auto-f-lon").value = auto?.schedule?.lon || "";
 
     const cb24 = $("#auto-f-24hr");
     if (cb24) {
@@ -616,17 +637,19 @@
       return { switchCmdTopic: sel?.value || "", switchStateTopic: opt?.dataset.state || "", switchName: opt?.dataset.name || "", state: r.querySelector(".f-state")?.value || "ON", duration: parseInt(r.querySelector(".f-duration")?.value || "0", 10) };
     });
 
-    const aiEnabled = $("#auto-f-ai")?.checked || false;
+    const editAuto = _editId ? _autos[_editId] : null;
     const schedObj = {
       days,
       startTime: $("#auto-f-start").value,
       endTime: $("#auto-f-end").value,
       utcOffset: parseInt($("#auto-f-tz").value, 10) || 0,
-      ai_enabled: aiEnabled
+      ai_enabled: editAuto?.schedule?.ai_enabled || false
     };
-    if (_aiLat && _aiLon) {
-      schedObj.lat = parseFloat(_aiLat);
-      schedObj.lon = parseFloat(_aiLon);
+    const latStr = $("#auto-f-lat").value;
+    const lonStr = $("#auto-f-lon").value;
+    if (latStr !== "" && lonStr !== "") {
+      schedObj.lat = parseFloat(latStr);
+      schedObj.lon = parseFloat(lonStr);
     }
     return {
       name, description: $("#auto-f-desc").value.trim(),
@@ -699,25 +722,6 @@
     if (data.connected) setTimeout(() => socket.emit("get_automations"), 1000);
   });
 
-  // ─── AI Helper: toggle UI state ───
-  function applyAiUiState(enabled) {
-    const heading = $("#auto-f-sched-heading");
-    const daysEl = $("#auto-f-days");
-    if (enabled) {
-      if (heading) heading.textContent = "\uD83E\uDD16 AI Scheduler";
-      daysEl?.querySelectorAll(".irr-day-btn").forEach(b => {
-        b.style.opacity = "0.4";
-        b.style.pointerEvents = "none";
-      });
-    } else {
-      if (heading) heading.textContent = "Scheduler";
-      daysEl?.querySelectorAll(".irr-day-btn").forEach(b => {
-        b.style.opacity = "1";
-        b.style.pointerEvents = "auto";
-      });
-    }
-  }
-
   // ─── AI Location Modal ───
   $("#ai-latlon-save")?.addEventListener("click", () => {
     const lat = parseFloat($("#ai-f-lat").value);
@@ -726,21 +730,27 @@
       alert("Please enter valid Latitude (-90 to 90) and Longitude (-180 to 180).");
       return;
     }
-    _aiLat = lat;
-    _aiLon = lon;
     $("#ai-latlon-overlay").classList.add("hidden");
-    // Now activate the AI toggle
-    const cbAi = $("#auto-f-ai");
-    if (cbAi) {
-      cbAi.checked = true;
-      applyAiUiState(true);
+
+    if (_aiLatLonTargetId && _autos[_aiLatLonTargetId]) {
+      const auto = _autos[_aiLatLonTargetId];
+      if (!auto.schedule) auto.schedule = {};
+      auto.schedule.lat = lat;
+      auto.schedule.lon = lon;
+      auto.schedule.ai_enabled = true;
+      socket.emit("update_automation", auto);
+      _aiLatLonTargetId = null;
     }
   });
   $("#ai-latlon-cancel")?.addEventListener("click", () => {
     $("#ai-latlon-overlay").classList.add("hidden");
+    _aiLatLonTargetId = null;
   });
   $("#ai-latlon-overlay")?.addEventListener("click", (e) => {
-    if (e.target === $("#ai-latlon-overlay")) $("#ai-latlon-overlay").classList.add("hidden");
+    if (e.target === $("#ai-latlon-overlay")) {
+      $("#ai-latlon-overlay").classList.add("hidden");
+      _aiLatLonTargetId = null;
+    }
   });
 
   // Start live timer loop

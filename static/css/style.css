@@ -594,6 +594,16 @@ body {
 }
 .ha-input-sm:focus { border-color: var(--ha-primary); }
 
+/* Remove number input spin buttons */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+input[type="number"] {
+    -moz-appearance: textfield;
+}
+
 /* Developer publish form */
 .ha-publish-form {
     padding: 16px;
