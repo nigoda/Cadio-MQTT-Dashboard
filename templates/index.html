@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,418 +8,528 @@
     <link rel="stylesheet" href="/static/css/style.css?v={{ cache_bust }}">
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script
+        src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
     <link rel="icon" type="image/png" href="/static/Logo.png">
 </head>
+
 <body>
 
-<!-- ===== Login Overlay ===== -->
-<div id="login-overlay" class="ha-login-overlay">
-    <div class="ha-login-card">
-        <div class="ha-login-icon">
-            <img src="/static/Logo.png" alt="Nivixsa" class="ha-logo-img">
+    <!-- ===== Login Overlay ===== -->
+    <div id="login-overlay" class="ha-login-overlay">
+        <div class="ha-login-card">
+            <div class="ha-login-icon">
+                <img src="/static/Logo.png" alt="Nivixsa" class="ha-logo-img">
+            </div>
+            <h1>Nivixsa</h1>
+            <p class="ha-login-subtitle">Log in to your smart home</p>
+            <form id="login-form">
+                <div class="ha-field">
+                    <input type="text" id="login-email" value="{{ mqtt_user }}" placeholder=" " required>
+                    <label>Email</label>
+                </div>
+                <div class="ha-field">
+                    <input type="password" id="login-password" placeholder=" " autofocus required>
+                    <label>Password</label>
+                </div>
+                <button type="submit" class="ha-btn-primary">Log In</button>
+            </form>
+            <p id="login-error" class="ha-error hidden"></p>
         </div>
-        <h1>Nivixsa</h1>
-        <p class="ha-login-subtitle">Log in to your smart home</p>
-        <form id="login-form">
-            <div class="ha-field">
-                <input type="text" id="login-email" value="{{ mqtt_user }}" placeholder=" " required>
-                <label>Email</label>
-            </div>
-            <div class="ha-field">
-                <input type="password" id="login-password" placeholder=" " autofocus required>
-                <label>Password</label>
-            </div>
-            <button type="submit" class="ha-btn-primary">Log In</button>
-        </form>
-        <p id="login-error" class="ha-error hidden"></p>
     </div>
-</div>
 
-<!-- ===== Main App ===== -->
-<div id="app" class="hidden ha-app">
+    <!-- ===== Main App ===== -->
+    <div id="app" class="hidden ha-app">
 
-    <!-- Sidebar -->
-    <aside id="ha-sidebar" class="ha-sidebar">
-        <div class="ha-sidebar-header">
-            <img src="/static/Logo.png" alt="Nivixsa" class="ha-sidebar-logo-img">
-            <span class="ha-sidebar-title">Nivixsa</span>
-        </div>
-        <nav class="ha-sidebar-nav">
-            <button class="ha-nav-item active" data-tab="overview">
-                <span class="material-symbols-outlined">dashboard</span>
-                <span>Overview</span>
-            </button>
-            <button class="ha-nav-item" data-tab="automations">
-                <span class="material-symbols-outlined">water_drop</span>
-                <span>Automations</span>
-            </button>
-            <button class="ha-nav-item" data-tab="lights">
-                <span class="material-symbols-outlined">lightbulb</span>
-                <span>Lights</span>
-            </button>
-            <button class="ha-nav-item" data-tab="switches">
-                <span class="material-symbols-outlined">toggle_on</span>
-                <span>Switches</span>
-            </button>
-            <button class="ha-nav-item" data-tab="sensors">
-                <span class="material-symbols-outlined">sensors</span>
-                <span>Sensors</span>
-            </button>
-            <button class="ha-nav-item" data-tab="history">
-                <span class="material-symbols-outlined">show_chart</span>
-                <span>History</span>
-            </button>
-            <button class="ha-nav-item" data-tab="log">
-                <span class="material-symbols-outlined">receipt_long</span>
-                <span>Logbook</span>
-            </button>
-            <button class="ha-nav-item" data-tab="developer">
-                <span class="material-symbols-outlined">code</span>
-                <span>Developer</span>
-            </button>
-            <button class="ha-nav-item" data-tab="api">
-                <span class="material-symbols-outlined">api</span>
-                <span>API Details</span>
-            </button>
-        </nav>
-        <div class="ha-sidebar-footer">
-            <div class="ha-connection-status">
-                <span id="status-indicator" class="ha-status-dot"></span>
-                <span id="status-text">Connecting…</span>
+        <!-- Sidebar -->
+        <aside id="ha-sidebar" class="ha-sidebar">
+            <div class="ha-sidebar-header">
+                <img src="/static/Logo.png" alt="Nivixsa" class="ha-sidebar-logo-img">
+                <span class="ha-sidebar-title">Nivixsa</span>
             </div>
-            <span id="device-count" class="ha-device-badge">0 entities</span>
-            <button id="btn-logout" class="ha-logout-btn">
-                <span class="material-symbols-outlined">logout</span>
-                <span>Log out</span>
-            </button>
-        </div>
-    </aside>
-
-    <!-- Sidebar overlay (mobile — tap to close) -->
-    <div id="sidebar-overlay" class="ha-sidebar-overlay"></div>
-
-    <!-- Mobile top bar -->
-    <header class="ha-mobile-bar">
-        <button id="sidebar-toggle" class="ha-icon-btn">
-            <span class="material-symbols-outlined">menu</span>
-        </button>
-        <span class="ha-mobile-title">Nivixsa</span>
-        <div>
-            <span id="status-indicator-mobile" class="ha-status-dot"></span>
-        </div>
-    </header>
-
-    <!-- Main content area -->
-    <main class="ha-main">
-
-        <!-- ===== Overview Tab ===== -->
-        <section id="tab-overview" class="ha-view active">
-            <div class="ha-view-header"><h1>Overview</h1></div>
-            <div id="status-badges" class="ha-badges-row"></div>
-            <div id="overview-devices" class="ha-masonry">
-                <div class="ha-card"><div class="ha-empty-row">Waiting for devices…</div></div>
-            </div>
-        </section>
-
-        <!-- ===== Automations Tab ===== -->
-        <section id="tab-automations" class="ha-view">
-            <div class="ha-view-header">
-                <h1>Automations</h1>
-                <button id="btn-add-automation" class="ha-btn-primary" style="width:auto;padding:8px 20px">
-                    <span class="material-symbols-outlined" style="font-size:18px;vertical-align:middle;margin-right:4px">add</span> Add New
+            <nav class="ha-sidebar-nav">
+                <button class="ha-nav-item active" data-tab="overview">
+                    <span class="material-symbols-outlined">dashboard</span>
+                    <span>Overview</span>
+                </button>
+                <button class="ha-nav-item" data-tab="automations">
+                    <span class="material-symbols-outlined">water_drop</span>
+                    <span>Automations</span>
+                </button>
+                <button class="ha-nav-item" data-tab="lights">
+                    <span class="material-symbols-outlined">lightbulb</span>
+                    <span>Lights</span>
+                </button>
+                <button class="ha-nav-item" data-tab="switches">
+                    <span class="material-symbols-outlined">toggle_on</span>
+                    <span>Switches</span>
+                </button>
+                <button class="ha-nav-item" data-tab="sensors">
+                    <span class="material-symbols-outlined">sensors</span>
+                    <span>Sensors</span>
+                </button>
+                <button class="ha-nav-item" data-tab="history">
+                    <span class="material-symbols-outlined">show_chart</span>
+                    <span>History</span>
+                </button>
+                <button class="ha-nav-item" data-tab="log">
+                    <span class="material-symbols-outlined">receipt_long</span>
+                    <span>Logbook</span>
+                </button>
+                <button class="ha-nav-item" data-tab="developer">
+                    <span class="material-symbols-outlined">code</span>
+                    <span>Developer</span>
+                </button>
+                <button class="ha-nav-item" data-tab="api">
+                    <span class="material-symbols-outlined">api</span>
+                    <span>API Details</span>
+                </button>
+            </nav>
+            <div class="ha-sidebar-footer">
+                <div class="ha-connection-status">
+                    <span id="status-indicator" class="ha-status-dot"></span>
+                    <span id="status-text">Connecting…</span>
+                </div>
+                <span id="device-count" class="ha-device-badge">0 entities</span>
+                <button id="btn-logout" class="ha-logout-btn">
+                    <span class="material-symbols-outlined">logout</span>
+                    <span>Log out</span>
                 </button>
             </div>
-            <div class="irr-workspace">
-                <!-- LEFT: Automation List -->
-                <div class="irr-list-panel">
-                    <div id="auto-list" class="irr-auto-list">
-                        <div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>
-                    </div>
-                    <!-- Controller Status -->
-                    <div class="irr-controller-status">
-                        <h4>Controller Status</h4>
-                        <div class="irr-ctrl-row"><span class="irr-ctrl-dot connected"></span> <span>Online</span></div>
-                        <div class="irr-ctrl-info"><span>Uptime</span><span id="irr-uptime">—</span></div>
-                        <div class="irr-ctrl-info"><span>IP Address</span><span id="irr-ip">—</span></div>
-                        <div class="irr-ctrl-info"><span>Firmware</span><span id="irr-fw">—</span></div>
-                    </div>
-                </div>
+        </aside>
 
-                <!-- CENTER: Automation Detail -->
-                <div class="irr-detail-panel" id="irr-detail-panel">
-                    <div class="irr-detail-empty">
-                        <span class="material-symbols-outlined" style="font-size:64px;color:var(--ha-text-disabled)">water_drop</span>
-                        <p>Select an automation from the list to view details</p>
-                    </div>
-                    <!-- Filled dynamically by JS -->
-                    <div id="irr-detail-content" class="hidden">
-                        <!-- Header -->
-                        <div class="irr-header">
-                            <div class="irr-header-left">
-                                <div style="display:flex;align-items:center;gap:12px;">
-                                    <h2 id="irr-detail-name"></h2>
-                                    <button id="irr-btn-playpause" style="display:none;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:none;background:var(--ha-primary);color:white;cursor:pointer;transition:transform 0.1s;">
-                                        <span class="material-symbols-outlined" id="irr-icon-playpause" style="font-size:18px;">pause</span>
-                                    </button>
-                                </div>
-                                <span id="irr-detail-desc" class="irr-desc"></span>
-                            </div>
-                            <div class="irr-header-right">
-                                <span id="irr-detail-badge" class="irr-status-badge"></span>
-                                <button id="irr-btn-reset" class="ha-btn-text"><span class="material-symbols-outlined" style="font-size:18px">restart_alt</span> Reset</button>
-                                <button id="irr-btn-edit" class="ha-btn-text"><span class="material-symbols-outlined" style="font-size:18px">edit</span> Edit</button>
-                                <button id="irr-btn-delete" class="irr-btn-danger"><span class="material-symbols-outlined" style="font-size:18px">delete</span> Delete</button>
-                            </div>
-                        </div>
-                        <!-- State summary bar -->
-                        <div class="irr-state-bar">
-                            <div class="irr-state-cell">
-                                <div class="irr-cell-content">
-                                    <span class="irr-label">Current State</span>
-                                    <span id="irr-cur-state" class="irr-state-value" style="color:var(--ha-primary)"></span>
-                                    <span id="irr-cur-state-sub" class="irr-cell-sub"></span>
-                                </div>
-                                <div class="irr-cell-icon blue-bg"><span class="material-symbols-outlined">polyline</span></div>
-                            </div>
-                            <div class="irr-state-cell">
-                                <span class="irr-label">Progress</span>
-                                <span id="irr-progress-pct" class="irr-progress-pct">0%</span>
-                                <div id="irr-progress-wrap" class="irr-progress-wrap"><div id="irr-progress-bar" class="irr-progress-bar"></div></div>
-                                <span id="irr-progress-text" class="irr-cell-sub"></span>
-                            </div>
-                            <div class="irr-state-cell">
-                                <div class="irr-cell-content">
-                                    <span class="irr-label">Next Step</span>
-                                    <span id="irr-next-step" class="irr-state-value"></span>
-                                    <span id="irr-next-step-sub" class="irr-cell-sub"></span>
-                                </div>
-                                <div class="irr-cell-icon green-bg"><span class="material-symbols-outlined">play_arrow</span></div>
-                            </div>
-                            <div class="irr-state-cell" style="justify-content:center;">
-                                <span class="irr-label" style="margin-bottom:2px">Status</span>
-                                <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap" style="margin: 0 12px;">
-                                    <input type="checkbox" id="irr-status-toggle">
-                                    <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
-                                    <span class="ha-toggle-thumb"></span>
-                                </label>
-                                <span class="irr-cell-sub" style="margin-top:2px">Automation Enabled</span>
-                            </div>
-                        </div>
-                        <!-- Sections grid -->
-                        <div class="irr-sections-grid">
-                            <div class="irr-section" id="irr-init-section"><h3>Initialization</h3><div id="irr-init-body"></div></div>
-                            <div class="irr-section" id="irr-cond-section"><h3>Condition</h3><div id="irr-cond-body"></div></div>
-                            <div class="irr-section irr-section-wide" id="irr-actions-section"><h3>Actions</h3><div id="irr-actions-body"></div></div>
-                            <div class="irr-section" id="irr-error-section"><h3>Error State <small>(On Failure)</small></h3><div id="irr-error-body"></div></div>
-                        </div>
-                        <!-- Scheduler -->
-                        <div class="irr-section" id="irr-sched-section"><h3>Scheduler</h3><div id="irr-sched-body"></div></div>
-                        <!-- Live switches + Logs -->
-                        <div class="irr-bottom-grid">
-                            <div class="irr-section"><h3>Live Switch States</h3><div id="irr-live-switches"></div></div>
-                            <div class="irr-section"><h3>Live Sensor States</h3><div id="irr-live-sensors"></div></div>
-                            <div class="irr-section" style="grid-column: span 2;"><h3>Recent Activity</h3><div id="irr-activity-log"></div></div>
-                        </div>
-                    </div>
-                </div>
+        <!-- Sidebar overlay (mobile — tap to close) -->
+        <div id="sidebar-overlay" class="ha-sidebar-overlay"></div>
+
+        <!-- Mobile top bar -->
+        <header class="ha-mobile-bar">
+            <button id="sidebar-toggle" class="ha-icon-btn">
+                <span class="material-symbols-outlined">menu</span>
+            </button>
+            <span class="ha-mobile-title">Nivixsa</span>
+            <div>
+                <span id="status-indicator-mobile" class="ha-status-dot"></span>
             </div>
-        </section>
+        </header>
 
-        <!-- ===== Automation Create/Edit Modal ===== -->
-        <div id="auto-modal-overlay" class="ha-detail-overlay hidden">
-            <div class="irr-modal">
-                <div class="irr-modal-header">
-                    <h2 id="auto-modal-title">New Automation</h2>
-                    <button id="auto-modal-close" class="ha-icon-btn"><span class="material-symbols-outlined">close</span></button>
+        <!-- Main content area -->
+        <main class="ha-main">
+
+            <!-- ===== Overview Tab ===== -->
+            <section id="tab-overview" class="ha-view active">
+                <div class="ha-view-header">
+                    <h1>Overview</h1>
                 </div>
-                <div class="irr-modal-body">
-                    <div class="ha-field"><input type="text" id="auto-f-name" placeholder=" " required><label>Automation Name</label></div>
-                    <div class="ha-field"><input type="text" id="auto-f-desc" placeholder=" "><label>Description</label></div>
+                <div id="status-badges" class="ha-badges-row"></div>
+                <div id="overview-devices" class="ha-masonry">
+                    <div class="ha-card">
+                        <div class="ha-empty-row">Waiting for devices…</div>
+                    </div>
+                </div>
+            </section>
 
-                    <h3 class="irr-form-heading">Initialization (Safe Starting State)</h3>
-                    <div id="auto-f-init" class="irr-form-list"></div>
-                    <button id="auto-f-init-add" class="ha-btn-text">+ Add Switch</button>
-
-                    <h3 class="irr-form-heading">Condition Builder (AND / OR)</h3>
-                    <div id="auto-f-cond" class="irr-form-list"></div>
-                    <button id="auto-f-cond-add" class="ha-btn-text">+ Add Condition</button>
-
-                    <h3 class="irr-form-heading">Actions (Sequential)</h3>
-                    <div id="auto-f-actions" class="irr-form-list"></div>
-                    <button id="auto-f-actions-add" class="ha-btn-text">+ Add Action</button>
-
-                    <h3 class="irr-form-heading">Buffer Time (Between Actions)</h3>
-                    <div class="irr-form-row">
-                        <div class="ha-field" style="max-width:200px"><input type="number" id="auto-f-buffer" value="5" min="0" max="300" placeholder=" "><label>Buffer (seconds)</label></div>
-                        <span style="font-size:12px;color:var(--ha-text-secondary);padding-top:8px">Wait time between actions after revert</span>
+            <!-- ===== Automations Tab ===== -->
+            <section id="tab-automations" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>Automations</h1>
+                    <button id="btn-add-automation" class="ha-btn-primary" style="width:auto;padding:8px 20px">
+                        <span class="material-symbols-outlined"
+                            style="font-size:18px;vertical-align:middle;margin-right:4px">add</span> Add New
+                    </button>
+                </div>
+                <div class="irr-workspace">
+                    <!-- LEFT: Automation List -->
+                    <div class="irr-list-panel">
+                        <div id="auto-list" class="irr-auto-list">
+                            <div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>
+                        </div>
+                        <!-- Controller Status -->
+                        <div class="irr-controller-status">
+                            <h4>Controller Status</h4>
+                            <div class="irr-ctrl-row"><span class="irr-ctrl-dot connected"></span> <span>Online</span>
+                            </div>
+                            <div class="irr-ctrl-info"><span>Uptime</span><span id="irr-uptime">—</span></div>
+                            <div class="irr-ctrl-info"><span>IP Address</span><span id="irr-ip">—</span></div>
+                            <div class="irr-ctrl-info"><span>Firmware</span><span id="irr-fw">—</span></div>
+                        </div>
                     </div>
 
-                    <div style="display: flex; gap: 24px; flex-wrap: wrap;">
-                        <!-- Left Column: Scheduler -->
-                        <div style="flex: 1; min-width: 250px;">
-                            <h3 class="irr-form-heading">Scheduler</h3>
-                            <div class="irr-day-picker" id="auto-f-days"></div>
-                            <div class="irr-form-row" style="margin-top:12px; margin-bottom: 16px;">
-                                <label class="ha-checkbox-label" style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
-                                    <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
-                                </label>
-                            </div>
-                            <div class="irr-time-range">
-                                <div class="ha-field"><input type="time" id="auto-f-start" placeholder=" "><label>Start Time</label></div>
-                                <span style="padding-top:12px">→</span>
-                                <div class="ha-field"><input type="time" id="auto-f-end" placeholder=" "><label>End Time</label></div>
-                            </div>
-                            <div class="irr-form-row">
-                                <div class="ha-field" style="max-width:350px; margin-top:8px">
-                                    <select id="auto-f-tz" placeholder=" "></select>
-                                    <label>Timezone (Local offset)</label>
+                    <!-- CENTER: Automation Detail -->
+                    <div class="irr-detail-panel" id="irr-detail-panel">
+                        <div class="irr-detail-empty">
+                            <span class="material-symbols-outlined"
+                                style="font-size:64px;color:var(--ha-text-disabled)">water_drop</span>
+                            <p>Select an automation from the list to view details</p>
+                        </div>
+                        <!-- Filled dynamically by JS -->
+                        <div id="irr-detail-content" class="hidden">
+                            <!-- Header -->
+                            <div class="irr-header">
+                                <div class="irr-header-left">
+                                    <div style="display:flex;align-items:center;gap:12px;">
+                                        <h2 id="irr-detail-name"></h2>
+                                        <button id="irr-btn-playpause"
+                                            style="display:none;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:none;background:var(--ha-primary);color:white;cursor:pointer;transition:transform 0.1s;">
+                                            <span class="material-symbols-outlined" id="irr-icon-playpause"
+                                                style="font-size:18px;">pause</span>
+                                        </button>
+                                    </div>
+                                    <span id="irr-detail-desc" class="irr-desc"></span>
+                                </div>
+                                <div class="irr-header-right">
+                                    <span id="irr-detail-badge" class="irr-status-badge"></span>
+                                    <button id="irr-btn-reset" class="ha-btn-text"><span
+                                            class="material-symbols-outlined" style="font-size:18px">restart_alt</span>
+                                        Reset</button>
+                                    <button id="irr-btn-edit" class="ha-btn-text"><span
+                                            class="material-symbols-outlined" style="font-size:18px">edit</span>
+                                        Edit</button>
+                                    <button id="irr-btn-delete" class="irr-btn-danger"><span
+                                            class="material-symbols-outlined" style="font-size:18px">delete</span>
+                                        Delete</button>
                                 </div>
                             </div>
-                        </div>
-
-                        <!-- Right Column: Error State -->
-                        <div style="flex: 1; min-width: 250px;">
-                            <h3 class="irr-form-heading">Error State (Fail-Safe)</h3>
-                            <div id="auto-f-error" class="irr-form-list"></div>
-                            <button id="auto-f-error-add" class="ha-btn-text">+ Add Switch</button>
+                            <!-- State summary bar -->
+                            <div class="irr-state-bar">
+                                <div class="irr-state-cell">
+                                    <div class="irr-cell-content">
+                                        <span class="irr-label">Current State</span>
+                                        <span id="irr-cur-state" class="irr-state-value"
+                                            style="color:var(--ha-primary)"></span>
+                                        <span id="irr-cur-state-sub" class="irr-cell-sub"></span>
+                                    </div>
+                                    <div class="irr-cell-icon blue-bg"><span
+                                            class="material-symbols-outlined">polyline</span></div>
+                                </div>
+                                <div class="irr-state-cell">
+                                    <span class="irr-label">Progress</span>
+                                    <span id="irr-progress-pct" class="irr-progress-pct">0%</span>
+                                    <div id="irr-progress-wrap" class="irr-progress-wrap">
+                                        <div id="irr-progress-bar" class="irr-progress-bar"></div>
+                                    </div>
+                                    <span id="irr-progress-text" class="irr-cell-sub"></span>
+                                </div>
+                                <div class="irr-state-cell">
+                                    <div class="irr-cell-content">
+                                        <span class="irr-label">Next Step</span>
+                                        <span id="irr-next-step" class="irr-state-value"></span>
+                                        <span id="irr-next-step-sub" class="irr-cell-sub"></span>
+                                    </div>
+                                    <div class="irr-cell-icon green-bg"><span
+                                            class="material-symbols-outlined">play_arrow</span></div>
+                                </div>
+                                <div class="irr-state-cell" style="justify-content:center;">
+                                    <span class="irr-label" style="margin-bottom:2px">Status</span>
+                                    <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap"
+                                        style="margin: 0 12px;">
+                                        <input type="checkbox" id="irr-status-toggle">
+                                        <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
+                                        <span class="ha-toggle-thumb"></span>
+                                    </label>
+                                    <span class="irr-cell-sub" style="margin-top:2px">Automation Enabled</span>
+                                </div>
+                            </div>
+                            <!-- Sections grid -->
+                            <div class="irr-sections-grid">
+                                <div class="irr-section" id="irr-init-section">
+                                    <h3>Initialization</h3>
+                                    <div id="irr-init-body"></div>
+                                </div>
+                                <div class="irr-section" id="irr-cond-section">
+                                    <h3>Condition</h3>
+                                    <div id="irr-cond-body"></div>
+                                </div>
+                                <div class="irr-section irr-section-wide" id="irr-actions-section">
+                                    <h3>Actions</h3>
+                                    <div id="irr-actions-body"></div>
+                                </div>
+                                <!-- Scheduler & Error State side-by-side -->
+                                <div class="irr-section" id="irr-sched-section">
+                                    <h3>Scheduler</h3>
+                                    <div id="irr-sched-body"></div>
+                                </div>
+                                <div class="irr-section" id="irr-error-section">
+                                    <h3>Error State <small>(On Failure)</small></h3>
+                                    <div id="irr-error-body"></div>
+                                </div>
+                            </div>
+                            <!-- Live switches + Logs -->
+                            <div class="irr-bottom-grid">
+                                <div class="irr-section">
+                                    <h3>Live Switch States</h3>
+                                    <div id="irr-live-switches"></div>
+                                </div>
+                                <div class="irr-section">
+                                    <h3>Live Sensor States</h3>
+                                    <div id="irr-live-sensors"></div>
+                                </div>
+                                <div class="irr-section" style="grid-column: span 2;">
+                                    <h3>Recent Activity</h3>
+                                    <div id="irr-activity-log"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
-                <div class="irr-modal-footer">
-                    <button id="auto-modal-cancel" class="ha-btn-secondary" style="width:auto;padding:10px 24px">Cancel</button>
-                    <button id="auto-modal-save" class="ha-btn-primary" style="width:auto;padding:10px 24px">Save Automation</button>
+            </section>
+
+            <!-- ===== Automation Create/Edit Modal ===== -->
+            <div id="auto-modal-overlay" class="ha-detail-overlay hidden">
+                <div class="irr-modal">
+                    <div class="irr-modal-header">
+                        <h2 id="auto-modal-title">New Automation</h2>
+                        <button id="auto-modal-close" class="ha-icon-btn"><span
+                                class="material-symbols-outlined">close</span></button>
+                    </div>
+                    <div class="irr-modal-body">
+                        <div class="ha-field"><input type="text" id="auto-f-name" placeholder=" "
+                                required><label>Automation Name</label></div>
+                        <div class="ha-field"><input type="text" id="auto-f-desc"
+                                placeholder=" "><label>Description</label></div>
+
+                        <h3 class="irr-form-heading">Initialization (Safe Starting State)</h3>
+                        <div id="auto-f-init" class="irr-form-list"></div>
+                        <button id="auto-f-init-add" class="ha-btn-text">+ Add Switch</button>
+
+                        <h3 class="irr-form-heading">Condition Builder (AND / OR)</h3>
+                        <div id="auto-f-cond" class="irr-form-list"></div>
+                        <button id="auto-f-cond-add" class="ha-btn-text">+ Add Condition</button>
+
+                        <h3 class="irr-form-heading">Actions (Sequential)</h3>
+                        <div id="auto-f-actions" class="irr-form-list"></div>
+                        <button id="auto-f-actions-add" class="ha-btn-text">+ Add Action</button>
+
+                        <h3 class="irr-form-heading">Buffer Time (Between Actions)</h3>
+                        <div class="irr-form-row">
+                            <div class="ha-field" style="max-width:200px"><input type="number" id="auto-f-buffer"
+                                    value="5" min="0" max="300" placeholder=" "><label>Buffer (seconds)</label></div>
+                            <span style="font-size:12px;color:var(--ha-text-secondary);padding-top:8px">Wait time
+                                between actions after revert</span>
+                        </div>
+
+                        <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+                            <!-- Left Column: Scheduler -->
+                            <div style="flex: 1; min-width: 250px;">
+                                <h3 class="irr-form-heading" id="auto-f-sched-heading">Scheduler</h3>
+                                <div class="irr-day-picker" id="auto-f-days"></div>
+                                <div class="irr-form-row" style="margin-top:12px; margin-bottom: 16px;">
+                                    <label class="ha-checkbox-label"
+                                        style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
+                                        <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
+                                    </label>
+                                </div>
+                                <div class="irr-time-range" style="display:flex; align-items:center; gap: 8px;">
+                                    <div class="ha-field"><input type="time" id="auto-f-start"
+                                            placeholder=" "><label>Start Time</label></div>
+                                    <span style="padding-top:12px">→</span>
+                                    <div class="ha-field"><input type="time" id="auto-f-end" placeholder=" "><label>End
+                                            Time</label></div>
+                                    <label class="ha-toggle" style="margin-top:12px; margin-left: 8px; cursor: pointer; display: flex; align-items: center; gap: 6px;" title="Enable AI Dynamic Scheduling">
+                                        <input type="checkbox" id="auto-f-ai">
+                                        <span class="ha-toggle-track"></span><span class="ha-toggle-thumb"></span>
+                                        <span style="font-size: 14px; font-weight: bold; color: #4caf50;">🤖 AI</span>
+                                    </label>
+                                </div>
+                                <div class="irr-form-row">
+                                    <div class="ha-field" style="max-width:350px; margin-top:8px">
+                                        <select id="auto-f-tz" placeholder=" "></select>
+                                        <label>Timezone (Local offset)</label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Right Column: Error State -->
+                            <div style="flex: 1; min-width: 250px;">
+                                <h3 class="irr-form-heading">Error State (Fail-Safe)</h3>
+                                <div id="auto-f-error" class="irr-form-list"></div>
+                                <button id="auto-f-error-add" class="ha-btn-text">+ Add Switch</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="irr-modal-footer">
+                        <button id="auto-modal-cancel" class="ha-btn-secondary"
+                            style="width:auto;padding:10px 24px">Cancel</button>
+                        <button id="auto-modal-save" class="ha-btn-primary" style="width:auto;padding:10px 24px">Save
+                            Automation</button>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ===== Lights Tab ===== -->
-        <section id="tab-lights" class="ha-view">
-            <div class="ha-view-header"><h1>Lights</h1></div>
-            <div id="lights-devices" class="ha-masonry">
-                <div class="ha-card"><div class="ha-empty-row">No lights discovered yet…</div></div>
-            </div>
-        </section>
-
-        <!-- ===== Switches Tab ===== -->
-        <section id="tab-switches" class="ha-view">
-            <div class="ha-view-header"><h1>Switches</h1></div>
-            <div id="switches-devices" class="ha-masonry">
-                <div class="ha-card"><div class="ha-empty-row">No switches discovered yet…</div></div>
-            </div>
-        </section>
-
-        <!-- ===== Sensors Tab ===== -->
-        <section id="tab-sensors" class="ha-view">
-            <div class="ha-view-header"><h1>Sensors</h1></div>
-            <div id="sensors-badges" class="ha-badges-row"></div>
-            <div id="sensors-devices" class="ha-masonry">
-                <div class="ha-card"><div class="ha-empty-row">No sensors discovered yet…</div></div>
-            </div>
-        </section>
-
-        <!-- ===== History Tab ===== -->
-        <section id="tab-history" class="ha-view">
-            <div class="ha-view-header"><h1>History</h1></div>
-            <div id="sensor-charts" class="ha-charts-col">
-                <div class="ha-card"><div class="ha-empty-row">No history data yet…</div></div>
-            </div>
-        </section>
-
-        <!-- ===== Logbook Tab ===== -->
-        <section id="tab-log" class="ha-view">
-            <div class="ha-view-header">
-                <h1>Logbook</h1>
-                <div class="ha-view-actions">
-                    <input type="text" id="log-filter" class="ha-input-sm" placeholder="Filter…">
-                    <button id="btn-clear-log" class="ha-btn-text">Clear</button>
+            <!-- ===== Lights Tab ===== -->
+            <section id="tab-lights" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>Lights</h1>
                 </div>
-            </div>
-            <div class="ha-card">
-                <div id="log-container" class="ha-log-wrap">
-                    <table class="ha-log-table">
-                        <thead><tr><th>Time</th><th>Entity</th><th>State</th></tr></thead>
-                        <tbody id="log-body"></tbody>
-                    </table>
+                <div id="lights-devices" class="ha-masonry">
+                    <div class="ha-card">
+                        <div class="ha-empty-row">No lights discovered yet…</div>
+                    </div>
                 </div>
-            </div>
-        </section>
+            </section>
 
-        <!-- ===== Developer Tab ===== -->
-        <section id="tab-developer" class="ha-view">
-            <div class="ha-view-header"><h1>Developer Tools</h1></div>
-            <div class="ha-masonry">
+            <!-- ===== Switches Tab ===== -->
+            <section id="tab-switches" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>Switches</h1>
+                </div>
+                <div id="switches-devices" class="ha-masonry">
+                    <div class="ha-card">
+                        <div class="ha-empty-row">No switches discovered yet…</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== Sensors Tab ===== -->
+            <section id="tab-sensors" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>Sensors</h1>
+                </div>
+                <div id="sensors-badges" class="ha-badges-row"></div>
+                <div id="sensors-devices" class="ha-masonry">
+                    <div class="ha-card">
+                        <div class="ha-empty-row">No sensors discovered yet…</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== History Tab ===== -->
+            <section id="tab-history" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>History</h1>
+                </div>
+                <div id="sensor-charts" class="ha-charts-col">
+                    <div class="ha-card">
+                        <div class="ha-empty-row">No history data yet…</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ===== Logbook Tab ===== -->
+            <section id="tab-log" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>Logbook</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="log-filter" class="ha-input-sm" placeholder="Filter…">
+                        <button id="btn-clear-log" class="ha-btn-text">Clear</button>
+                    </div>
+                </div>
                 <div class="ha-card">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">send</span> MQTT Publish
-                    </div>
-                    <div class="ha-publish-form">
-                        <div class="ha-field">
-                            <input type="text" id="pub-topic" placeholder=" " list="topic-list">
-                            <label>Topic</label>
-                            <datalist id="topic-list"></datalist>
-                        </div>
-                        <div class="ha-field">
-                            <input type="text" id="pub-payload" placeholder=" ">
-                            <label>Payload</label>
-                        </div>
-                        <button id="btn-publish" class="ha-btn-primary">Publish</button>
-                        <button id="btn-subscribe" class="ha-btn-secondary">Subscribe</button>
-                        <p id="publish-feedback" class="hidden"></p>
-                    </div>
-                </div>
-                <div class="ha-card ha-card-full">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">terminal</span> Live MQTT Messages
-                        <button id="btn-clear-dev-log" class="ha-btn-text" style="margin-left:auto">Clear</button>
-                    </div>
-                    <div class="ha-log-wrap" style="max-height:300px">
+                    <div id="log-container" class="ha-log-wrap">
                         <table class="ha-log-table">
-                            <thead><tr><th>Time</th><th>Direction</th><th>Topic</th><th>Payload</th></tr></thead>
-                            <tbody id="dev-log-body"></tbody>
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Entity</th>
+                                    <th>State</th>
+                                </tr>
+                            </thead>
+                            <tbody id="log-body"></tbody>
                         </table>
                     </div>
                 </div>
-                <div class="ha-card">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">list</span> All Entities
-                    </div>
-                    <div id="all-entities-list" class="ha-entity-rows"></div>
+            </section>
+
+            <!-- ===== Developer Tab ===== -->
+            <section id="tab-developer" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>Developer Tools</h1>
                 </div>
-            </div>
-        </section>
-
-        <!-- ===== API Details Tab ===== -->
-        <section id="tab-api" class="ha-view">
-            <div class="ha-view-header"><h1>API Details</h1></div>
-
-            <div class="ha-api-stack">
-
-                <!-- Connection Info -->
-                <div class="ha-card">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">link</span> Connection Info
+                <div class="ha-masonry">
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">send</span> MQTT Publish
+                        </div>
+                        <div class="ha-publish-form">
+                            <div class="ha-field">
+                                <input type="text" id="pub-topic" placeholder=" " list="topic-list">
+                                <label>Topic</label>
+                                <datalist id="topic-list"></datalist>
+                            </div>
+                            <div class="ha-field">
+                                <input type="text" id="pub-payload" placeholder=" ">
+                                <label>Payload</label>
+                            </div>
+                            <button id="btn-publish" class="ha-btn-primary">Publish</button>
+                            <button id="btn-subscribe" class="ha-btn-secondary">Subscribe</button>
+                            <p id="publish-feedback" class="hidden"></p>
+                        </div>
                     </div>
-                    <div class="ha-api-section">
-                        <table class="ha-detail-table">
-                            <tr><td>Login API</td><td class="ha-topic-val">POST https://egycad.com/apis/cadio/login</td></tr>
-                            <tr><td>MQTT Broker</td><td id="api-broker">—</td></tr>
-                            <tr><td>MQTT Port</td><td id="api-port">—</td></tr>
-                            <tr><td>Discovery Prefix</td><td id="api-prefix">—</td></tr>
-                            <tr><td>Protocol</td><td>MQTT v3.1.1</td></tr>
-                        </table>
+                    <div class="ha-card ha-card-full">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">terminal</span> Live MQTT Messages
+                            <button id="btn-clear-dev-log" class="ha-btn-text" style="margin-left:auto">Clear</button>
+                        </div>
+                        <div class="ha-log-wrap" style="max-height:300px">
+                            <table class="ha-log-table">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Direction</th>
+                                        <th>Topic</th>
+                                        <th>Payload</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dev-log-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">list</span> All Entities
+                        </div>
+                        <div id="all-entities-list" class="ha-entity-rows"></div>
                     </div>
                 </div>
+            </section>
 
-                <!-- Topic Structure -->
-                <div class="ha-card">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">account_tree</span> Topic Structure
+            <!-- ===== API Details Tab ===== -->
+            <section id="tab-api" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>API Details</h1>
+                </div>
+
+                <div class="ha-api-stack">
+
+                    <!-- Connection Info -->
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">link</span> Connection Info
+                        </div>
+                        <div class="ha-api-section">
+                            <table class="ha-detail-table">
+                                <tr>
+                                    <td>Login API</td>
+                                    <td class="ha-topic-val">POST https://egycad.com/apis/cadio/login</td>
+                                </tr>
+                                <tr>
+                                    <td>MQTT Broker</td>
+                                    <td id="api-broker">—</td>
+                                </tr>
+                                <tr>
+                                    <td>MQTT Port</td>
+                                    <td id="api-port">—</td>
+                                </tr>
+                                <tr>
+                                    <td>Discovery Prefix</td>
+                                    <td id="api-prefix">—</td>
+                                </tr>
+                                <tr>
+                                    <td>Protocol</td>
+                                    <td>MQTT v3.1.1</td>
+                                </tr>
+                            </table>
+                        </div>
                     </div>
-                    <div class="ha-api-section">
-                        <pre class="ha-detail-code">{prefix}/{type}/{account_id}/{serial_channel}/{action}
+
+                    <!-- Topic Structure -->
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">account_tree</span> Topic Structure
+                        </div>
+                        <div class="ha-api-section">
+                            <pre class="ha-detail-code">{prefix}/{type}/{account_id}/{serial_channel}/{action}
 
 Examples:
   homeassistant/light/d11cdb3057224ee6/2CF4327CA967_6/set      → Send command
@@ -431,137 +542,171 @@ Actions:
   /state          Current state (read-only, published by device)
   /set            Send commands (write)
   /availability   Online status (YES / NO)</pre>
+                        </div>
                     </div>
-                </div>
 
-                <!-- Payloads -->
-                <div class="ha-card">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">data_object</span> Payload Reference
-                    </div>
-                    <div class="ha-api-section">
-                        <h4>Switch — Command (/set)</h4>
-                        <pre class="ha-detail-code">{"state":"ON"}
+                    <!-- Payloads -->
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">data_object</span> Payload Reference
+                        </div>
+                        <div class="ha-api-section">
+                            <h4>Switch — Command (/set)</h4>
+                            <pre class="ha-detail-code">{"state":"ON"}
 {"state":"OFF"}</pre>
-                        <h4>Switch — State (/state, read-only)</h4>
-                        <pre class="ha-detail-code">{"state":"ON"}
+                            <h4>Switch — State (/state, read-only)</h4>
+                            <pre class="ha-detail-code">{"state":"ON"}
 {"state":"OFF"}</pre>
-                        <h4>Dimmer Light — Command (/set)</h4>
-                        <pre class="ha-detail-code">{"state":"ON","brightness":75}
+                            <h4>Dimmer Light — Command (/set)</h4>
+                            <pre class="ha-detail-code">{"state":"ON","brightness":75}
 {"state":"OFF"}</pre>
-                        <h4>Dimmer Light — State (/state, read-only)</h4>
-                        <pre class="ha-detail-code">{"state":"ON","brightness":100}</pre>
-                        <h4>RGB Light — Command (/set)</h4>
-                        <pre class="ha-detail-code">{"state":"ON","brightness":80,"color":{"r":255,"g":0,"b":128}}
+                            <h4>Dimmer Light — State (/state, read-only)</h4>
+                            <pre class="ha-detail-code">{"state":"ON","brightness":100}</pre>
+                            <h4>RGB Light — Command (/set)</h4>
+                            <pre class="ha-detail-code">{"state":"ON","brightness":80,"color":{"r":255,"g":0,"b":128}}
 {"state":"OFF"}</pre>
-                        <h4>RGB Light — State (/state, read-only)</h4>
-                        <pre class="ha-detail-code">{"state":"ON","brightness":40,"color_mode":"rgb","color":{"r":71,"g":5,"b":5}}</pre>
-                        <h4>Availability (/availability, read-only)</h4>
-                        <pre class="ha-detail-code">YES    → Device is online
+                            <h4>RGB Light — State (/state, read-only)</h4>
+                            <pre
+                                class="ha-detail-code">{"state":"ON","brightness":40,"color_mode":"rgb","color":{"r":71,"g":5,"b":5}}</pre>
+                            <h4>Availability (/availability, read-only)</h4>
+                            <pre class="ha-detail-code">YES    → Device is online
 NO     → Device is offline (Last Will message from broker)</pre>
-                    </div>
-                </div>
-
-                <!-- Language selector -->
-                <div class="ha-card ha-card-full">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">integration_instructions</span> Code Examples
-                    </div>
-                    <div class="ha-api-section">
-                        <div class="ha-lang-tabs">
-                            <button class="ha-lang-tab active" data-lang="python">Python</button>
-                            <button class="ha-lang-tab" data-lang="javascript">JavaScript</button>
-                            <button class="ha-lang-tab" data-lang="java">Java</button>
-                            <button class="ha-lang-tab" data-lang="csharp">C#</button>
-                            <button class="ha-lang-tab" data-lang="curl">cURL</button>
-                            <button class="ha-lang-tab" data-lang="go">Go</button>
                         </div>
-                        <div id="api-code-examples"></div>
                     </div>
-                </div>
 
-                <!-- Your Entities -->
-                <div class="ha-card ha-card-full">
-                    <div class="ha-card-header">
-                        <span class="material-symbols-outlined">devices</span> Your Entities
-                    </div>
-                    <div class="ha-api-section">
-                        <p style="color:var(--ha-text-secondary);font-size:13px;margin-bottom:12px">Click any entity above to see its specific topics and commands. Below is a summary of all command topics:</p>
-                        <div id="api-entities-table"></div>
-                    </div>
-                </div>
-
-            </div>
-        </section>
-
-    </main>
-
-    <!-- ===== Entity Detail Panel ===== -->
-    <div id="detail-overlay" class="ha-detail-overlay hidden">
-        <div id="detail-panel" class="ha-detail-panel">
-            <div class="ha-detail-header">
-                <div class="ha-detail-title-row">
-                    <span id="detail-icon" class="material-symbols-outlined ha-detail-icon"></span>
-                    <div>
-                        <h2 id="detail-name"></h2>
-                        <span id="detail-type" class="ha-detail-type"></span>
-                    </div>
-                </div>
-                <button id="detail-close" class="ha-icon-btn">
-                    <span class="material-symbols-outlined">close</span>
-                </button>
-            </div>
-            <div class="ha-detail-body">
-                <!-- State -->
-                <div class="ha-detail-section">
-                    <h3>Current State</h3>
-                    <pre id="detail-state" class="ha-detail-code"></pre>
-                </div>
-                <!-- Device Info -->
-                <div class="ha-detail-section">
-                    <h3>Device</h3>
-                    <table id="detail-device" class="ha-detail-table"></table>
-                </div>
-                <!-- Topics / API -->
-                <div class="ha-detail-section">
-                    <h3>MQTT Topics</h3>
-                    <table id="detail-topics" class="ha-detail-table"></table>
-                </div>
-                <!-- Commands -->
-                <div id="detail-commands-section" class="ha-detail-section">
-                    <h3>Available Commands</h3>
-                    <div id="detail-commands" class="ha-detail-commands"></div>
-                </div>
-                <!-- Quick Access -->
-                <div id="detail-quick-section" class="ha-detail-section">
-                    <h3>Quick Access</h3>
-                    <div class="ha-detail-quick">
-                        <div class="ha-field">
-                            <input type="text" id="detail-pub-topic" placeholder=" ">
-                            <label>Topic</label>
+                    <!-- Language selector -->
+                    <div class="ha-card ha-card-full">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">integration_instructions</span> Code Examples
                         </div>
-                        <div class="ha-field">
-                            <input type="text" id="detail-pub-payload" placeholder=" " value='{"state":"ON"}'>
-                            <label>Payload</label>
+                        <div class="ha-api-section">
+                            <div class="ha-lang-tabs">
+                                <button class="ha-lang-tab active" data-lang="python">Python</button>
+                                <button class="ha-lang-tab" data-lang="javascript">JavaScript</button>
+                                <button class="ha-lang-tab" data-lang="java">Java</button>
+                                <button class="ha-lang-tab" data-lang="csharp">C#</button>
+                                <button class="ha-lang-tab" data-lang="curl">cURL</button>
+                                <button class="ha-lang-tab" data-lang="go">Go</button>
+                            </div>
+                            <div id="api-code-examples"></div>
                         </div>
-                        <div class="ha-detail-quick-btns">
-                            <button id="detail-pub-btn" class="ha-btn-primary">Publish</button>
-                            <button id="detail-sub-btn" class="ha-btn-secondary">Subscribe</button>
-                        </div>
-                        <p id="detail-pub-feedback" class="hidden"></p>
                     </div>
+
+                    <!-- Your Entities -->
+                    <div class="ha-card ha-card-full">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">devices</span> Your Entities
+                        </div>
+                        <div class="ha-api-section">
+                            <p style="color:var(--ha-text-secondary);font-size:13px;margin-bottom:12px">Click any entity
+                                above to see its specific topics and commands. Below is a summary of all command topics:
+                            </p>
+                            <div id="api-entities-table"></div>
+                        </div>
+                    </div>
+
                 </div>
-                <!-- Full Config -->
-                <div class="ha-detail-section">
-                    <h3>Discovery Config</h3>
-                    <pre id="detail-config" class="ha-detail-code ha-detail-config-code"></pre>
+            </section>
+
+        </main>
+
+        <!-- ===== Entity Detail Panel ===== -->
+        <div id="detail-overlay" class="ha-detail-overlay hidden">
+            <div id="detail-panel" class="ha-detail-panel">
+                <div class="ha-detail-header">
+                    <div class="ha-detail-title-row">
+                        <span id="detail-icon" class="material-symbols-outlined ha-detail-icon"></span>
+                        <div>
+                            <h2 id="detail-name"></h2>
+                            <span id="detail-type" class="ha-detail-type"></span>
+                        </div>
+                    </div>
+                    <button id="detail-close" class="ha-icon-btn">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
+                <div class="ha-detail-body">
+                    <!-- State -->
+                    <div class="ha-detail-section">
+                        <h3>Current State</h3>
+                        <pre id="detail-state" class="ha-detail-code"></pre>
+                    </div>
+                    <!-- Device Info -->
+                    <div class="ha-detail-section">
+                        <h3>Device</h3>
+                        <table id="detail-device" class="ha-detail-table"></table>
+                    </div>
+                    <!-- Topics / API -->
+                    <div class="ha-detail-section">
+                        <h3>MQTT Topics</h3>
+                        <table id="detail-topics" class="ha-detail-table"></table>
+                    </div>
+                    <!-- Commands -->
+                    <div id="detail-commands-section" class="ha-detail-section">
+                        <h3>Available Commands</h3>
+                        <div id="detail-commands" class="ha-detail-commands"></div>
+                    </div>
+                    <!-- Quick Access -->
+                    <div id="detail-quick-section" class="ha-detail-section">
+                        <h3>Quick Access</h3>
+                        <div class="ha-detail-quick">
+                            <div class="ha-field">
+                                <input type="text" id="detail-pub-topic" placeholder=" ">
+                                <label>Topic</label>
+                            </div>
+                            <div class="ha-field">
+                                <input type="text" id="detail-pub-payload" placeholder=" " value='{"state":"ON"}'>
+                                <label>Payload</label>
+                            </div>
+                            <div class="ha-detail-quick-btns">
+                                <button id="detail-pub-btn" class="ha-btn-primary">Publish</button>
+                                <button id="detail-sub-btn" class="ha-btn-secondary">Subscribe</button>
+                            </div>
+                            <p id="detail-pub-feedback" class="hidden"></p>
+                        </div>
+                    </div>
+                    <!-- Full Config -->
+                    <div class="ha-detail-section">
+                        <h3>Discovery Config</h3>
+                        <pre id="detail-config" class="ha-detail-code ha-detail-config-code"></pre>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
-</div>
 
-<script src="/static/js/dashboard.js?v={{ cache_bust }}"></script>
-<script src="/static/js/automation.js?v={{ cache_bust }}"></script>
+    <!-- Location Modal for AI -->
+    <div class="ha-modal-overlay hidden" id="ai-latlon-overlay" style="z-index: 1100;">
+        <div class="ha-modal" style="max-width: 400px;">
+            <div class="ha-modal-header">
+                <h2>🌍 Set Location for AI</h2>
+            </div>
+            <div class="ha-modal-body">
+                <p style="font-size: 14px; color: var(--ha-text-secondary); margin-bottom: 16px;">
+                    The AI Agronomist requires your Latitude and Longitude to fetch accurate weather forecasts for your farm.
+                </p>
+                <div class="irr-form-row">
+                    <div class="ha-field">
+                        <input type="number" step="0.0001" id="ai-f-lat" placeholder=" ">
+                        <label>Latitude (e.g., 12.8406)</label>
+                    </div>
+                </div>
+                <div class="irr-form-row">
+                    <div class="ha-field">
+                        <input type="number" step="0.0001" id="ai-f-lon" placeholder=" ">
+                        <label>Longitude (e.g., 77.6772)</label>
+                    </div>
+                </div>
+            </div>
+            <div class="ha-modal-footer">
+                <button id="ai-latlon-cancel" class="ha-btn-text">Cancel</button>
+                <button id="ai-latlon-save" class="ha-btn-primary">Save Location</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/dashboard.js?v={{ cache_bust }}"></script>
+    <script src="/static/js/automation.js?v={{ cache_bust }}"></script>
 </body>
+
 </html>
