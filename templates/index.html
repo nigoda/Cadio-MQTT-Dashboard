@@ -51,6 +51,10 @@
                 <span class="material-symbols-outlined">dashboard</span>
                 <span>Overview</span>
             </button>
+            <button class="ha-nav-item" data-tab="automations">
+                <span class="material-symbols-outlined">water_drop</span>
+                <span>Automations</span>
+            </button>
             <button class="ha-nav-item" data-tab="lights">
                 <span class="material-symbols-outlined">lightbulb</span>
                 <span>Lights</span>
@@ -118,6 +122,177 @@
                 <div class="ha-card"><div class="ha-empty-row">Waiting for devices…</div></div>
             </div>
         </section>
+
+        <!-- ===== Automations Tab ===== -->
+        <section id="tab-automations" class="ha-view">
+            <div class="ha-view-header">
+                <h1>Automations</h1>
+                <button id="btn-add-automation" class="ha-btn-primary" style="width:auto;padding:8px 20px">
+                    <span class="material-symbols-outlined" style="font-size:18px;vertical-align:middle;margin-right:4px">add</span> Add New
+                </button>
+            </div>
+            <div class="irr-workspace">
+                <!-- LEFT: Automation List -->
+                <div class="irr-list-panel">
+                    <div id="auto-list" class="irr-auto-list">
+                        <div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>
+                    </div>
+                    <!-- Controller Status -->
+                    <div class="irr-controller-status">
+                        <h4>Controller Status</h4>
+                        <div class="irr-ctrl-row"><span class="irr-ctrl-dot connected"></span> <span>Online</span></div>
+                        <div class="irr-ctrl-info"><span>Uptime</span><span id="irr-uptime">—</span></div>
+                        <div class="irr-ctrl-info"><span>IP Address</span><span id="irr-ip">—</span></div>
+                        <div class="irr-ctrl-info"><span>Firmware</span><span id="irr-fw">—</span></div>
+                    </div>
+                </div>
+
+                <!-- CENTER: Automation Detail -->
+                <div class="irr-detail-panel" id="irr-detail-panel">
+                    <div class="irr-detail-empty">
+                        <span class="material-symbols-outlined" style="font-size:64px;color:var(--ha-text-disabled)">water_drop</span>
+                        <p>Select an automation from the list to view details</p>
+                    </div>
+                    <!-- Filled dynamically by JS -->
+                    <div id="irr-detail-content" class="hidden">
+                        <!-- Header -->
+                        <div class="irr-header">
+                            <div class="irr-header-left">
+                                <div style="display:flex;align-items:center;gap:12px;">
+                                    <h2 id="irr-detail-name"></h2>
+                                    <button id="irr-btn-playpause" style="display:none;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;border:none;background:var(--ha-primary);color:white;cursor:pointer;transition:transform 0.1s;">
+                                        <span class="material-symbols-outlined" id="irr-icon-playpause" style="font-size:18px;">pause</span>
+                                    </button>
+                                </div>
+                                <span id="irr-detail-desc" class="irr-desc"></span>
+                            </div>
+                            <div class="irr-header-right">
+                                <span id="irr-detail-badge" class="irr-status-badge"></span>
+                                <button id="irr-btn-reset" class="ha-btn-text"><span class="material-symbols-outlined" style="font-size:18px">restart_alt</span> Reset</button>
+                                <button id="irr-btn-edit" class="ha-btn-text"><span class="material-symbols-outlined" style="font-size:18px">edit</span> Edit</button>
+                                <button id="irr-btn-delete" class="irr-btn-danger"><span class="material-symbols-outlined" style="font-size:18px">delete</span> Delete</button>
+                            </div>
+                        </div>
+                        <!-- State summary bar -->
+                        <div class="irr-state-bar">
+                            <div class="irr-state-cell">
+                                <div class="irr-cell-content">
+                                    <span class="irr-label">Current State</span>
+                                    <span id="irr-cur-state" class="irr-state-value" style="color:var(--ha-primary)"></span>
+                                    <span id="irr-cur-state-sub" class="irr-cell-sub"></span>
+                                </div>
+                                <div class="irr-cell-icon blue-bg"><span class="material-symbols-outlined">polyline</span></div>
+                            </div>
+                            <div class="irr-state-cell">
+                                <span class="irr-label">Progress</span>
+                                <span id="irr-progress-pct" class="irr-progress-pct">0%</span>
+                                <div id="irr-progress-wrap" class="irr-progress-wrap"><div id="irr-progress-bar" class="irr-progress-bar"></div></div>
+                                <span id="irr-progress-text" class="irr-cell-sub"></span>
+                            </div>
+                            <div class="irr-state-cell">
+                                <div class="irr-cell-content">
+                                    <span class="irr-label">Next Step</span>
+                                    <span id="irr-next-step" class="irr-state-value"></span>
+                                    <span id="irr-next-step-sub" class="irr-cell-sub"></span>
+                                </div>
+                                <div class="irr-cell-icon green-bg"><span class="material-symbols-outlined">play_arrow</span></div>
+                            </div>
+                            <div class="irr-state-cell" style="justify-content:center;">
+                                <span class="irr-label" style="margin-bottom:2px">Status</span>
+                                <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap" style="margin: 0 12px;">
+                                    <input type="checkbox" id="irr-status-toggle">
+                                    <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
+                                    <span class="ha-toggle-thumb"></span>
+                                </label>
+                                <span class="irr-cell-sub" style="margin-top:2px">Automation Enabled</span>
+                            </div>
+                        </div>
+                        <!-- Sections grid -->
+                        <div class="irr-sections-grid">
+                            <div class="irr-section" id="irr-init-section"><h3>Initialization</h3><div id="irr-init-body"></div></div>
+                            <div class="irr-section" id="irr-cond-section"><h3>Condition</h3><div id="irr-cond-body"></div></div>
+                            <div class="irr-section irr-section-wide" id="irr-actions-section"><h3>Actions</h3><div id="irr-actions-body"></div></div>
+                            <div class="irr-section" id="irr-error-section"><h3>Error State <small>(On Failure)</small></h3><div id="irr-error-body"></div></div>
+                        </div>
+                        <!-- Scheduler -->
+                        <div class="irr-section" id="irr-sched-section"><h3>Scheduler</h3><div id="irr-sched-body"></div></div>
+                        <!-- Live switches + Logs -->
+                        <div class="irr-bottom-grid">
+                            <div class="irr-section"><h3>Live Switch States</h3><div id="irr-live-switches"></div></div>
+                            <div class="irr-section"><h3>Live Sensor States</h3><div id="irr-live-sensors"></div></div>
+                            <div class="irr-section" style="grid-column: span 2;"><h3>Recent Activity</h3><div id="irr-activity-log"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== Automation Create/Edit Modal ===== -->
+        <div id="auto-modal-overlay" class="ha-detail-overlay hidden">
+            <div class="irr-modal">
+                <div class="irr-modal-header">
+                    <h2 id="auto-modal-title">New Automation</h2>
+                    <button id="auto-modal-close" class="ha-icon-btn"><span class="material-symbols-outlined">close</span></button>
+                </div>
+                <div class="irr-modal-body">
+                    <div class="ha-field"><input type="text" id="auto-f-name" placeholder=" " required><label>Automation Name</label></div>
+                    <div class="ha-field"><input type="text" id="auto-f-desc" placeholder=" "><label>Description</label></div>
+
+                    <h3 class="irr-form-heading">Initialization (Safe Starting State)</h3>
+                    <div id="auto-f-init" class="irr-form-list"></div>
+                    <button id="auto-f-init-add" class="ha-btn-text">+ Add Switch</button>
+
+                    <h3 class="irr-form-heading">Condition Builder (AND / OR)</h3>
+                    <div id="auto-f-cond" class="irr-form-list"></div>
+                    <button id="auto-f-cond-add" class="ha-btn-text">+ Add Condition</button>
+
+                    <h3 class="irr-form-heading">Actions (Sequential)</h3>
+                    <div id="auto-f-actions" class="irr-form-list"></div>
+                    <button id="auto-f-actions-add" class="ha-btn-text">+ Add Action</button>
+
+                    <h3 class="irr-form-heading">Buffer Time (Between Actions)</h3>
+                    <div class="irr-form-row">
+                        <div class="ha-field" style="max-width:200px"><input type="number" id="auto-f-buffer" value="5" min="0" max="300" placeholder=" "><label>Buffer (seconds)</label></div>
+                        <span style="font-size:12px;color:var(--ha-text-secondary);padding-top:8px">Wait time between actions after revert</span>
+                    </div>
+
+                    <div style="display: flex; gap: 24px; flex-wrap: wrap;">
+                        <!-- Left Column: Scheduler -->
+                        <div style="flex: 1; min-width: 250px;">
+                            <h3 class="irr-form-heading">Scheduler</h3>
+                            <div class="irr-day-picker" id="auto-f-days"></div>
+                            <div class="irr-form-row" style="margin-top:12px; margin-bottom: 16px;">
+                                <label class="ha-checkbox-label" style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
+                                    <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
+                                </label>
+                            </div>
+                            <div class="irr-time-range">
+                                <div class="ha-field"><input type="time" id="auto-f-start" placeholder=" "><label>Start Time</label></div>
+                                <span style="padding-top:12px">→</span>
+                                <div class="ha-field"><input type="time" id="auto-f-end" placeholder=" "><label>End Time</label></div>
+                            </div>
+                            <div class="irr-form-row">
+                                <div class="ha-field" style="max-width:350px; margin-top:8px">
+                                    <select id="auto-f-tz" placeholder=" "></select>
+                                    <label>Timezone (Local offset)</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Right Column: Error State -->
+                        <div style="flex: 1; min-width: 250px;">
+                            <h3 class="irr-form-heading">Error State (Fail-Safe)</h3>
+                            <div id="auto-f-error" class="irr-form-list"></div>
+                            <button id="auto-f-error-add" class="ha-btn-text">+ Add Switch</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="irr-modal-footer">
+                    <button id="auto-modal-cancel" class="ha-btn-secondary" style="width:auto;padding:10px 24px">Cancel</button>
+                    <button id="auto-modal-save" class="ha-btn-primary" style="width:auto;padding:10px 24px">Save Automation</button>
+                </div>
+            </div>
+        </div>
 
         <!-- ===== Lights Tab ===== -->
         <section id="tab-lights" class="ha-view">
@@ -387,5 +562,6 @@ NO     → Device is offline (Last Will message from broker)</pre>
 </div>
 
 <script src="/static/js/dashboard.js?v={{ cache_bust }}"></script>
+<script src="/static/js/automation.js?v={{ cache_bust }}"></script>
 </body>
 </html>
