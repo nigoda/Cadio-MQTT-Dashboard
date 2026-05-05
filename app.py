@@ -922,12 +922,82 @@ def start_engine():
     _engine_running = True
     _engine_thread = threading.Thread(target=_engine_loop, daemon=True)
     _engine_thread.start()
+    # Start AI scheduler thread alongside the engine
+    _ai_thread = threading.Thread(target=_ai_scheduler_loop, daemon=True)
+    _ai_thread.start()
 
 
 def stop_engine():
     """Stop the automation engine."""
     global _engine_running
     _engine_running = False
+
+
+# ---------------------------------------------------------------------------
+# AI Scheduler — background thread
+# ---------------------------------------------------------------------------
+_ai_last_run_date = None  # track last AI run date to avoid re-running
+
+def _ai_scheduler_loop():
+    """Background thread: checks once per minute if it's time to run the AI."""
+    global _ai_last_run_date
+    AI_RUN_HOUR = 2  # Run at 2:00 AM local time
+    logging.info("[AI-SCHEDULER] AI scheduler thread started")
+    while _engine_running:
+        try:
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            if now.hour == AI_RUN_HOUR and _ai_last_run_date != today_str:
+                _ai_last_run_date = today_str
+                _run_ai_for_all_automations()
+        except Exception as e:
+            logging.error(f"[AI-SCHEDULER] Error: {e}")
+        time.sleep(60)  # check every minute
+
+
+def _run_ai_for_all_automations():
+    """Run the AI agent for every automation that has ai_enabled=True."""
+    try:
+        from ai_agent import get_7_day_forecast, build_automation_context, get_ai_schedule_decision
+    except ImportError:
+        logging.error("[AI-SCHEDULER] Could not import ai_agent module")
+        return
+
+    for auto_id, auto in automations.items():
+        sched = auto.get("schedule", {})
+        if not sched.get("ai_enabled"):
+            continue
+
+        lat = sched.get("lat")
+        lon = sched.get("lon")
+        if not lat or not lon:
+            _auto_log(auto_id, "AI skipped: no Lat/Lon configured", level="warn")
+            continue
+
+        logging.info(f"[AI-SCHEDULER] Running AI for '{auto.get('name', auto_id)}'")
+        _auto_log(auto_id, "🤖 AI Agent running...")
+
+        forecast = get_7_day_forecast(lat=lat, lon=lon)
+        if not forecast:
+            _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
+            continue
+
+        ctx = build_automation_context(auto_id, auto)
+        decision = get_ai_schedule_decision(forecast, ctx)
+        if not decision:
+            _auto_log(auto_id, "AI failed: model returned no decision", level="error")
+            continue
+
+        new_days = decision.get("selected_days", [])
+        reasoning = decision.get("reasoning", "")
+        old_days = sched.get("days", [])
+
+        sched["days"] = new_days
+        _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
+        _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
+        logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
+
+        _emit_auto_update(auto)
 
 
 # ---------------------------------------------------------------------------
