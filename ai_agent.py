@@ -2,6 +2,7 @@ import requests
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 
 # Default Location
@@ -14,10 +15,22 @@ MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "llama-3.2-1b-ins
 
 # Global reference to the loaded model so it only loads once into memory
 _llm_instance = None
+_llm_loading_lock = threading.Lock()
+_llm_is_loading = False
 
 def get_llm():
-    global _llm_instance
-    if _llm_instance is None:
+    global _llm_instance, _llm_is_loading
+    
+    # Fast path: already loaded
+    if _llm_instance is not None:
+        return _llm_instance
+    
+    # Slow path: need to load (with lock to prevent double-load)
+    with _llm_loading_lock:
+        # Double-check after acquiring lock
+        if _llm_instance is not None:
+            return _llm_instance
+            
         try:
             from llama_cpp import Llama
         except ImportError:
@@ -27,13 +40,26 @@ def get_llm():
         if not os.path.exists(MODEL_PATH):
             logging.error(f"Model file not found at {MODEL_PATH}. Please download a .gguf model.")
             return None
-            
+        
+        _llm_is_loading = True
         logging.info("Loading AI model into memory. This may take a few seconds...")
-        # n_ctx is the context window size. 2048 is plenty for our schedule JSON.
-        _llm_instance = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
-        logging.info("AI model loaded successfully!")
+        
+        try:
+            # n_ctx is the context window size. 2048 is plenty for our schedule JSON.
+            _llm_instance = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
+            logging.info("AI model loaded successfully!")
+        finally:
+            _llm_is_loading = False
         
     return _llm_instance
+
+def is_model_loading():
+    """Check if model is currently loading (for UI status updates)."""
+    return _llm_is_loading
+
+def is_model_loaded():
+    """Check if model is loaded and ready."""
+    return _llm_instance is not None
 
 def get_7_day_forecast(lat=DEFAULT_LAT, lon=DEFAULT_LON):
     """Fetches a 7-day forecast from Open-Meteo (No API Key required)."""
@@ -97,8 +123,10 @@ def build_automation_context(auto_id, auto_data):
         "lon": auto_data.get("lon")
     }
 
-def get_ai_schedule_decision(forecast_data, auto_context):
+def get_ai_schedule_decision(forecast_data, auto_context, timeout=60):
     """Executes the local AI model to get a scheduling decision."""
+    import threading
+    
     llm = get_llm()
     if not llm:
         return None
@@ -123,30 +151,46 @@ def get_ai_schedule_decision(forecast_data, auto_context):
     7-Day Forecast: {json.dumps(forecast_data)}
     """
     
-    try:
-        # Run inference locally via llama-cpp-python
-        response = llm.create_chat_completion(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1 # Low temp for deterministic logic
-        )
-        
-        raw_text = response["choices"][0]["message"]["content"].strip()
-        
-        # Parse the JSON returned by the model
-        decision = json.loads(raw_text)
-        
-        if "selected_days" not in decision or "reasoning" not in decision:
-            raise ValueError("AI JSON response missing required keys.")
+    result = {"decision": None, "error": None}
+    
+    def run_inference():
+        try:
+            # Run inference locally via llama-cpp-python
+            response = llm.create_chat_completion(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.1,  # Low temp for deterministic logic
+                max_tokens=256    # Limit output size for faster response
+            )
             
-        return decision
-        
-    except Exception as e:
-        logging.error(f"AI Scheduling failed for automation {auto_context.get('automation_id')}: {e}")
+            raw_text = response["choices"][0]["message"]["content"].strip()
+            result["decision"] = json.loads(raw_text)
+        except Exception as e:
+            result["error"] = str(e)
+    
+    # Run inference in a thread with timeout
+    thread = threading.Thread(target=run_inference)
+    thread.daemon = True
+    thread.start()
+    thread.join(timeout=timeout)
+    
+    if thread.is_alive():
+        logging.error(f"AI inference timed out after {timeout}s for automation {auto_context.get('automation_id')}")
         return None
+    
+    if result["error"]:
+        logging.error(f"AI Scheduling failed for automation {auto_context.get('automation_id')}: {result['error']}")
+        return None
+    
+    decision = result["decision"]
+    if decision and ("selected_days" not in decision or "reasoning" not in decision):
+        logging.error(f"AI JSON response missing required keys for automation {auto_context.get('automation_id')}")
+        return None
+            
+    return decision
 
 # --- FOR TESTING PURPOSES ---
 if __name__ == "__main__":

@@ -58,6 +58,7 @@ BUFFER_SECONDS = 5              # default buffer between actions
 ENGINE_INTERVAL = 1.0           # state machine tick interval (seconds)
 _engine_thread = None
 _engine_running = False
+_ai_running_set: set = set()    # track which automations currently have AI running (prevent duplicates)
 
 # ---------------------------------------------------------------------------
 # MQTT helpers
@@ -919,6 +920,25 @@ def start_engine():
     # Start AI scheduler thread alongside the engine
     _ai_thread = threading.Thread(target=_ai_scheduler_loop, daemon=True)
     _ai_thread.start()
+    # Pre-load AI model in background so it's ready when needed
+    _preload_ai_model()
+
+def _preload_ai_model():
+    """Pre-load the AI model in a background thread so it's ready when needed."""
+    def _load():
+        try:
+            from ai_agent import get_llm, is_model_loaded
+            logging.info("[AI-PRELOAD] Pre-loading AI model in background...")
+            llm = get_llm()
+            if llm:
+                logging.info("[AI-PRELOAD] AI model pre-loaded successfully and ready!")
+            else:
+                logging.warning("[AI-PRELOAD] AI model pre-load failed - will retry on first AI call")
+        except Exception as e:
+            logging.warning(f"[AI-PRELOAD] Could not pre-load AI model: {e}")
+    
+    # Start in background thread so it doesn't block engine startup
+    threading.Thread(target=_load, daemon=True, name="AI-Preload").start()
 
 
 def stop_engine():
@@ -951,51 +971,90 @@ def _ai_scheduler_loop():
 
 def _run_ai_for_automation(auto_id):
     """Helper to run the AI engine for a single automation."""
+    global _ai_running_set
+    
+    # Prevent duplicate concurrent runs
+    if auto_id in _ai_running_set:
+        logging.info(f"[AI-SCHEDULER] AI already running for '{auto_id}', skipping duplicate request")
+        return
+    
+    _ai_running_set.add(auto_id)
+    
     try:
-        from ai_agent import get_7_day_forecast, build_automation_context, get_ai_schedule_decision
-    except ImportError:
-        logging.error("[AI-SCHEDULER] Could not import ai_agent module")
+        from ai_agent import get_7_day_forecast, build_automation_context, get_ai_schedule_decision, is_model_loaded, is_model_loading
+    except ImportError as e:
+        logging.error(f"[AI-SCHEDULER] Could not import ai_agent module: {e}")
+        auto = automations.get(auto_id)
+        if auto:
+            _auto_log(auto_id, f"AI error: module import failed - check llama-cpp-python installation", level="error")
+            _emit_auto_update(auto)
+        _ai_running_set.discard(auto_id)
         return
 
     auto = automations.get(auto_id)
     if not auto:
+        _ai_running_set.discard(auto_id)
         return
 
     sched = auto.get("schedule", {})
     if not sched.get("ai_enabled"):
+        _ai_running_set.discard(auto_id)
         return
 
     lat = sched.get("lat")
     lon = sched.get("lon")
     if not lat or not lon:
         _auto_log(auto_id, "AI skipped: no Lat/Lon configured", level="warn")
+        _emit_auto_update(auto)
+        _ai_running_set.discard(auto_id)
         return
 
     logging.info(f"[AI-SCHEDULER] Running AI for '{auto.get('name', auto_id)}'")
-    _auto_log(auto_id, "🤖 AI Agent running...")
+    _auto_log(auto_id, "🤖 AI Agent starting...")
     _emit_auto_update(auto) # force UI update to show log
 
-    forecast = get_7_day_forecast(lat=lat, lon=lon)
-    if not forecast:
-        _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
-        return
+    try:
+        # Check model status for logging
+        if not is_model_loaded():
+            if is_model_loading():
+                _auto_log(auto_id, "🤖 AI model is loading, please wait...")
+            else:
+                _auto_log(auto_id, "🤖 AI loading model now...")
+            _emit_auto_update(auto)
+        else:
+            _auto_log(auto_id, "🤖 AI model ready (pre-loaded)")
+            _emit_auto_update(auto)
 
-    ctx = build_automation_context(auto_id, auto)
-    decision = get_ai_schedule_decision(forecast, ctx)
-    if not decision:
-        _auto_log(auto_id, "AI failed: model returned no decision", level="error")
-        return
+        forecast = get_7_day_forecast(lat=lat, lon=lon)
+        if not forecast:
+            _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
+            _emit_auto_update(auto)
+            _ai_running_set.discard(auto_id)
+            return
 
-    new_days = decision.get("selected_days", [])
-    reasoning = decision.get("reasoning", "")
-    old_days = sched.get("days", [])
+        ctx = build_automation_context(auto_id, auto)
+        decision = get_ai_schedule_decision(forecast, ctx)
+        if not decision:
+            _auto_log(auto_id, "AI failed: model returned no decision", level="error")
+            _emit_auto_update(auto)
+            _ai_running_set.discard(auto_id)
+            return
 
-    sched["days"] = new_days
-    _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
-    _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
-    logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
+        new_days = decision.get("selected_days", [])
+        reasoning = decision.get("reasoning", "")
+        old_days = sched.get("days", [])
 
-    _emit_auto_update(auto)
+        sched["days"] = new_days
+        _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
+        _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
+        logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
+
+    except Exception as e:
+        logging.error(f"[AI-SCHEDULER] Error running AI for '{auto.get('name', auto_id)}': {e}")
+        _auto_log(auto_id, f"AI error: {str(e)[:100]}", level="error")
+    finally:
+        _emit_auto_update(auto)
+        _ai_running_set.discard(auto_id)
 
 
 def _run_ai_for_all_automations():
