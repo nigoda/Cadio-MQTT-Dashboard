@@ -594,9 +594,10 @@ def engine_tick(auto):
     # --- State transitions ---
 
     if state == "IDLE":
-        # Status just turned ON
-        rt["state"] = "WAIT_CONDITION"
-        _auto_log(auto_id, "Status ON → WAIT_CONDITION")
+        # Status just turned ON → run initialization immediately
+        rt["state"] = "INIT_SET"
+        rt["retryCount"] = 0
+        _auto_log(auto_id, "Status ON → INIT_SET (initialization runs unconditionally)")
         _emit_auto_update(auto)
         return
 
@@ -604,9 +605,9 @@ def engine_tick(auto):
         cond = evaluate_condition(auto)
         sched = check_schedule(auto)
         if cond and sched:
-            rt["state"] = "INIT_SET"
-            rt["retryCount"] = 0
-            _auto_log(auto_id, "Condition satisfied + Schedule active → INIT_SET")
+            rt["state"] = "ACTION_SET"
+            rt["currentActionIndex"] = 0
+            _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
             _emit_auto_update(auto)
         return
 
@@ -623,10 +624,9 @@ def engine_tick(auto):
     if state == "INIT_VERIFY":
         inits = auto.get("initialization", [])
         if not inits or _verify_switches(inits, auto):
-            rt["state"] = "ACTION_SET"
+            rt["state"] = "WAIT_CONDITION"
             rt["retryCount"] = 0
-            rt["currentActionIndex"] = 0
-            _auto_log(auto_id, "Initialization verified → ACTION_SET")
+            _auto_log(auto_id, "Initialization verified → WAIT_CONDITION (awaiting condition + schedule)")
             _emit_auto_update(auto)
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
@@ -710,9 +710,8 @@ def engine_tick(auto):
                 _auto_log(auto_id, f"Action {idx+1} timer done → OVERLAP_NEXT_SET")
             else:
                 # We reached the end. Can we loop?
-                cond = evaluate_condition(auto)
                 sched = check_schedule(auto)
-                if cond and sched and len(actions) > 1:
+                if sched and len(actions) > 1:
                     rt["loopingToFirst"] = True
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
@@ -743,13 +742,14 @@ def engine_tick(auto):
             inits = auto.get("initialization", [])
             for item in inits:
                 _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
-            _auto_log(auto_id, "Looping: Initialization commands sent")
-
-        action = actions[next_idx]
-        _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
+            _auto_log(auto_id, "Looping: Initialization commands sent (Zone 1 will start after buffer)")
+        else:
+            action = actions[next_idx]
+            _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
+            _auto_log(auto_id, f"Overlap Action {next_idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
+            
         rt["verifyStart"] = now
         rt["state"] = "OVERLAP_NEXT_VERIFY"
-        _auto_log(auto_id, f"Overlap Action {next_idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
         _emit_auto_update(auto)
         return
 
@@ -757,17 +757,16 @@ def engine_tick(auto):
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
         next_idx = (idx + 1) % len(actions)
-        action = actions[next_idx]
         
-        switches_to_verify = [action]
         if next_idx == 0 and rt.get("loopingToFirst"):
-            inits = auto.get("initialization", [])
-            switches_to_verify.extend(inits)
+            switches_to_verify = auto.get("initialization", [])
+        else:
+            switches_to_verify = [actions[next_idx]]
             
         if _verify_switches(switches_to_verify, auto):
             rt["bufferStart"] = now
             rt["state"] = "BUFFER"
-            _auto_log(auto_id, f"Overlap Action {next_idx+1} verified → BUFFER")
+            _auto_log(auto_id, f"Overlap transition verified → BUFFER")
             _emit_auto_update(auto)
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
@@ -812,14 +811,9 @@ def engine_tick(auto):
         def _finish_revert():
             if rt.get("loopingToFirst"):
                 rt["loopingToFirst"] = False
-                next_idx = 0
-                rt["currentActionIndex"] = next_idx
-                duration = actions[next_idx].get("duration", 0)
-                rt["timerStart"] = now
-                rt["remainingTime"] = duration
-                rt["state"] = "ACTION_RUN"
-                rt["retryCount"] = 0
-                _auto_log(auto_id, f"Looped to Action 1 → ACTION_RUN ({duration}s)")
+                rt["currentActionIndex"] = 0
+                rt["state"] = "ACTION_SET"  # Clean start for the first action
+                _auto_log(auto_id, "Initialization Loop Complete → Starting Action 1")
             elif idx + 1 < len(actions):
                 # Make-Before-Break finished. Advance to next action and start its timer.
                 next_idx = idx + 1
@@ -1101,8 +1095,9 @@ def handle_toggle_automation(data):
     auto["status"] = status
     if status == "ON":
         auto["runtime"] = _new_runtime()
-        auto["runtime"]["state"] = "WAIT_CONDITION"
-        _auto_log(auto_id, "Turned ON → WAIT_CONDITION")
+        auto["runtime"]["state"] = "INIT_SET"
+        auto["runtime"]["retryCount"] = 0
+        _auto_log(auto_id, "Turned ON → INIT_SET")
     else:
         auto["runtime"] = _new_runtime()
         _auto_log(auto_id, "Turned OFF → IDLE")
