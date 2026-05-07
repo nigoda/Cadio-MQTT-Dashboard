@@ -4,63 +4,41 @@ import logging
 import os
 import threading
 from datetime import datetime, timedelta
+import warnings
+
+# Suppress noisy Google SDK warnings about Python 3.9 EOL
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.auth")
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.oauth2")
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.api_core")
 
 # Default Location
 DEFAULT_LAT = 12.840675735693322
 DEFAULT_LON = 77.67727845265588
 
-# Local Model Configuration
-# Download Llama-3.2-1B-Instruct Q4_K_M GGUF (~700MB) from:
-# https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "llama-3.2-1b-instruct.gguf")
+# Setup Gemini API
+from dotenv import load_dotenv
+from google import genai
 
-# Global reference to the loaded model so it only loads once into memory
-_llm_instance = None
-_llm_loading_lock = threading.Lock()
-_llm_is_loading = False
+load_dotenv()
 
-def get_llm():
-    global _llm_instance, _llm_is_loading
-    
-    # Fast path: already loaded
-    if _llm_instance is not None:
-        return _llm_instance
-    
-    # Slow path: need to load (with lock to prevent double-load)
-    with _llm_loading_lock:
-        # Double-check after acquiring lock
-        if _llm_instance is not None:
-            return _llm_instance
-            
-        try:
-            from llama_cpp import Llama
-        except ImportError:
-            logging.error("Missing dependency! Run: pip install llama-cpp-python")
-            return None
-            
-        if not os.path.exists(MODEL_PATH):
-            logging.error(f"Model file not found at {MODEL_PATH}. Please download a .gguf model.")
-            return None
-        
-        _llm_is_loading = True
-        logging.info("Loading AI model into memory. This may take a few seconds...")
-        
-        try:
-            # n_ctx is the context window size. 2048 is plenty for our schedule JSON.
-            _llm_instance = Llama(model_path=MODEL_PATH, n_ctx=131072, verbose=False) #2048,4096, 131072
-            logging.info("AI model loaded successfully!")
-        finally:
-            _llm_is_loading = False
-        
-    return _llm_instance
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+_genai_client = None
+
+if GEMINI_API_KEY:
+    try:
+        _genai_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        logging.error(f"Failed to initialize Gemini Client: {e}")
+else:
+    logging.warning("GEMINI_API_KEY not found in environment or .env file.")
 
 def is_model_loading():
-    """Check if model is currently loading (for UI status updates)."""
-    return _llm_is_loading
+    """Gemini API doesn't need loading, always returns False."""
+    return False
 
 def is_model_loaded():
-    """Check if model is loaded and ready."""
-    return _llm_instance is not None
+    """Returns True if the API key is configured."""
+    return bool(GEMINI_API_KEY)
 
 def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
     """Fetches past weather + 7-day forecast from Open-Meteo (No API Key required).
@@ -190,10 +168,7 @@ def get_ai_schedule_decision(weather_data, auto_context, timeout=60):
     """Executes the local AI model to get a scheduling decision.
     weather_data: dict with 'today', 'past_days', and 'forecast' keys."""
     import threading
-    
-    llm = get_llm()
-    if not llm:
-        return None
+
 
     # Extract the sections
     today = weather_data.get("today", {})
@@ -215,8 +190,9 @@ RULES:
 5. Check "irrigation_history" — this shows how many watering cycles ran on each past day. If many cycles ran recently, soil has plenty of water.
 6. Check "cycles_completed_today" — if already > 0, the system has watered today.
 7. If "irrigation_history" is empty AND past 3 days had NO rain, prioritize watering TODAY or TOMORROW urgently.
-8. Select between 1 and 4 days from the upcoming forecast.
-9. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
+8. Check "max_cycles_per_day" — if this is 0, it means the system will run INFINITE cycles as long as the time is within the scheduled range.
+9. Select between 1 and 4 days from the upcoming forecast.
+10. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {{
     "selected_days": ["DAY1", "DAY2"],
@@ -237,65 +213,49 @@ TODAY ({today_day}, {today_str}):
 UPCOMING 7-DAY FORECAST:
 {json.dumps(forecast, indent=2)}"""
     
-    MAX_RETRIES = 3
-    valid_days = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+    if not _genai_client:
+        logging.error("Cannot run AI scheduling: Gemini Client is not initialized.")
+        return None
 
-    for attempt in range(1, MAX_RETRIES + 1):
-        result = {"decision": None, "error": None}
-        temp = 0.1 + (attempt - 1) * 0.15  # Slightly raise temp on retries
-
-        def run_inference():
-            try:
-                response = llm.create_chat_completion(
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ],
-                    response_format={"type": "json_object"},
-                    temperature=temp,
-                    max_tokens=256
-                )
-                raw_text = response["choices"][0]["message"]["content"].strip()
-                result["decision"] = json.loads(raw_text)
-            except Exception as e:
-                result["error"] = str(e)
-
-        # Run inference in a thread with timeout
-        thread = threading.Thread(target=run_inference)
-        thread.daemon = True
-        thread.start()
-        thread.join(timeout=timeout)
-
-        if thread.is_alive():
-            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES} timed out")
-            continue
-
-        if result["error"]:
-            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES} error: {result['error']}")
-            continue
-
-        decision = result["decision"]
+    try:
+        # We can combine system and user prompt for Gemini
+        full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER REQUEST:\n{user_prompt}"
+        
+        response = _genai_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+            config={
+                "response_mime_type": "application/json",
+                "temperature": 0.1
+            }
+        )
+        
+        raw_text = response.text.strip()
+        decision = json.loads(raw_text)
+        
         if not decision or "selected_days" not in decision or "reasoning" not in decision:
-            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES}: missing keys in response")
-            continue
-
-        # Clean up day names — model may return "Mon (2026-05-10)" instead of "Mon"
+            logging.error(f"AI missing keys in response: {decision}")
+            return None
+            
+        # Clean up day names just in case
+        valid_days = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
         cleaned = []
         for d in decision["selected_days"]:
             short = d.split(" ")[0].split("(")[0].strip()
             if short in valid_days:
                 cleaned.append(short)
-
+                
         if not cleaned:
-            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES}: no valid day names found in {decision['selected_days']}")
-            continue
-
+            logging.error(f"AI returned no valid days: {decision['selected_days']}")
+            return None
+            
         decision["selected_days"] = cleaned
-        logging.info(f"AI decision accepted on attempt {attempt}: {cleaned}")
+        logging.info(f"Gemini API decision accepted: {cleaned}")
         return decision
-
-    logging.error(f"AI failed after {MAX_RETRIES} attempts for automation {auto_context.get('automation_id')}")
-    return None
+        
+    except Exception as e:
+        logging.error(f"Gemini API failed for automation {auto_context.get('automation_id')}: {e}")
+        return None
 
 # --- FOR TESTING PURPOSES ---
 if __name__ == "__main__":

@@ -1090,7 +1090,7 @@ def _run_ai_for_automation(auto_id):
         logging.error(f"[AI-SCHEDULER] Could not import ai_agent module: {e}")
         auto = automations.get(auto_id)
         if auto:
-            _auto_log(auto_id, f"AI error: module import failed - check llama-cpp-python installation", level="error")
+            _auto_log(auto_id, f"AI error: module import failed - {e}", level="error")
             _emit_auto_update(auto)
         _ai_running_set.discard(auto_id)
         return

@@ -1,18 +1,25 @@
-"""Test script — Multiple scenarios to verify AI consistency."""
+"""Test script — Multiple scenarios to verify AI consistency with Gemini API."""
 import json
 import os
 import sys
+import warnings
+from dotenv import load_dotenv
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "llama-3.2-1b-instruct.gguf")
+# Suppress noisy Google SDK warnings about Python 3.9 EOL
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.auth")
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.oauth2")
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.api_core")
+from google import genai
 
-if not os.path.exists(MODEL_PATH):
-    print(f"ERROR: Model not found at {MODEL_PATH}")
+load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    print("ERROR: GEMINI_API_KEY not found in environment or .env file.")
     sys.exit(1)
 
-print("Loading Llama 3.2 1B model... (this may take a few seconds)")
-from llama_cpp import Llama
-llm = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
-print("Model loaded!\n")
+client = genai.Client(api_key=GEMINI_API_KEY)
+print("Gemini API Client loaded!\n")
 
 VALID_DAYS = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
 MAX_RETRIES = 3
@@ -196,44 +203,42 @@ UPCOMING 7-DAY FORECAST:
 
 
 def run_scenario(scenario):
-    """Run a single scenario with retry logic. Returns (cleaned_days, reasoning) or None."""
-    for attempt in range(1, MAX_RETRIES + 1):
-        temp = 0.1 + (attempt - 1) * 0.15
-        try:
-            response = llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": scenario["prompt"]}
-                ],
-                response_format={"type": "json_object"},
-                temperature=temp,
-                max_tokens=256
-            )
-            raw = response["choices"][0]["message"]["content"].strip()
-            parsed = json.loads(raw)
+    """Run a single scenario with Gemini API."""
+    try:
+        full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER REQUEST:\n{scenario['prompt']}"
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=full_prompt,
+            config={
+                "response_mime_type": "application/json",
+                "temperature": 0.1
+            }
+        )
+        raw = response.text.strip()
+        parsed = json.loads(raw)
 
-            if "selected_days" not in parsed or "reasoning" not in parsed:
-                print(f"    ⚠️  Attempt {attempt}: missing keys — retrying...")
-                continue
+        if "selected_days" not in parsed or "reasoning" not in parsed:
+            print(f"    ⚠️  Missing keys in response")
+            return None, None, 1
 
-            cleaned = []
-            for d in parsed["selected_days"]:
-                short = d.split(" ")[0].split("(")[0].strip()
-                if short in VALID_DAYS:
-                    cleaned.append(short)
+        cleaned = []
+        for d in parsed["selected_days"]:
+            short = d.split(" ")[0].split("(")[0].strip()
+            if short in VALID_DAYS:
+                cleaned.append(short)
 
-            if not cleaned:
-                print(f"    ⚠️  Attempt {attempt}: no valid days in {parsed['selected_days']} — retrying...")
-                continue
+        if not cleaned:
+            print(f"    ⚠️  No valid days in {parsed['selected_days']}")
+            return None, None, 1
 
-            return cleaned, parsed["reasoning"], attempt
+        return cleaned, parsed["reasoning"], 1
 
-        except json.JSONDecodeError:
-            print(f"    ⚠️  Attempt {attempt}: JSON parse error — retrying...")
-        except Exception as e:
-            print(f"    ⚠️  Attempt {attempt}: {e} — retrying...")
+    except json.JSONDecodeError:
+        print(f"    ⚠️  JSON parse error")
+    except Exception as e:
+        print(f"    ⚠️  {e}")
 
-    return None, None, MAX_RETRIES
+    return None, None, 1
 
 
 # ─── RUN ALL SCENARIOS ───
@@ -244,19 +249,19 @@ print("=" * 70)
 results = []
 
 for i, scenario in enumerate(SCENARIOS):
-    print(f"\n{'─' * 70}")
+    print(f"\n{'-' * 70}")
     print(f"  {scenario['name']}")
     print(f"  Expected: {scenario['expected']}")
-    print(f"{'─' * 70}")
+    print(f"{'-' * 70}")
 
     days, reasoning, attempts = run_scenario(scenario)
 
     if days:
-        print(f"\n  ✅ Result (attempt {attempts}): {days}")
-        print(f"  💬 {reasoning[:120]}{'...' if len(reasoning) > 120 else ''}")
+        print(f"\n  [PASS] Result (attempt {attempts}): {days}")
+        print(f"  > {reasoning[:120]}{'...' if len(reasoning) > 120 else ''}")
         results.append({"scenario": scenario["name"], "days": days, "status": "PASS", "attempts": attempts})
     else:
-        print(f"\n  ❌ FAILED after {MAX_RETRIES} attempts")
+        print(f"\n  [FAIL] FAILED after {MAX_RETRIES} attempts")
         results.append({"scenario": scenario["name"], "days": None, "status": "FAIL", "attempts": MAX_RETRIES})
 
 # ─── SUMMARY ───
@@ -264,12 +269,12 @@ print(f"\n{'=' * 70}")
 print("  SUMMARY")
 print(f"{'=' * 70}")
 print(f"  {'Scenario':<50} {'Days':<20} {'Status':<8} {'Tries'}")
-print(f"  {'─' * 50} {'─' * 20} {'─' * 8} {'─' * 5}")
+print(f"  {'-' * 50} {'-' * 20} {'-' * 8} {'-' * 5}")
 
 for r in results:
     days_str = ", ".join(r["days"]) if r["days"] else "—"
-    status_icon = "✅" if r["status"] == "PASS" else "❌"
-    # Extract just the emoji + short name
+    status_icon = "PASS" if r["status"] == "PASS" else "FAIL"
+    # Extract just the short name
     short_name = r["scenario"].split(":")[0].strip() if ":" in r["scenario"] else r["scenario"][:40]
     print(f"  {short_name:<50} {days_str:<20} {status_icon:<8} {r['attempts']}")
 
@@ -278,6 +283,6 @@ total = len(results)
 print(f"\n  Result: {passed}/{total} scenarios passed")
 
 if passed == total:
-    print("  🎉 All scenarios produced valid output!")
+    print("  *** All scenarios produced valid output! ***")
 else:
-    print("  ⚠️  Some scenarios failed — model may need a larger variant")
+    print("  !!! Some scenarios failed !!!")

@@ -89,11 +89,19 @@ Default credentials are **not** included in the code. Enter them on the login sc
 # Windows PowerShell
 $env:MQTT_USERNAME = "your@email.com"
 $env:MQTT_PASSWORD = "your_password"
+$env:GEMINI_API_KEY = "AIzaSy..." # Needed for AI Irrigation Scheduling
 python app.py
 
 # macOS / Linux
-MQTT_USERNAME="your@email.com" MQTT_PASSWORD="your_password" python app.py
+MQTT_USERNAME="your@email.com" MQTT_PASSWORD="your_password" GEMINI_API_KEY="AIzaSy..." python app.py
 ```
+
+### AI Scheduling Setup (Optional)
+To use the AI-driven irrigation scheduling, you must configure a free Gemini API key:
+1. Get a key from [Google AI Studio](https://aistudio.google.com/).
+2. Create a `.env` file in the main folder (you can copy `.env.example`).
+3. Add `GEMINI_API_KEY=your_key_here` to the `.env` file.
+4. Restart the app.
 
 ---
 
@@ -190,3 +198,5 @@ And hard refresh the browser (**Ctrl+Shift+R**).
 | Flask-SocketIO | ≥ 5.3     | Real-time WebSocket communication |
 | paho-mqtt      | ≥ 1.6, <2 | MQTT client (v3.1.1 protocol)     |
 | requests       | ≥ 2.28    | HTTP client for Nivixsa login API   |
+| google-genai   | ≥ 0.1     | Gemini API integration (AI scheduling) |
+| python-dotenv  | ≥ 1.0     | Environment variable management   |
