@@ -4,13 +4,15 @@ Bridges Nivixsa cloud MQTT to the browser via Flask-SocketIO.
 Uses the Nivixsa login API to obtain the real MQTT broker details.
 """
 
+import copy
 import json
 import logging
 import os
 import ssl
 import threading
 import time
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 
 import paho.mqtt.client as mqtt
 import requests
@@ -43,6 +45,20 @@ MAX_HISTORY = 200               # datapoints kept per sensor topic
 mqtt_client = None
 mqtt_connected = False
 pending_subs = 0          # track outstanding SUBSCRIBE calls
+
+# ---------------------------------------------------------------------------
+# Irrigation Automation stores
+# ---------------------------------------------------------------------------
+automations: dict = {}          # auto_id -> automation dict
+automation_logs: dict = {}      # auto_id -> list of log entries
+MAX_AUTO_LOG = 200
+VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
+MAX_RETRIES = 3
+BUFFER_SECONDS = 5              # default buffer between actions
+ENGINE_INTERVAL = 1.0           # state machine tick interval (seconds)
+_engine_thread = None
+_engine_running = False
+_ai_running_set: set = set()    # track which automations currently have AI running (prevent duplicates)
 
 # ---------------------------------------------------------------------------
 # MQTT helpers
@@ -361,13 +377,944 @@ def handle_get_history(data):
 
 
 # ---------------------------------------------------------------------------
+# Irrigation Automation Engine
+# ---------------------------------------------------------------------------
+
+def _new_runtime():
+    """Return a fresh runtime block."""
+    return {
+        "state": "IDLE",
+        "currentActionIndex": 0,
+        "timerStart": None,
+        "remainingTime": None,
+        "retryCount": 0,
+        "pauseReason": None,
+        "verifyStart": None,
+        "bufferStart": None,
+    }
+
+
+def _auto_log(auto_id, message, level="info"):
+    """Append a timestamped log entry for an automation."""
+    if auto_id not in automation_logs:
+        automation_logs[auto_id] = []
+    entry = {"ts": datetime.now().isoformat(), "msg": message, "level": level}
+    automation_logs[auto_id].insert(0, entry)
+    if len(automation_logs[auto_id]) > MAX_AUTO_LOG:
+        automation_logs[auto_id] = automation_logs[auto_id][:MAX_AUTO_LOG]
+    logging.info(f"[AUTO {auto_id}] {message}")
+
+
+def _get_switch_state(switch_topic):
+    """Get the latest known state for a switch from device_states."""
+    data = device_states.get(switch_topic)
+    if not data:
+        return None
+    payload = data.get("payload")
+    if isinstance(payload, dict):
+        return payload.get("state", "").upper()
+    return str(payload).upper() if payload else None
+
+
+def _mqtt_set_switch(cmd_topic, state):
+    """Publish a command to set a switch state."""
+    if mqtt_client and mqtt_connected and cmd_topic:
+        payload = json.dumps({"state": state.upper()})
+        mqtt_client.publish(cmd_topic, payload)
+        logging.info(f"[ENGINE] Published {payload} to {cmd_topic}")
+
+
+def evaluate_condition(auto):
+    """Evaluate the condition expression using AND/OR logic.
+    AND has higher precedence than OR (groups are formed by AND, then OR'd).
+    Returns True if condition list is empty."""
+    conditions = auto.get("condition", [])
+    if not conditions:
+        return True
+
+    # Build results list with logic operators
+    results = []
+    for cond in conditions:
+        sensor_topic = cond.get("sensorStateTopic", "")
+        expected = str(cond.get("value", "")).upper()
+        actual = _get_switch_state(sensor_topic)
+        matched = actual == expected if actual is not None else False
+        results.append({"matched": matched, "logic": cond.get("logic")})
+
+    # Evaluate: AND groups first, then OR between groups
+    # Split into OR-separated groups of AND-connected conditions
+    or_groups = []
+    current_group = [results[0]["matched"]]
+    for i in range(1, len(results)):
+        prev_logic = results[i - 1].get("logic", "AND")
+        if prev_logic == "OR":
+            or_groups.append(current_group)
+            current_group = [results[i]["matched"]]
+        else:  # AND
+            current_group.append(results[i]["matched"])
+    or_groups.append(current_group)
+
+    # Each group must have ALL true (AND), then any group true (OR)
+    return any(all(g) for g in or_groups)
+
+
+def check_schedule(auto):
+    """Check if current day+time falls within the schedule window.
+    Returns True if no schedule is defined."""
+    sched = auto.get("schedule")
+    if not sched:
+        return True
+        
+    days = sched.get("days", [])
+    if not days:
+        return False  # No days selected -> Deactivated
+        
+    start_str = sched.get("startTime", "")
+    end_str = sched.get("endTime", "")
+
+    # Use utcOffset if provided, else fallback to server local time
+    utc_offset_mins = sched.get("utcOffset")
+    if utc_offset_mins is not None:
+        try:
+            offset = int(utc_offset_mins)
+            now = datetime.utcnow() - timedelta(minutes=offset)
+        except ValueError:
+            now = datetime.now()
+    else:
+        now = datetime.now()
+
+    day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    current_day = day_names[now.weekday()]
+    if current_day not in days:
+        return False
+
+    if sched.get("is24hr"):
+        return True
+
+    ranges = sched.get("timeRanges", [])
+    if not ranges:
+        # Fallback for old single range format
+        s_start = sched.get("startTime", "")
+        s_end = sched.get("endTime", "")
+        if not s_start or not s_end:
+            return True
+        ranges = [{"start": s_start, "end": s_end}]
+
+    now_mins = now.hour * 60 + now.minute
+
+    for r in ranges:
+        start_str = r.get("start", "")
+        end_str = r.get("end", "")
+        if not start_str or not end_str:
+            continue
+        try:
+            start_h, start_m = map(int, start_str.split(":"))
+            end_h, end_m = map(int, end_str.split(":"))
+            start_mins = start_h * 60 + start_m
+            end_mins = end_h * 60 + end_m
+
+            if start_mins <= end_mins:
+                # Normal range
+                if start_mins <= now_mins < end_mins:
+                    return True
+            else:
+                # Overnight range
+                if now_mins >= start_mins or now_mins < end_mins:
+                    return True
+        except (ValueError, AttributeError):
+            continue
+
+    return False
+
+
+def _verify_switches(switch_list, auto):
+    """Check if all switches in list match their expected state.
+    switch_list: list of {switchCmdTopic, switchStateTopic, state}"""
+    for item in switch_list:
+        state_topic = item.get("switchStateTopic", "")
+        expected = item.get("state", "").upper()
+        actual = _get_switch_state(state_topic)
+        if actual != expected:
+            return False
+    return True
+
+
+def _emit_auto_update(auto):
+    """Broadcast automation state update to all connected clients."""
+    safe = copy.deepcopy(auto)
+    auto_id = safe.get("id", "")
+    logs = automation_logs.get(auto_id, [])[:20]
+    socketio.emit("automation_update", {"automation": safe, "logs": logs})
+
+
+def engine_tick(auto):
+    """Execute one tick of the state machine for an automation."""
+    rt = auto["runtime"]
+    state = rt["state"]
+    auto_id = auto["id"]
+    now = time.time()
+
+    # Priority 1: If status is OFF, go IDLE immediately
+    if auto.get("status") != "ON":
+        if state != "IDLE":
+            rt["state"] = "IDLE"
+            rt["currentActionIndex"] = 0
+            rt["timerStart"] = None
+            rt["remainingTime"] = None
+            rt["retryCount"] = 0
+            rt["pauseReason"] = None
+            _auto_log(auto_id, "Status OFF → IDLE")
+            _emit_auto_update(auto)
+        return
+
+    # Priority 2: User Pause
+    if auto.get("isPaused"):
+        if state != "PAUSED_USER" and state != "IDLE" and state != "ERROR":
+            rt["prePauseState"] = state
+            # freeze timers
+            if "timerStart" in rt and rt["timerStart"]:
+                elapsed = now - rt["timerStart"]
+                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed)
+                rt["timerStart"] = None
+            if "bufferStart" in rt and rt["bufferStart"]:
+                elapsed = now - rt["bufferStart"]
+                rt["remainingBuffer"] = max(0, auto.get("bufferTime", BUFFER_SECONDS) - elapsed)
+                rt["bufferStart"] = None
+            if "verifyStart" in rt and rt["verifyStart"]:
+                elapsed = now - rt["verifyStart"]
+                rt["remainingVerify"] = max(0, VERIFY_TIMEOUT - elapsed)
+                rt["verifyStart"] = None
+                
+            rt["state"] = "PAUSED_USER"
+            _auto_log(auto_id, "User paused the automation")
+            _emit_auto_update(auto)
+        return
+
+    # Priority 3: User Resume
+    if not auto.get("isPaused") and state == "PAUSED_USER":
+        rt["state"] = rt.get("prePauseState", "IDLE")
+        # resume timers
+        if "remainingTime" in rt and rt["remainingTime"] is not None:
+            rt["timerStart"] = now
+        if "remainingBuffer" in rt and rt["remainingBuffer"] is not None:
+            rt["bufferStart"] = now - (auto.get("bufferTime", BUFFER_SECONDS) - rt["remainingBuffer"])
+            del rt["remainingBuffer"]
+        if "remainingVerify" in rt and rt["remainingVerify"] is not None:
+            rt["verifyStart"] = now - (VERIFY_TIMEOUT - rt["remainingVerify"])
+            del rt["remainingVerify"]
+        _auto_log(auto_id, f"User resumed → {rt['state']}")
+        _emit_auto_update(auto)
+        return
+
+    # Priority 4: ERROR state — only RESET or OFF can exit
+    if state == "ERROR":
+        return
+
+    # --- State transitions ---
+
+    if state == "IDLE":
+        # Status just turned ON → run initialization immediately
+        rt["state"] = "INIT_SET"
+        rt["retryCount"] = 0
+        _auto_log(auto_id, "Status ON → INIT_SET (initialization runs unconditionally)")
+        _emit_auto_update(auto)
+        return
+
+    if state == "WAIT_CONDITION":
+        cond = evaluate_condition(auto)
+        sched = check_schedule(auto)
+        if cond and sched:
+            # Check cycle limit before starting a new cycle
+            max_cycles = auto.get("maxCyclesPerDay", 0)
+            if max_cycles > 0:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
+                if cycles_today >= max_cycles:
+                    if rt.get("_cycle_paused") != today_str:
+                        rt["_cycle_paused"] = today_str
+                        _auto_log(auto_id, f"Max cycles reached ({cycles_today}/{max_cycles}) — pausing until tomorrow")
+                        _emit_auto_update(auto)
+                    return
+            rt["state"] = "ACTION_SET"
+            rt["currentActionIndex"] = 0
+            _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
+            _emit_auto_update(auto)
+        return
+
+    if state == "INIT_SET":
+        inits = auto.get("initialization", [])
+        idx = rt.get("currentInitIndex", 0)
+        
+        if not inits:
+            rt["state"] = "INIT_VERIFY_ALL"
+            _emit_auto_update(auto)
+            return
+            
+        if idx < len(inits):
+            item = inits[idx]
+            _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
+            rt["verifyStart"] = now
+            rt["state"] = "INIT_VERIFY_INDIVIDUAL"
+            _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} sent → INIT_VERIFY_INDIVIDUAL")
+            _emit_auto_update(auto)
+        else:
+            rt["verifyStart"] = now
+            rt["state"] = "INIT_VERIFY_ALL"
+            _auto_log(auto_id, "All individual initialization commands sent. Final bulk check → INIT_VERIFY_ALL")
+            _emit_auto_update(auto)
+        return
+
+    if state == "INIT_VERIFY_INDIVIDUAL":
+        inits = auto.get("initialization", [])
+        idx = rt.get("currentInitIndex", 0)
+        if idx < len(inits):
+            item = inits[idx]
+            if _verify_switches([item], auto):
+                rt["currentInitIndex"] = idx + 1
+                rt["state"] = "INIT_SET"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} verified")
+                _emit_auto_update(auto)
+            elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                rt["retryCount"] = rt.get("retryCount", 0) + 1
+                if rt["retryCount"] >= MAX_RETRIES:
+                    rt["state"] = "ERROR_SET"
+                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} verification timeout → ERROR_SET", "error")
+                    _emit_auto_update(auto)
+                else:
+                    rt["state"] = "INIT_SET"
+                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} verify retry {rt['retryCount']}/{MAX_RETRIES}")
+                    _emit_auto_update(auto)
+        return
+
+    if state == "INIT_VERIFY_ALL":
+        inits = auto.get("initialization", [])
+        if not inits or _verify_switches(inits, auto):
+            if rt.get("loopingToFirst"):
+                rt["bufferStart"] = now
+                rt["state"] = "BUFFER"
+                _auto_log(auto_id, "All initialization verified → BUFFER")
+            else:
+                rt["state"] = "WAIT_CONDITION"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, "Initialization verified → WAIT_CONDITION (awaiting condition + schedule)")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+            rt["retryCount"] = rt.get("retryCount", 0) + 1
+            if rt["retryCount"] >= MAX_RETRIES:
+                rt["state"] = "ERROR_SET"
+                _auto_log(auto_id, "Bulk init verification timeout → ERROR_SET", "error")
+                _emit_auto_update(auto)
+            else:
+                # Restart the sequential flow
+                rt["currentInitIndex"] = 0
+                rt["state"] = "INIT_SET"
+                _auto_log(auto_id, f"Bulk init verify failed, restarting sequence! Retry {rt['retryCount']}/{MAX_RETRIES}", "warning")
+                _emit_auto_update(auto)
+        return
+
+    if state == "ACTION_SET":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        if idx >= len(actions):
+            rt["state"] = "COMPLETED"
+            _auto_log(auto_id, "No more actions → COMPLETED")
+            _emit_auto_update(auto)
+            return
+        action = actions[idx]
+        _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
+        rt["verifyStart"] = now
+        rt["state"] = "ACTION_VERIFY"
+        _auto_log(auto_id, f"Action {idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
+        _emit_auto_update(auto)
+        return
+
+    if state == "ACTION_VERIFY":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        action = actions[idx] if idx < len(actions) else {}
+        if _verify_switches([action], auto):
+            duration = action.get("duration", 0)
+            rt["timerStart"] = now
+            rt["remainingTime"] = duration
+            rt["state"] = "ACTION_RUN"
+            _auto_log(auto_id, f"Action {idx+1} verified → ACTION_RUN ({duration}s)")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+            rt["retryCount"] = rt.get("retryCount", 0) + 1
+            if rt["retryCount"] >= MAX_RETRIES:
+                rt["state"] = "ERROR_SET"
+                _auto_log(auto_id, f"Action {idx+1} verify timeout → ERROR_SET", "error")
+                _emit_auto_update(auto)
+            else:
+                rt["state"] = "ACTION_SET"
+                _auto_log(auto_id, f"Action {idx+1} verify retry {rt['retryCount']}")
+                _emit_auto_update(auto)
+        return
+
+    if state == "ACTION_RUN":
+        # Check for condition pause
+        if not evaluate_condition(auto):
+            elapsed = now - (rt.get("timerStart") or now)
+            rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed)
+            rt["pauseReason"] = "condition"
+            rt["state"] = "PAUSED_CONDITION"
+            _auto_log(auto_id, "Condition FALSE → PAUSED_CONDITION")
+            _emit_auto_update(auto)
+            return
+        # Check for schedule pause
+        if not check_schedule(auto):
+            elapsed = now - (rt.get("timerStart") or now)
+            rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed)
+            rt["pauseReason"] = "schedule"
+            rt["state"] = "PAUSED_SCHEDULE"
+            _auto_log(auto_id, "Schedule ended → PAUSED_SCHEDULE")
+            _emit_auto_update(auto)
+            return
+        # Check timer
+        elapsed = now - (rt.get("timerStart") or now)
+        remaining = (rt.get("remainingTime") or 0) - elapsed
+        if remaining <= 0:
+            actions = auto.get("actions", [])
+            idx = rt.get("currentActionIndex", 0)
+            if idx + 1 < len(actions):
+                rt["state"] = "OVERLAP_NEXT_SET"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, f"Action {idx+1} timer done → OVERLAP_NEXT_SET")
+            else:
+                # We reached the end of all actions. Increment cycle count first.
+                max_cycles = auto.get("maxCyclesPerDay", 0)
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                if rt.get("cycles_date") != today_str:
+                    rt["cycles_date"] = today_str
+                    rt["cycles_today"] = 0
+                rt["cycles_today"] = rt.get("cycles_today", 0) + 1
+                cycles_today = rt["cycles_today"]
+                # Track history
+                if "cycles_history" not in rt:
+                    rt["cycles_history"] = {}
+                rt["cycles_history"][today_str] = cycles_today
+                sorted_dates = sorted(rt["cycles_history"].keys())
+                while len(sorted_dates) > 7:
+                    del rt["cycles_history"][sorted_dates.pop(0)]
+                rt["last_irrigated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+                cycle_limit_reached = max_cycles > 0 and cycles_today >= max_cycles
+
+                # Can we loop?
+                sched = check_schedule(auto)
+                if sched and len(actions) > 1 and not cycle_limit_reached:
+                    rt["loopingToFirst"] = True
+                    rt["stopAfterRevert"] = False
+                    rt["state"] = "OVERLAP_NEXT_SET"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Cycle #{cycles_today} done → Init → Loop to Action 1")
+                elif cycle_limit_reached:
+                    rt["loopingToFirst"] = True
+                    rt["stopAfterRevert"] = True
+                    rt["state"] = "OVERLAP_NEXT_SET"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Cycle #{cycles_today} done → Max cycles ({max_cycles}/day) reached, init → revert → stop")
+                else:
+                    rt["loopingToFirst"] = False
+                    rt["state"] = "ACTION_REVERT"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Cycle #{cycles_today} done → ACTION_REVERT")
+            _emit_auto_update(auto)
+            return
+        # State enforcement: ensure switch is still in expected state
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        if idx < len(actions):
+            action = actions[idx]
+            if not _verify_switches([action], auto):
+                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""))
+                _auto_log(auto_id, "State enforcement: correcting switch drift", "warning")
+        return
+
+    if state == "OVERLAP_NEXT_SET":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        next_idx = (idx + 1) % len(actions)
+        
+        if next_idx == 0 and rt.get("loopingToFirst"):
+            rt["currentInitIndex"] = 0
+            rt["state"] = "INIT_SET"
+            rt["retryCount"] = 0
+            _auto_log(auto_id, "Looping: Starting sequential initialization")
+            _emit_auto_update(auto)
+            return
+        else:
+            action = actions[next_idx]
+            _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
+            _auto_log(auto_id, f"Overlap Action {next_idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
+            
+        rt["verifyStart"] = now
+        rt["state"] = "OVERLAP_NEXT_VERIFY"
+        _emit_auto_update(auto)
+        return
+
+    if state == "OVERLAP_NEXT_VERIFY":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        next_idx = (idx + 1) % len(actions)
+        
+        switches_to_verify = [actions[next_idx]]
+            
+        if _verify_switches(switches_to_verify, auto):
+            rt["bufferStart"] = now
+            rt["state"] = "BUFFER"
+            _auto_log(auto_id, f"Overlap transition verified → BUFFER")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+            rt["retryCount"] = rt.get("retryCount", 0) + 1
+            if rt["retryCount"] >= MAX_RETRIES:
+                rt["state"] = "ERROR_SET"
+                _auto_log(auto_id, f"Overlap Action {next_idx+1} verify timeout → ERROR_SET", "error")
+                _emit_auto_update(auto)
+            else:
+                rt["state"] = "OVERLAP_NEXT_SET"
+                _auto_log(auto_id, f"Overlap Action {next_idx+1} verify retry {rt['retryCount']}")
+                _emit_auto_update(auto)
+        return
+
+    if state == "BUFFER":
+        buffer_time = auto.get("bufferTime", BUFFER_SECONDS)
+        if now - (rt.get("bufferStart") or now) >= buffer_time:
+            rt["state"] = "ACTION_REVERT"
+            rt["retryCount"] = 0
+            _auto_log(auto_id, f"Buffer ({buffer_time}s) done → ACTION_REVERT")
+            _emit_auto_update(auto)
+        return
+
+    if state == "ACTION_REVERT":
+        # Send the OPPOSITE state to revert the switch
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        if idx < len(actions):
+            action = actions[idx]
+            revert_state = "OFF" if action.get("state", "").upper() == "ON" else "ON"
+            _mqtt_set_switch(action.get("switchCmdTopic", ""), revert_state)
+            _auto_log(auto_id, f"Action {idx+1}: Reverting {action.get('switchName','')} → {revert_state}")
+        rt["verifyStart"] = now
+        rt["state"] = "ACTION_VERIFY_REVERT"
+        _emit_auto_update(auto)
+        return
+
+    if state == "ACTION_VERIFY_REVERT":
+        # Verify the switch reverted to opposite state
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        
+        def _finish_revert():
+            if rt.get("loopingToFirst"):
+                rt["loopingToFirst"] = False
+                if rt.pop("stopAfterRevert", False):
+                    # Max cycles reached — stop here
+                    rt["currentActionIndex"] = 0
+                    rt["state"] = "COMPLETED"
+                    _auto_log(auto_id, f"Max cycles done → COMPLETED (stopping)")
+                else:
+                    # Loop back for another cycle
+                    rt["currentActionIndex"] = 0
+                    rt["state"] = "ACTION_SET"
+                    _auto_log(auto_id, "Init + Revert complete → Starting next cycle (Action 1)")
+            elif idx + 1 < len(actions):
+                # Make-Before-Break finished. Advance to next action and start its timer.
+                next_idx = idx + 1
+                rt["currentActionIndex"] = next_idx
+                duration = actions[next_idx].get("duration", 0)
+                rt["timerStart"] = now
+                rt["remainingTime"] = duration
+                rt["state"] = "ACTION_RUN"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, f"Advanced to Action {next_idx+1} → ACTION_RUN ({duration}s)")
+            else:
+                rt["state"] = "COMPLETED"
+                _auto_log(auto_id, "All actions completed → COMPLETED")
+            _emit_auto_update(auto)
+
+        if idx < len(actions):
+            action = actions[idx]
+            revert_state = "OFF" if action.get("state", "").upper() == "ON" else "ON"
+            revert_check = {"switchStateTopic": action.get("switchStateTopic", ""), "state": revert_state}
+            if _verify_switches([revert_check], auto):
+                _auto_log(auto_id, f"Action {idx+1} revert verified")
+                _finish_revert()
+            elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                _auto_log(auto_id, f"Action {idx+1} revert verify timeout", "warning")
+                _finish_revert()
+        else:
+            _finish_revert()
+        return
+
+    if state == "PAUSED_CONDITION":
+        if evaluate_condition(auto):
+            rt["timerStart"] = now
+            rt["pauseReason"] = None
+            rt["state"] = "ACTION_RUN"
+            _auto_log(auto_id, "Condition TRUE → resume ACTION_RUN")
+            _emit_auto_update(auto)
+        return
+
+    if state == "PAUSED_SCHEDULE":
+        if check_schedule(auto):
+            rt["timerStart"] = now
+            rt["pauseReason"] = None
+            rt["state"] = "ACTION_RUN"
+            _auto_log(auto_id, "Schedule active → resume ACTION_RUN")
+            _emit_auto_update(auto)
+        return
+
+    if state == "COMPLETED":
+        rt["currentActionIndex"] = 0
+        rt["timerStart"] = None
+        rt["remainingTime"] = None
+        rt["state"] = "WAIT_CONDITION"
+        _auto_log(auto_id, f"Completed → WAIT_CONDITION (cycle #{rt.get('cycles_today', 0)} today)")
+        _emit_auto_update(auto)
+        return
+
+    if state == "ERROR_SET":
+        err_states = auto.get("errorState", [])
+        for item in err_states:
+            _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
+        rt["verifyStart"] = now
+        rt["state"] = "ERROR_VERIFY"
+        _auto_log(auto_id, "Error state commands sent → ERROR_VERIFY", "error")
+        _emit_auto_update(auto)
+        return
+
+    if state == "ERROR_VERIFY":
+        err_states = auto.get("errorState", [])
+        if not err_states or _verify_switches(err_states, auto):
+            rt["state"] = "ERROR"
+            _auto_log(auto_id, "Error state verified → ERROR (locked)", "error")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+            rt["state"] = "ERROR"
+            _auto_log(auto_id, "Error verify timeout → ERROR (locked)", "error")
+            _emit_auto_update(auto)
+        return
+
+
+def _engine_loop():
+    """Background loop that ticks every automation."""
+    global _engine_running
+    _engine_running = True
+    logging.info("[ENGINE] Automation engine started")
+    while _engine_running:
+        for auto_id, auto in list(automations.items()):
+            try:
+                engine_tick(auto)
+            except Exception as e:
+                logging.error(f"[ENGINE] Error in {auto_id}: {e}")
+        time.sleep(ENGINE_INTERVAL)
+    logging.info("[ENGINE] Automation engine stopped")
+
+
+def start_engine():
+    """Start the automation engine background thread."""
+    global _engine_thread, _engine_running
+    if _engine_thread and _engine_thread.is_alive():
+        return
+    _engine_running = True
+    _engine_thread = threading.Thread(target=_engine_loop, daemon=True)
+    _engine_thread.start()
+    # Start AI scheduler thread alongside the engine
+    _ai_thread = threading.Thread(target=_ai_scheduler_loop, daemon=True)
+    _ai_thread.start()
+    # Pre-load AI model in background so it's ready when needed
+    _preload_ai_model()
+
+def _preload_ai_model():
+    """Pre-load the AI model in a background thread so it's ready when needed."""
+    def _load():
+        try:
+            from ai_agent import get_llm, is_model_loaded
+            logging.info("[AI-PRELOAD] Pre-loading AI model in background...")
+            llm = get_llm()
+            if llm:
+                logging.info("[AI-PRELOAD] AI model pre-loaded successfully and ready!")
+            else:
+                logging.warning("[AI-PRELOAD] AI model pre-load failed - will retry on first AI call")
+        except Exception as e:
+            logging.warning(f"[AI-PRELOAD] Could not pre-load AI model: {e}")
+    
+    # Start in background thread so it doesn't block engine startup
+    threading.Thread(target=_load, daemon=True, name="AI-Preload").start()
+
+
+def stop_engine():
+    """Stop the automation engine."""
+    global _engine_running
+    _engine_running = False
+
+
+# ---------------------------------------------------------------------------
+# AI Scheduler — background thread
+# ---------------------------------------------------------------------------
+_ai_last_run_date = None  # track last AI run date to avoid re-running
+
+def _ai_scheduler_loop():
+    """Background thread: checks once per minute if it's time to run the AI."""
+    global _ai_last_run_date
+    AI_RUN_HOUR = 2  # Run at 2:00 AM local time
+    logging.info("[AI-SCHEDULER] AI scheduler thread started")
+    while _engine_running:
+        try:
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            if now.hour == AI_RUN_HOUR and _ai_last_run_date != today_str:
+                _ai_last_run_date = today_str
+                _run_ai_for_all_automations()
+        except Exception as e:
+            logging.error(f"[AI-SCHEDULER] Error: {e}")
+        time.sleep(60)  # check every minute
+
+
+def _run_ai_for_automation(auto_id):
+    """Helper to run the AI engine for a single automation."""
+    global _ai_running_set
+    
+    # Prevent duplicate concurrent runs
+    if auto_id in _ai_running_set:
+        logging.info(f"[AI-SCHEDULER] AI already running for '{auto_id}', skipping duplicate request")
+        return
+    
+    _ai_running_set.add(auto_id)
+    
+    try:
+        from ai_agent import get_weather_data, build_automation_context, get_ai_schedule_decision, is_model_loaded, is_model_loading
+    except ImportError as e:
+        logging.error(f"[AI-SCHEDULER] Could not import ai_agent module: {e}")
+        auto = automations.get(auto_id)
+        if auto:
+            _auto_log(auto_id, f"AI error: module import failed - check llama-cpp-python installation", level="error")
+            _emit_auto_update(auto)
+        _ai_running_set.discard(auto_id)
+        return
+
+    auto = automations.get(auto_id)
+    if not auto:
+        _ai_running_set.discard(auto_id)
+        return
+
+    sched = auto.get("schedule", {})
+    if not sched.get("ai_enabled"):
+        _ai_running_set.discard(auto_id)
+        return
+
+    lat = sched.get("lat")
+    lon = sched.get("lon")
+    if not lat or not lon:
+        _auto_log(auto_id, "AI skipped: no Lat/Lon configured", level="warn")
+        _emit_auto_update(auto)
+        _ai_running_set.discard(auto_id)
+        return
+
+    logging.info(f"[AI-SCHEDULER] Running AI for '{auto.get('name', auto_id)}'")
+    _auto_log(auto_id, "🤖 AI Agent starting...")
+    _emit_auto_update(auto) # force UI update to show log
+
+    try:
+        # Check model status for logging
+        if not is_model_loaded():
+            if is_model_loading():
+                _auto_log(auto_id, "🤖 AI model is loading, please wait...")
+            else:
+                _auto_log(auto_id, "🤖 AI loading model now...")
+            _emit_auto_update(auto)
+        else:
+            _auto_log(auto_id, "🤖 AI model ready (pre-loaded)")
+            _emit_auto_update(auto)
+
+        weather_data = get_weather_data(lat=lat, lon=lon)
+        if not weather_data:
+            _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
+            _emit_auto_update(auto)
+            _ai_running_set.discard(auto_id)
+            return
+
+        ctx = build_automation_context(auto_id, auto)
+        decision = get_ai_schedule_decision(weather_data, ctx)
+        if not decision:
+            _auto_log(auto_id, "AI failed: model returned no decision", level="error")
+            _emit_auto_update(auto)
+            _ai_running_set.discard(auto_id)
+            return
+
+        new_days = decision.get("selected_days", [])
+        reasoning = decision.get("reasoning", "")
+        old_days = sched.get("days", [])
+
+        sched["days"] = new_days
+        _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
+        _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
+        logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
+
+    except Exception as e:
+        logging.error(f"[AI-SCHEDULER] Error running AI for '{auto.get('name', auto_id)}': {e}")
+        _auto_log(auto_id, f"AI error: {str(e)[:100]}", level="error")
+    finally:
+        _emit_auto_update(auto)
+        _ai_running_set.discard(auto_id)
+
+
+def _run_ai_for_all_automations():
+    """Run the AI agent for every automation that has ai_enabled=True."""
+    for auto_id in automations.keys():
+        _run_ai_for_automation(auto_id)
+
+
+# ---------------------------------------------------------------------------
+# Automation SocketIO events
+# ---------------------------------------------------------------------------
+
+@socketio.on("run_ai_now")
+def handle_run_ai_now(data):
+    """Immediately trigger the AI for a specific automation (called from UI)."""
+    auto_id = data.get("id")
+    if auto_id in automations:
+        # Run it in a background task so it doesn't block the socket thread
+        socketio.start_background_task(_run_ai_for_automation, auto_id)
+
+@socketio.on("get_automations")
+def handle_get_automations():
+    """Send all automations to the client."""
+    result = []
+    for auto_id, auto in automations.items():
+        safe = copy.deepcopy(auto)
+        safe["logs"] = automation_logs.get(auto_id, [])[:20]
+        result.append(safe)
+    emit("automations_list", result)
+
+
+@socketio.on("create_automation")
+def handle_create_automation(data):
+    """Create a new automation."""
+    auto_id = str(uuid.uuid4())[:8]
+    auto = {
+        "id": auto_id,
+        "name": data.get("name", "New Automation"),
+        "description": data.get("description", ""),
+        "status": "OFF",
+        "schedule": data.get("schedule", {"days": [], "startTime": "", "endTime": ""}),
+        "condition": data.get("condition", []),
+        "initialization": data.get("initialization", []),
+        "actions": data.get("actions", []),
+        "errorState": data.get("errorState", []),
+        "bufferTime": data.get("bufferTime", BUFFER_SECONDS),
+        "maxCyclesPerDay": data.get("maxCyclesPerDay", 0),
+        "runtime": _new_runtime(),
+    }
+    automations[auto_id] = auto
+    automation_logs[auto_id] = []
+    _auto_log(auto_id, f"Automation '{auto['name']}' created")
+    _emit_auto_update(auto)
+    emit("automation_created", {"id": auto_id})
+    start_engine()
+
+
+@socketio.on("update_automation")
+def handle_update_automation(data):
+    """Update an existing automation's configuration."""
+    auto_id = data.get("id")
+    if auto_id not in automations:
+        emit("automation_error", {"error": "Not found"})
+        return
+    auto = automations[auto_id]
+    # Only update config fields, not runtime
+    for key in ("name", "description", "schedule", "condition",
+                "initialization", "actions", "errorState", "bufferTime", "maxCyclesPerDay"):
+        if key in data:
+            auto[key] = data[key]
+    _auto_log(auto_id, f"Automation '{auto['name']}' updated")
+    _emit_auto_update(auto)
+    
+    # Run AI immediately if enabled upon save
+    sched = auto.get("schedule", {})
+    if sched.get("ai_enabled"):
+        socketio.start_background_task(_run_ai_for_automation, auto_id)
+
+
+@socketio.on("pause_automation")
+def handle_pause_automation(data):
+    auto_id = data.get("id")
+    is_paused = data.get("isPaused", False)
+    if auto_id in automations:
+        automations[auto_id]["isPaused"] = is_paused
+        _emit_auto_update(automations[auto_id])
+        start_engine()
+
+
+@socketio.on("toggle_automation")
+def handle_toggle_automation(data):
+    """Toggle automation ON/OFF."""
+    auto_id = data.get("id")
+    status = data.get("status", "OFF")
+    if auto_id not in automations:
+        return
+    auto = automations[auto_id]
+    auto["status"] = status
+    if status == "ON":
+        auto["runtime"] = _new_runtime()
+        auto["runtime"]["state"] = "INIT_SET"
+        auto["runtime"]["retryCount"] = 0
+        _auto_log(auto_id, "Turned ON → INIT_SET")
+    else:
+        auto["runtime"] = _new_runtime()
+        _auto_log(auto_id, "Turned OFF → IDLE")
+    _emit_auto_update(auto)
+    start_engine()
+
+
+@socketio.on("reset_automation")
+def handle_reset_automation(data):
+    """Reset automation execution."""
+    auto_id = data.get("id")
+    if auto_id not in automations:
+        return
+    auto = automations[auto_id]
+    status = auto.get("status", "OFF")
+    auto["runtime"] = _new_runtime()
+    if status == "ON":
+        auto["runtime"]["state"] = "WAIT_CONDITION"
+        _auto_log(auto_id, "RESET → WAIT_CONDITION")
+    else:
+        _auto_log(auto_id, "RESET → IDLE")
+    _emit_auto_update(auto)
+
+
+@socketio.on("delete_automation")
+def handle_delete_automation(data):
+    """Delete an automation."""
+    auto_id = data.get("id")
+    if auto_id in automations:
+        name = automations[auto_id].get("name", auto_id)
+        del automations[auto_id]
+        automation_logs.pop(auto_id, None)
+        socketio.emit("automation_deleted", {"id": auto_id})
+        logging.info(f"Automation '{name}' deleted")
+
+
+@socketio.on("get_automation_logs")
+def handle_get_automation_logs(data):
+    """Get logs for a specific automation."""
+    auto_id = data.get("id")
+    logs = automation_logs.get(auto_id, [])
+    emit("automation_logs", {"id": auto_id, "logs": logs})
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("\n  Nivixsa IoT Dashboard")
+    print("\n  Nivixsa Smart Irrigation Dashboard")
     print("  Open http://localhost:5000 in your browser\n")
     # Auto-connect MQTT on startup if credentials are set via environment variables
     if MQTT_USERNAME and MQTT_PASSWORD:
         start_mqtt()
+    start_engine()
     socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)

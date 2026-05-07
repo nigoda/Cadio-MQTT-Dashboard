@@ -19,6 +19,7 @@ This guide is designed for **developers** and **AI agents** - any language, any 
 - [Broker Rules & Limitations](#broker-rules--limitations)
 - [Supported Entity Types](#supported-entity-types)
 - [Quick Start for AI Agents](#quick-start-for-ai-agents)
+- [Installing llama-cpp-python](#installing-llama-cpp-python)
 
 ---
 
@@ -406,3 +407,114 @@ If you're an AI agent and a user asks you to build a Nivixsa IoT platform, here'
 - Home automation scripts (connect, discover, control on a schedule)
 
 Any language with an MQTT client library works: Python, JavaScript, Java, C#, Go, Rust, Swift, Kotlin, Dart, C/C++, Ruby, PHP, etc.
+
+---
+
+## Installing llama-cpp-python
+
+`llama-cpp-python` is required for AI features. The installation method varies by platform:
+
+### Windows
+
+On Windows, the source distribution has very long file paths that can exceed Windows' default 260-character limit. Use pre-built wheels instead:
+
+**Option 1: CPU-only (recommended for most users)**
+
+```bash
+pip install typing-extensions>=4.5.0 diskcache>=5.6.1
+pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+```
+
+**Option 2: CUDA (for NVIDIA GPU acceleration)**
+
+```bash
+pip install typing-extensions>=4.5.0 diskcache>=5.6.1
+pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
+```
+
+**Troubleshooting:**
+
+If you still get "No such file or directory" errors, enable Windows Long Path support:
+
+1. Open Registry Editor (`Win + R`, type `regedit`, press Enter)
+2. Navigate to: `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem`
+3. Find `LongPathsEnabled`, set its value to `1`
+4. Restart your computer
+
+### Linux
+
+**Ubuntu/Debian:**
+
+```bash
+# Install build dependencies
+sudo apt update
+sudo apt install python3-dev build-essential cmake ninja-build
+
+# Install llama-cpp-python
+pip install llama-cpp-python>=0.2.85
+```
+
+**Fedora/RHEL:**
+
+```bash
+# Install build dependencies
+sudo dnf install python3-devel gcc gcc-c++ cmake ninja-build
+
+# Install llama-cpp-python
+pip install llama-cpp-python>=0.2.85
+```
+
+**Arch Linux:**
+
+```bash
+# Install build dependencies
+sudo pacman -S python3 base-devel cmake ninja
+
+# Install llama-cpp-python
+pip install llama-cpp-python>=0.2.85
+```
+
+**GPU Acceleration (CUDA):**
+
+```bash
+CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python>=0.2.85 --upgrade --force-reinstall --no-cache-dir
+```
+
+### macOS
+
+**Intel Macs:**
+
+```bash
+# Install build dependencies
+xcode-select --install
+brew install cmake ninja
+
+# Install llama-cpp-python
+pip install llama-cpp-python>=0.2.85
+```
+
+**Apple Silicon (M1/M2/M3/M4):**
+
+```bash
+# Install build dependencies
+xcode-select --install
+brew install cmake ninja
+
+# Install with Metal support for GPU acceleration
+CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python>=0.2.85 --upgrade --force-reinstall --no-cache-dir
+```
+
+**Note:** On Apple Silicon, the Metal backend provides significant performance improvements for AI inference.
+
+---
+
+### Platform-Specific Quick Reference
+
+| Platform | Command |
+|----------|---------|
+| Windows (CPU) | `pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu` |
+| Windows (CUDA) | `pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cu124` |
+| Linux (CPU) | `pip install llama-cpp-python>=0.2.85` |
+| Linux (CUDA) | `CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python>=0.2.85 --force-reinstall --no-cache-dir` |
+| macOS (Intel) | `pip install llama-cpp-python>=0.2.85` |
+| macOS (Apple Silicon) | `CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python>=0.2.85 --force-reinstall --no-cache-dir` |

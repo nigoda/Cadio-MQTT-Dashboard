@@ -2,3 +2,5 @@ flask>=3.0
 flask-socketio>=5.3
 paho-mqtt>=1.6,<2.0
 requests>=2.28
+llama-cpp-python>=0.2.85
+schedule>=1.2.0

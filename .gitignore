@@ -1,0 +1,18 @@
+# AI Models
+models/
+*.gguf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments
+venv/
+env/
+.env
+
+# OS Files
+.DS_Store
+Thumbs.db
