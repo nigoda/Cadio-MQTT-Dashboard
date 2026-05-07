@@ -34,11 +34,10 @@ RULES:
 9. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {
-    "selected_days": ["Day1", "Day2"],
+    "selected_days": ["Dayx", "Dayy"],
     "reasoning": "Your analysis of why these days were chosen based on the data."
 }
 
-Replace Day1/Day2 with actual day abbreviations (Mon/Tue/Wed/Thu/Fri/Sat/Sun) from the forecast.
 
 AUTOMATION DETAILS:
 {

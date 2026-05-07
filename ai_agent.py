@@ -10,9 +10,9 @@ DEFAULT_LAT = 12.840675735693322
 DEFAULT_LON = 77.67727845265588
 
 # Local Model Configuration
-# Download Phi-4-mini-instruct Q4_K_M GGUF (~2.5GB) from:
-# https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf")
+# Download Llama-3.2-1B-Instruct Q4_K_M GGUF (~700MB) from:
+# https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "llama-3.2-1b-instruct.gguf")
 
 # Global reference to the loaded model so it only loads once into memory
 _llm_instance = None
@@ -46,9 +46,9 @@ def get_llm():
         logging.info("Loading AI model into memory. This may take a few seconds...")
         
         try:
-            # Phi-4-mini supports up to 128k context, 4096 is plenty for our data
-            _llm_instance = Llama(model_path=MODEL_PATH, n_ctx=4096, verbose=False)
-            logging.info("AI model (Phi-4-mini) loaded successfully!")
+            # n_ctx is the context window size. 2048 is plenty for our schedule JSON.
+            _llm_instance = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
+            logging.info("AI model loaded successfully!")
         finally:
             _llm_is_loading = False
         

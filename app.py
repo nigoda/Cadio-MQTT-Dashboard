@@ -624,6 +624,17 @@ def engine_tick(auto):
         cond = evaluate_condition(auto)
         sched = check_schedule(auto)
         if cond and sched:
+            # Check cycle limit before starting a new cycle
+            max_cycles = auto.get("maxCyclesPerDay", 0)
+            if max_cycles > 0:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
+                if cycles_today >= max_cycles:
+                    if rt.get("_cycle_paused") != today_str:
+                        rt["_cycle_paused"] = today_str
+                        _auto_log(auto_id, f"Max cycles reached ({cycles_today}/{max_cycles}) — pausing until tomorrow")
+                        _emit_auto_update(auto)
+                    return
             rt["state"] = "ACTION_SET"
             rt["currentActionIndex"] = 0
             _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
@@ -728,28 +739,44 @@ def engine_tick(auto):
                 rt["retryCount"] = 0
                 _auto_log(auto_id, f"Action {idx+1} timer done → OVERLAP_NEXT_SET")
             else:
-                # We reached the end. Can we loop?
-                sched = check_schedule(auto)
+                # We reached the end of all actions. Increment cycle count first.
                 max_cycles = auto.get("maxCyclesPerDay", 0)
                 today_str = datetime.now().strftime("%Y-%m-%d")
-                cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
-                cycle_limit_reached = max_cycles > 0 and (cycles_today + 1) >= max_cycles
+                if rt.get("cycles_date") != today_str:
+                    rt["cycles_date"] = today_str
+                    rt["cycles_today"] = 0
+                rt["cycles_today"] = rt.get("cycles_today", 0) + 1
+                cycles_today = rt["cycles_today"]
+                # Track history
+                if "cycles_history" not in rt:
+                    rt["cycles_history"] = {}
+                rt["cycles_history"][today_str] = cycles_today
+                sorted_dates = sorted(rt["cycles_history"].keys())
+                while len(sorted_dates) > 7:
+                    del rt["cycles_history"][sorted_dates.pop(0)]
+                rt["last_irrigated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
+                cycle_limit_reached = max_cycles > 0 and cycles_today >= max_cycles
+
+                # Can we loop?
+                sched = check_schedule(auto)
                 if sched and len(actions) > 1 and not cycle_limit_reached:
                     rt["loopingToFirst"] = True
+                    rt["stopAfterRevert"] = False
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Action {idx+1} timer done → Looping to Action 1")
+                    _auto_log(auto_id, f"Cycle #{cycles_today} done → Init → Loop to Action 1")
                 elif cycle_limit_reached:
-                    rt["loopingToFirst"] = False
-                    rt["state"] = "ACTION_REVERT"
+                    rt["loopingToFirst"] = True
+                    rt["stopAfterRevert"] = True
+                    rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Action {idx+1} timer done → Max cycles ({max_cycles}/day) reached, stopping")
+                    _auto_log(auto_id, f"Cycle #{cycles_today} done → Max cycles ({max_cycles}/day) reached, init → revert → stop")
                 else:
                     rt["loopingToFirst"] = False
                     rt["state"] = "ACTION_REVERT"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Action {idx+1} timer done → ACTION_REVERT")
+                    _auto_log(auto_id, f"Cycle #{cycles_today} done → ACTION_REVERT")
             _emit_auto_update(auto)
             return
         # State enforcement: ensure switch is still in expected state
@@ -795,7 +822,10 @@ def engine_tick(auto):
         if _verify_switches(switches_to_verify, auto):
             rt["bufferStart"] = now
             rt["state"] = "BUFFER"
-            _auto_log(auto_id, f"Overlap transition verified → BUFFER")
+            if next_idx == 0 and rt.get("loopingToFirst"):
+                _auto_log(auto_id, "Init verified → BUFFER")
+            else:
+                _auto_log(auto_id, f"Overlap transition verified → BUFFER")
             _emit_auto_update(auto)
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
@@ -840,9 +870,16 @@ def engine_tick(auto):
         def _finish_revert():
             if rt.get("loopingToFirst"):
                 rt["loopingToFirst"] = False
-                rt["currentActionIndex"] = 0
-                rt["state"] = "ACTION_SET"  # Clean start for the first action
-                _auto_log(auto_id, "Initialization Loop Complete → Starting Action 1")
+                if rt.pop("stopAfterRevert", False):
+                    # Max cycles reached — stop here
+                    rt["currentActionIndex"] = 0
+                    rt["state"] = "COMPLETED"
+                    _auto_log(auto_id, f"Max cycles done → COMPLETED (stopping)")
+                else:
+                    # Loop back for another cycle
+                    rt["currentActionIndex"] = 0
+                    rt["state"] = "ACTION_SET"
+                    _auto_log(auto_id, "Init + Revert complete → Starting next cycle (Action 1)")
             elif idx + 1 < len(actions):
                 # Make-Before-Break finished. Advance to next action and start its timer.
                 next_idx = idx + 1
@@ -895,23 +932,7 @@ def engine_tick(auto):
         rt["timerStart"] = None
         rt["remainingTime"] = None
         rt["state"] = "WAIT_CONDITION"
-        # Track last irrigation date (in-memory) for AI context
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        rt["last_irrigated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # Track daily cycle count — resets when date changes
-        if rt.get("cycles_date") != today_str:
-            rt["cycles_date"] = today_str
-            rt["cycles_today"] = 0
-        rt["cycles_today"] = rt.get("cycles_today", 0) + 1
-        # Track cycle history per day (rolling 7-day in-memory)
-        if "cycles_history" not in rt:
-            rt["cycles_history"] = {}
-        rt["cycles_history"][today_str] = rt["cycles_today"]
-        # Trim to last 7 days
-        sorted_dates = sorted(rt["cycles_history"].keys())
-        while len(sorted_dates) > 7:
-            del rt["cycles_history"][sorted_dates.pop(0)]
-        _auto_log(auto_id, f"Completed → WAIT_CONDITION (cycle #{rt['cycles_today']} today)")
+        _auto_log(auto_id, f"Completed → WAIT_CONDITION (cycle #{rt.get('cycles_today', 0)} today)")
         _emit_auto_update(auto)
         return
 
@@ -1145,6 +1166,7 @@ def handle_create_automation(data):
         "actions": data.get("actions", []),
         "errorState": data.get("errorState", []),
         "bufferTime": data.get("bufferTime", BUFFER_SECONDS),
+        "maxCyclesPerDay": data.get("maxCyclesPerDay", 0),
         "runtime": _new_runtime(),
     }
     automations[auto_id] = auto
@@ -1165,7 +1187,7 @@ def handle_update_automation(data):
     auto = automations[auto_id]
     # Only update config fields, not runtime
     for key in ("name", "description", "schedule", "condition",
-                "initialization", "actions", "errorState", "bufferTime"):
+                "initialization", "actions", "errorState", "bufferTime", "maxCyclesPerDay"):
         if key in data:
             auto[key] = data[key]
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")

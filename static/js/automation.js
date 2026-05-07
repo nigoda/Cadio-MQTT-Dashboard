@@ -428,6 +428,11 @@
     }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">No conditions (always true)</span>';
 
     // Actions
+    const maxCycles = auto.maxCyclesPerDay || 0;
+    const cyclesToday = rt.cycles_today || 0;
+    const cyclesBadge = maxCycles > 0 ? `<span style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--ha-surface-alt, #1e293b);color:var(--ha-primary, #03a9f4);">🔄 ${cyclesToday}/${maxCycles} cycles today</span>` : '';
+    const actionsHeading = $("#main-actions-heading");
+    if (actionsHeading) actionsHeading.innerHTML = `Actions (Sequential)${cyclesBadge}`;
     const actBody = $("#irr-actions-body");
     actBody.innerHTML = actions.length > 0 ? `<table class="irr-actions-table"><thead><tr><th>#</th><th>Switch</th><th>State</th><th>Duration</th><th>Status</th></tr></thead><tbody>${actions.map((a, i) => {
       const isActive = i === idx && (rt.state || "").startsWith("ACTION");
@@ -548,7 +553,8 @@
 
     const cb24 = $("#auto-f-24hr");
     if (cb24) {
-      const is24hr = !!(auto?.schedule?.is24hr);
+      // Default to 24hr checked for new automations, respect saved value for edits
+      const is24hr = editId ? !!(auto?.schedule?.is24hr) : (auto?.schedule?.is24hr !== undefined ? !!(auto?.schedule?.is24hr) : true);
       cb24.checked = is24hr;
       cb24.onchange = (e) => {
         const list = $("#auto-f-times-list");
@@ -673,11 +679,22 @@
       end: r.querySelector(".f-end")?.value || ""
     }));
 
+    const is24hr = $("#auto-f-24hr").checked;
+
+    // Validate: if 24hr is off, at least one complete time range is required
+    if (!is24hr) {
+      const validRanges = timeRanges.filter(r => r.start && r.end);
+      if (validRanges.length === 0) {
+        alert("Time range required!\n\nEither enable '24-Hour Active' or add at least one time range with both start and end times.");
+        return null;
+      }
+    }
+
     const editAuto = _editId ? _autos[_editId] : null;
     const schedObj = {
       days,
       timeRanges,
-      is24hr: $("#auto-f-24hr").checked,
+      is24hr,
       utcOffset: parseInt($("#auto-f-tz").value, 10) || 0,
       ai_enabled: editAuto?.schedule?.ai_enabled || false
     };
