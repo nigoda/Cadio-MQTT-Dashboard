@@ -447,15 +447,29 @@
     const schedBody = $("#irr-sched-body");
     const sched = auto.schedule || {};
     const days = sched.days || [];
-    const is24Hr = !sched.startTime && !sched.endTime;
+    const is24hr = !!sched.is24hr;
     const aiEnabled = sched.ai_enabled || false;
 
     const schedHeading = $("#main-sched-heading");
     if (schedHeading) schedHeading.textContent = aiEnabled ? "🤖 AI Scheduler" : "Scheduler";
 
+    let timeStr = "";
+    if (is24hr) {
+      timeStr = "24-Hour Active";
+    } else {
+      const ranges = sched.timeRanges || [];
+      if (ranges.length > 0) {
+        timeStr = ranges.map(r => `${r.start || "?"} → ${r.end || "?"}`).join(", ");
+      } else if (sched.startTime || sched.endTime) {
+        timeStr = `${sched.startTime || "?"} → ${sched.endTime || "?"}`;
+      } else {
+        timeStr = "No time range";
+      }
+    }
+
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
       <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px; ${aiEnabled ? 'opacity:0.4;pointer-events:none;' : ''}">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d) ? 'active' : ''}">${d}</span>`).join("")}</div></div>
-      <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${is24Hr ? "24-Hour Active" : `${sched.startTime || "—"} → ${sched.endTime || "—"}`}</div></div>
+      <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${timeStr}</div></div>
       <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
         <span style="font-size: 14px; font-weight: bold; color: var(--ha-primary, #03a9f4); letter-spacing: 0.5px;">🤖 AI</span>
         <label class="ha-toggle irr-custom-toggle" style="cursor: pointer; margin: 0;" title="Enable AI Dynamic Scheduling">
@@ -527,26 +541,26 @@
     daysEl.innerHTML = DAY_NAMES.map(d => `<button type="button" class="irr-day-btn ${selDays.has(d) ? 'active' : ''}" data-day="${d}">${d}</button>`).join("");
     daysEl.querySelectorAll(".irr-day-btn").forEach(b => b.addEventListener("click", () => b.classList.toggle("active")));
 
-    const sStart = auto?.schedule?.startTime || "";
-    const sEnd = auto?.schedule?.endTime || "";
-    $("#auto-f-start").value = sStart;
-    $("#auto-f-end").value = sEnd;
+
 
     $("#auto-f-lat").value = auto?.schedule?.lat || "";
     $("#auto-f-lon").value = auto?.schedule?.lon || "";
 
     const cb24 = $("#auto-f-24hr");
     if (cb24) {
-      cb24.checked = (!sStart && !sEnd);
+      const is24hr = !!(auto?.schedule?.is24hr);
+      cb24.checked = is24hr;
       cb24.onchange = (e) => {
+        const list = $("#auto-f-times-list");
+        const addBtn = $("#auto-f-time-add");
         if (e.target.checked) {
-          $("#auto-f-start").value = "";
-          $("#auto-f-end").value = "";
-          $("#auto-f-start").disabled = true;
-          $("#auto-f-end").disabled = true;
+          list.style.opacity = "0.5";
+          list.style.pointerEvents = "none";
+          addBtn.style.display = "none";
         } else {
-          $("#auto-f-start").disabled = false;
-          $("#auto-f-end").disabled = false;
+          list.style.opacity = "1";
+          list.style.pointerEvents = "auto";
+          addBtn.style.display = "block";
         }
       };
       // trigger initial state
@@ -562,6 +576,17 @@
     }
 
     $("#auto-f-buffer").value = auto?.bufferTime ?? 5;
+    $("#auto-f-max-cycles").value = auto?.maxCyclesPerDay ?? 0;
+
+    // Time ranges
+    let tRanges = auto?.schedule?.timeRanges || [];
+    // Migration: if old single range exists, use it
+    if (tRanges.length === 0 && (auto?.schedule?.startTime || auto?.schedule?.endTime)) {
+      tRanges = [{ start: auto.schedule.startTime, end: auto.schedule.endTime }];
+    }
+    // If empty and not 24hr, add one empty row
+    if (tRanges.length === 0 && !auto?.schedule?.is24hr) tRanges = [{ start: "", end: "" }];
+    renderFormRows("auto-f-times-list", tRanges, "timeRange");
 
     // Init rows
     renderFormRows("auto-f-init", auto?.initialization || [], "switch");
@@ -602,6 +627,11 @@
         <select class="f-state"><option value="ON" ${data?.state === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.state !== "ON" ? "selected" : ""}>OFF</option></select>
         <input type="number" class="f-duration" value="${dur}" min="0" placeholder="sec">
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
+    } else if (type === "timeRange") {
+      row.innerHTML = `<div class="ha-field" style="flex:1"><input type="time" class="f-start" value="${data?.start || ""}" placeholder=" "><label>Start</label></div>
+        <span style="padding-top:12px">→</span>
+        <div class="ha-field" style="flex:1"><input type="time" class="f-end" value="${data?.end || ""}" placeholder=" "><label>End</label></div>
+        <button type="button" class="irr-remove-btn material-symbols-outlined" style="margin-top:12px">close</button>`;
     }
     row.querySelector(".irr-remove-btn")?.addEventListener("click", () => row.remove());
     container.appendChild(row);
@@ -613,6 +643,7 @@
   });
   $("#auto-f-cond-add")?.addEventListener("click", () => addFormRow($("#auto-f-cond"), "condition", {}));
   $("#auto-f-actions-add")?.addEventListener("click", () => addFormRow($("#auto-f-actions"), "action", {}));
+  $("#auto-f-time-add")?.addEventListener("click", () => addFormRow($("#auto-f-times-list"), "timeRange", {}));
 
   function collectFormData() {
     const name = $("#auto-f-name").value.trim();
@@ -637,11 +668,16 @@
       return { switchCmdTopic: sel?.value || "", switchStateTopic: opt?.dataset.state || "", switchName: opt?.dataset.name || "", state: r.querySelector(".f-state")?.value || "ON", duration: parseInt(r.querySelector(".f-duration")?.value || "0", 10) };
     });
 
+    const timeRanges = [...$("#auto-f-times-list").querySelectorAll(".irr-form-row")].map(r => ({
+      start: r.querySelector(".f-start")?.value || "",
+      end: r.querySelector(".f-end")?.value || ""
+    }));
+
     const editAuto = _editId ? _autos[_editId] : null;
     const schedObj = {
       days,
-      startTime: $("#auto-f-start").value,
-      endTime: $("#auto-f-end").value,
+      timeRanges,
+      is24hr: $("#auto-f-24hr").checked,
       utcOffset: parseInt($("#auto-f-tz").value, 10) || 0,
       ai_enabled: editAuto?.schedule?.ai_enabled || false
     };
@@ -659,6 +695,7 @@
       actions,
       errorState: collectSwitchRows("auto-f-error"),
       bufferTime: parseInt($("#auto-f-buffer")?.value || "5", 10),
+      maxCyclesPerDay: parseInt($("#auto-f-max-cycles")?.value || "0", 10),
     };
   }
 
@@ -752,6 +789,11 @@
       _aiLatLonTargetId = null;
     }
   });
+
+  // Global Button Handlers
+  btnAdd?.addEventListener("click", () => openModal(null));
+  $("#auto-modal-cancel")?.addEventListener("click", closeModal);
+  $("#auto-modal-close")?.addEventListener("click", closeModal);
 
   // Start live timer loop
   setInterval(updateLiveTimers, 1000);

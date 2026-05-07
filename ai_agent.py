@@ -61,14 +61,16 @@ def is_model_loaded():
     """Check if model is loaded and ready."""
     return _llm_instance is not None
 
-def get_7_day_forecast(lat=DEFAULT_LAT, lon=DEFAULT_LON):
-    """Fetches a 7-day forecast from Open-Meteo (No API Key required)."""
-    url = f"https://api.open-meteo.com/v1/forecast"
+def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
+    """Fetches past weather + 7-day forecast from Open-Meteo (No API Key required).
+    Returns a dict with 'today', 'past' (last N days), and 'forecast' (next 7 days)."""
+    url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
         "longitude": lon,
         "daily": ["temperature_2m_max", "precipitation_sum", "precipitation_probability_max"],
-        "timezone": "auto"
+        "timezone": "auto",
+        "past_days": past_days
     }
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -84,24 +86,54 @@ def get_7_day_forecast(lat=DEFAULT_LAT, lon=DEFAULT_LON):
         precip = daily.get("precipitation_sum", [])
         prob = daily.get("precipitation_probability_max", [])
         
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        
+        past = {}
         forecast = {}
+        today_data = None
+        
         for i in range(len(times)):
             date_str = times[i]
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             day_name = dt.strftime("%a")
             
-            if day_name not in forecast:
-                forecast[day_name] = {
-                    "date": date_str,
-                    "max_temp_c": temps[i],
-                    "rain_mm": precip[i],
-                    "rain_prob_pct": prob[i]
-                }
+            entry = {
+                "date": date_str,
+                "max_temp_c": temps[i],
+                "rain_mm": precip[i],
+                "rain_prob_pct": prob[i]
+            }
+            
+            if date_str == today_str:
+                today_data = entry
+                today_data["day"] = day_name
+            elif date_str < today_str:
+                past[f"{day_name} ({date_str})"] = entry
+            else:
+                forecast[f"{day_name} ({date_str})"] = entry
                 
-        return forecast
+        return {
+            "today": today_data,
+            "past_days": past,
+            "forecast": forecast
+        }
     except Exception as e:
         logging.error(f"Failed to fetch weather data: {e}")
         return None
+
+# Backward-compatible alias
+def get_7_day_forecast(lat=DEFAULT_LAT, lon=DEFAULT_LON):
+    """Backward-compatible wrapper that returns just the forecast portion."""
+    result = get_weather_data(lat, lon)
+    if not result:
+        return None
+    # Merge today + forecast for backward compat
+    combined = {}
+    if result.get("today"):
+        day_name = result["today"].get("day", "Today")
+        combined[day_name] = result["today"]
+    combined.update(result.get("forecast", {}))
+    return combined
 
 def build_automation_context(auto_id, auto_data):
     """Extracts relevant info from an automation config for the AI."""
@@ -112,34 +144,78 @@ def build_automation_context(auto_id, auto_data):
         except ValueError:
             pass
 
+    sched = auto_data.get("schedule", {})
+    is_24hr = sched.get("is24hr", False)
+
+    # Build time ranges string for the AI
+    time_ranges = sched.get("timeRanges", [])
+    if not time_ranges:
+        # Fallback for old single-range format
+        s = sched.get("startTime", "")
+        e = sched.get("endTime", "")
+        if s or e:
+            time_ranges = [{"start": s or "00:00", "end": e or "23:59"}]
+
+    if is_24hr:
+        time_range_str = "24-Hour Active (no time restriction)"
+    elif time_ranges:
+        time_range_str = ", ".join(
+            f'{r.get("start", "00:00")} to {r.get("end", "23:59")}' for r in time_ranges
+        )
+    else:
+        time_range_str = "00:00 to 23:59"
+    # Get last irrigation data from runtime (in-memory only)
+    rt = auto_data.get("runtime", {})
+    last_irrigated = rt.get("last_irrigated", "Unknown (no data this session)")
+    cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == datetime.now().strftime("%Y-%m-%d") else 0
+    cycles_history = rt.get("cycles_history", {})
+
     return {
         "automation_id": auto_id,
         "name": auto_data.get("name", "Unknown"),
         "description": auto_data.get("description", ""),
-        "time_range": f'{auto_data.get("startTime", "00:00")} to {auto_data.get("endTime", "23:59")}',
+        "time_ranges": time_range_str,
         "total_water_duration_seconds": total_duration,
-        "is_24hr_active": auto_data.get("is24hr", False),
-        "lat": auto_data.get("lat"),
-        "lon": auto_data.get("lon")
+        "is_24hr_active": is_24hr,
+        "last_irrigated": last_irrigated,
+        "cycles_completed_today": cycles_today,
+        "max_cycles_per_day": auto_data.get("maxCyclesPerDay", 0),
+        "irrigation_history": cycles_history,
+        "lat": sched.get("lat"),
+        "lon": sched.get("lon")
     }
 
-def get_ai_schedule_decision(forecast_data, auto_context, timeout=60):
-    """Executes the local AI model to get a scheduling decision."""
+def get_ai_schedule_decision(weather_data, auto_context, timeout=60):
+    """Executes the local AI model to get a scheduling decision.
+    weather_data: dict with 'today', 'past_days', and 'forecast' keys."""
     import threading
     
     llm = get_llm()
     if not llm:
         return None
+
+    # Extract the sections
+    today = weather_data.get("today", {})
+    past = weather_data.get("past_days", {})
+    forecast = weather_data.get("forecast", {})
+
+    today_str = today.get("date", datetime.now().strftime("%Y-%m-%d"))
+    today_day = today.get("day", datetime.now().strftime("%a"))
         
     system_prompt = "You are an expert Agronomist AI. Output ONLY raw JSON."
     user_prompt = f"""
-    Decide the optimal days to run the irrigation sequence in the upcoming 7 days based on the weather forecast.
+    TODAY is {today_day}, {today_str}.
+    Decide the optimal days to run the irrigation sequence for the UPCOMING 7 days (starting from today) based on weather data.
     
     RULES:
     1. Do NOT schedule irrigation on days with heavy rain (> 5mm).
     2. Try to schedule irrigation before or during hot days (> 30°C).
-    3. You must select between 1 and 4 days.
-    4. You must output ONLY a raw JSON object with no markdown block formatting (` ```json `), no conversational text, and exactly these keys:
+    3. Consider the PAST weather: if it rained heavily in the last 3 days, the soil is still moist — you can skip early days.
+    4. Check "last_irrigated" — this is the date+time when the system LAST watered the plants. If it was recent (within 1 day), you may skip today.
+    5. Check "irrigation_history" — this shows how many watering cycles ran on each past day (e.g. {{"2026-05-06": 3}} means 3 cycles ran on May 6th). If many cycles ran recently, the soil has plenty of water.
+    6. If "irrigation_history" is empty AND the past 3 days had NO rain, prioritize watering TODAY or TOMORROW urgently.
+    7. You must select between 1 and 4 days from the upcoming forecast.
+    8. You must output ONLY a raw JSON object with no markdown block formatting (` ```json `), no conversational text, and exactly these keys:
     
     {{
         "selected_days": ["Mon", "Thu"],
@@ -148,7 +224,15 @@ def get_ai_schedule_decision(forecast_data, auto_context, timeout=60):
     
     FARM DATA:
     Automation Details: {json.dumps(auto_context)}
-    7-Day Forecast: {json.dumps(forecast_data)}
+    
+    PAST 3 DAYS (actual weather that already happened):
+    {json.dumps(past, indent=2)}
+    
+    TODAY ({today_day}, {today_str}):
+    {json.dumps(today, indent=2)}
+    
+    UPCOMING 7-DAY FORECAST:
+    {json.dumps(forecast, indent=2)}
     """
     
     result = {"decision": None, "error": None}
@@ -204,9 +288,13 @@ if __name__ == "__main__":
         dummy_auto = {
             "automation_id": "test_auto",
             "name": "Garden Zone 1",
-            "startTime": "05:00",
-            "endTime": "07:00",
-            "is24hr": False,
+            "schedule": {
+                "timeRanges": [
+                    {"start": "05:00", "end": "07:00"},
+                    {"start": "18:00", "end": "19:00"}
+                ],
+                "is24hr": False
+            },
             "actions": [{"duration": 1200}]
         }
         ctx = build_automation_context("test_auto", dummy_auto)

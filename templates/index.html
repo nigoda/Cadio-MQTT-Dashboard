@@ -309,6 +309,11 @@
                                 <div style="font-size:12px;color:var(--ha-text-secondary);margin-top:4px">Wait time between actions after revert</div>
                             </div>
                             <div>
+                                <div class="ha-field" style="min-width:200px"><input type="number" id="auto-f-max-cycles"
+                                        value="0" min="0" max="100" placeholder=" "><label>Max Cycles Per Day</label></div>
+                                <div style="font-size:12px;color:var(--ha-text-secondary);margin-top:4px">0 = unlimited repeats</div>
+                            </div>
+                            <div>
                                 <div class="ha-field" style="min-width:250px">
                                     <select id="auto-f-tz" placeholder=" "></select>
                                     <label>Timezone (Local offset)</label>
@@ -338,13 +343,8 @@
                                         <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
                                     </label>
                                 </div>
-                                <div class="irr-time-range" style="display:flex; align-items:center; gap: 8px;">
-                                    <div class="ha-field"><input type="time" id="auto-f-start"
-                                            placeholder=" "><label>Start Time</label></div>
-                                    <span style="padding-top:12px">→</span>
-                                    <div class="ha-field"><input type="time" id="auto-f-end" placeholder=" "><label>End
-                                            Time</label></div>
-                                </div>
+                                <div id="auto-f-times-list" class="irr-form-list" style="margin-top: 8px;"></div>
+                                <button id="auto-f-time-add" class="ha-btn-text" style="margin-top: 4px;">+ Add Time Range</button>
 
                             </div>
 

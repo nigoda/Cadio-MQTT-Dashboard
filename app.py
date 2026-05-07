@@ -488,25 +488,43 @@ def check_schedule(auto):
     if current_day not in days:
         return False
 
-    if not start_str or not end_str:
-        return True  # No time selected -> Active 24/7 on the selected days
-
-    try:
-        start_h, start_m = map(int, start_str.split(":"))
-        end_h, end_m = map(int, end_str.split(":"))
-    except (ValueError, AttributeError):
+    if sched.get("is24hr"):
         return True
 
-    now_mins = now.hour * 60 + now.minute
-    start_mins = start_h * 60 + start_m
-    end_mins = end_h * 60 + end_m
+    ranges = sched.get("timeRanges", [])
+    if not ranges:
+        # Fallback for old single range format
+        s_start = sched.get("startTime", "")
+        s_end = sched.get("endTime", "")
+        if not s_start or not s_end:
+            return True
+        ranges = [{"start": s_start, "end": s_end}]
 
-    if start_mins <= end_mins:
-        # Normal range (e.g. 06:00 -> 09:00)
-        return start_mins <= now_mins < end_mins
-    else:
-        # Overnight range (e.g. 22:00 -> 06:00)
-        return now_mins >= start_mins or now_mins < end_mins
+    now_mins = now.hour * 60 + now.minute
+
+    for r in ranges:
+        start_str = r.get("start", "")
+        end_str = r.get("end", "")
+        if not start_str or not end_str:
+            continue
+        try:
+            start_h, start_m = map(int, start_str.split(":"))
+            end_h, end_m = map(int, end_str.split(":"))
+            start_mins = start_h * 60 + start_m
+            end_mins = end_h * 60 + end_m
+
+            if start_mins <= end_mins:
+                # Normal range
+                if start_mins <= now_mins < end_mins:
+                    return True
+            else:
+                # Overnight range
+                if now_mins >= start_mins or now_mins < end_mins:
+                    return True
+        except (ValueError, AttributeError):
+            continue
+
+    return False
 
 
 def _verify_switches(switch_list, auto):
@@ -712,11 +730,21 @@ def engine_tick(auto):
             else:
                 # We reached the end. Can we loop?
                 sched = check_schedule(auto)
-                if sched and len(actions) > 1:
+                max_cycles = auto.get("maxCyclesPerDay", 0)
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
+                cycle_limit_reached = max_cycles > 0 and (cycles_today + 1) >= max_cycles
+
+                if sched and len(actions) > 1 and not cycle_limit_reached:
                     rt["loopingToFirst"] = True
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
                     _auto_log(auto_id, f"Action {idx+1} timer done → Looping to Action 1")
+                elif cycle_limit_reached:
+                    rt["loopingToFirst"] = False
+                    rt["state"] = "ACTION_REVERT"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Action {idx+1} timer done → Max cycles ({max_cycles}/day) reached, stopping")
                 else:
                     rt["loopingToFirst"] = False
                     rt["state"] = "ACTION_REVERT"
@@ -867,7 +895,23 @@ def engine_tick(auto):
         rt["timerStart"] = None
         rt["remainingTime"] = None
         rt["state"] = "WAIT_CONDITION"
-        _auto_log(auto_id, "Completed → WAIT_CONDITION (awaiting next trigger)")
+        # Track last irrigation date (in-memory) for AI context
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        rt["last_irrigated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Track daily cycle count — resets when date changes
+        if rt.get("cycles_date") != today_str:
+            rt["cycles_date"] = today_str
+            rt["cycles_today"] = 0
+        rt["cycles_today"] = rt.get("cycles_today", 0) + 1
+        # Track cycle history per day (rolling 7-day in-memory)
+        if "cycles_history" not in rt:
+            rt["cycles_history"] = {}
+        rt["cycles_history"][today_str] = rt["cycles_today"]
+        # Trim to last 7 days
+        sorted_dates = sorted(rt["cycles_history"].keys())
+        while len(sorted_dates) > 7:
+            del rt["cycles_history"][sorted_dates.pop(0)]
+        _auto_log(auto_id, f"Completed → WAIT_CONDITION (cycle #{rt['cycles_today']} today)")
         _emit_auto_update(auto)
         return
 
@@ -981,7 +1025,7 @@ def _run_ai_for_automation(auto_id):
     _ai_running_set.add(auto_id)
     
     try:
-        from ai_agent import get_7_day_forecast, build_automation_context, get_ai_schedule_decision, is_model_loaded, is_model_loading
+        from ai_agent import get_weather_data, build_automation_context, get_ai_schedule_decision, is_model_loaded, is_model_loading
     except ImportError as e:
         logging.error(f"[AI-SCHEDULER] Could not import ai_agent module: {e}")
         auto = automations.get(auto_id)
@@ -1025,15 +1069,15 @@ def _run_ai_for_automation(auto_id):
             _auto_log(auto_id, "🤖 AI model ready (pre-loaded)")
             _emit_auto_update(auto)
 
-        forecast = get_7_day_forecast(lat=lat, lon=lon)
-        if not forecast:
+        weather_data = get_weather_data(lat=lat, lon=lon)
+        if not weather_data:
             _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
             _emit_auto_update(auto)
             _ai_running_set.discard(auto_id)
             return
 
         ctx = build_automation_context(auto_id, auto)
-        decision = get_ai_schedule_decision(forecast, ctx)
+        decision = get_ai_schedule_decision(weather_data, ctx)
         if not decision:
             _auto_log(auto_id, "AI failed: model returned no decision", level="error")
             _emit_auto_update(auto)
