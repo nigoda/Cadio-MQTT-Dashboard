@@ -11,8 +11,8 @@ DEFAULT_LON = 77.67727845265588
 
 # Local Model Configuration
 # Download Phi-4-mini-instruct Q4_K_M GGUF (~2.5GB) from:
-# https://huggingface.co/microsoft/Phi-4-mini-instruct-gguf
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "Phi-4-mini-instruct-Q4_K_M.gguf")
+# https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf")
 
 # Global reference to the loaded model so it only loads once into memory
 _llm_instance = None

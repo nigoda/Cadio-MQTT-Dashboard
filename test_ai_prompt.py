@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "Phi-4-mini-instruct-Q4_K_M.gguf")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf")
 
 if not os.path.exists(MODEL_PATH):
     print(f"ERROR: Model not found at {MODEL_PATH}")

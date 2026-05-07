@@ -1,10 +1,10 @@
 import os
 import urllib.request
 
-# Phi-4-mini-instruct Q4_K_M (~2.5GB)
-url = "https://huggingface.co/microsoft/Phi-4-mini-instruct-gguf/resolve/main/Phi-4-mini-instruct-Q4_K_M.gguf"
+# Phi-4-mini-instruct Q4_K_M (~2.5GB) — bartowski quantization (no login required)
+url = "https://huggingface.co/bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf"
 dest_dir = "models"
-dest_file = os.path.join(dest_dir, "Phi-4-mini-instruct-Q4_K_M.gguf")
+dest_file = os.path.join(dest_dir, "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf")
 
 if not os.path.exists(dest_dir):
     os.makedirs(dest_dir)
