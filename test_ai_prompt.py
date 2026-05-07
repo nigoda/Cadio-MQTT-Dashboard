@@ -1,20 +1,20 @@
-"""Test script — Phi-4-mini with full raw data prompt."""
+"""Test script — Llama 3.2 1B with full raw data prompt."""
 import json
 import os
 import sys
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "microsoft_Phi-4-mini-instruct-Q4_K_M.gguf")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "llama-3.2-1b-instruct.gguf")
 
 if not os.path.exists(MODEL_PATH):
     print(f"ERROR: Model not found at {MODEL_PATH}")
     print(f"\nDownload it from:")
-    print(f"  https://huggingface.co/microsoft/Phi-4-mini-instruct-gguf")
-    print(f"\nPlace the Q4_K_M .gguf file in the 'models/' folder.")
+    print(f"  https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF")
+    print(f"\nPlace the .gguf file in the 'models/' folder.")
     sys.exit(1)
 
-print("Loading Phi-4-mini model... (this may take a few seconds)")
+print("Loading Llama 3.2 1B model... (this may take a few seconds)")
 from llama_cpp import Llama
-llm = Llama(model_path=MODEL_PATH, n_ctx=4096, verbose=False)
+llm = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
 print("Model loaded!\n")
 
 system_prompt = "You are an expert Agronomist AI that decides optimal irrigation schedules. Analyze weather data and output ONLY valid raw JSON."
