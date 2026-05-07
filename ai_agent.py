@@ -222,7 +222,7 @@ UPCOMING 7-DAY FORECAST:
         full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER REQUEST:\n{user_prompt}"
         
         response = _genai_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-flash-latest",
             contents=full_prompt,
             config={
                 "response_mime_type": "application/json",

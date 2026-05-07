@@ -13,6 +13,9 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import paho.mqtt.client as mqtt
 import requests
@@ -1118,17 +1121,6 @@ def _run_ai_for_automation(auto_id):
     _emit_auto_update(auto) # force UI update to show log
 
     try:
-        # Check model status for logging
-        if not is_model_loaded():
-            if is_model_loading():
-                _auto_log(auto_id, "🤖 AI model is loading, please wait...")
-            else:
-                _auto_log(auto_id, "🤖 AI loading model now...")
-            _emit_auto_update(auto)
-        else:
-            _auto_log(auto_id, "🤖 AI model ready (pre-loaded)")
-            _emit_auto_update(auto)
-
         weather_data = get_weather_data(lat=lat, lon=lon)
         if not weather_data:
             _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
@@ -1147,6 +1139,16 @@ def _run_ai_for_automation(auto_id):
         new_days = decision.get("selected_days", [])
         reasoning = decision.get("reasoning", "")
         old_days = sched.get("days", [])
+
+        # SAFETY: If we are currently RUNNING or WORKING on an action, 
+        # ensure today stays in the schedule so we don't stop mid-cycle.
+        rt = auto.get("runtime", {})
+        if rt.get("state") not in ("IDLE", "ERROR"):
+            day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+            today_name = day_names[datetime.now().weekday()]
+            if today_name not in new_days:
+                new_days.append(today_name)
+                reasoning += f" (Note: Today was kept in schedule because a cycle is currently active.)"
 
         sched["days"] = new_days
         _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
@@ -1224,15 +1226,58 @@ def handle_update_automation(data):
         emit("automation_error", {"error": "Not found"})
         return
     auto = automations[auto_id]
-    # Only update config fields, not runtime
+    # Update config fields
+    actions_changed = "actions" in data
+    old_actions = auto.get("actions", [])
+    
     for key in ("name", "description", "schedule", "condition",
                 "initialization", "actions", "errorState", "bufferTime", "maxCyclesPerDay"):
         if key in data:
             auto[key] = data[key]
+
+    # Handle Live Sequence Updates (Adding/Removing actions)
+    rt = auto.get("runtime", {})
+    if rt.get("state") in ("ACTION_SET", "ACTION_VERIFY", "ACTION_RUN", "BUFFER_WAIT") and actions_changed:
+        idx = rt.get("currentActionIndex", 0)
+        
+        if idx < len(old_actions):
+            current_action_topic = old_actions[idx].get("switchCmdTopic")
+            
+            # Try to find where our current action moved to in the new list
+            new_actions = auto.get("actions", [])
+            new_idx = -1
+            for i, a in enumerate(new_actions):
+                if a.get("switchCmdTopic") == current_action_topic:
+                    new_idx = i
+                    break
+            
+            if new_idx != -1:
+                if new_idx != idx:
+                    _auto_log(auto_id, f"Sequence changed: Current action moved from #{idx+1} to #{new_idx+1}. Tracking automatically.")
+                    rt["currentActionIndex"] = new_idx
+                
+                # Also handle duration update if we are currently running
+                if rt["state"] == "ACTION_RUN":
+                    new_dur = new_actions[new_idx].get("duration", 0)
+                    old_dur = old_actions[idx].get("duration", 0)
+                    if new_dur != old_dur:
+                        rt["remainingTime"] = new_dur
+                        _auto_log(auto_id, f"Live duration updated: {old_dur}s -> {new_dur}s")
+            else:
+                # The action we were running is gone!
+                _auto_log(auto_id, "The active action was deleted from the sequence. Resetting to IDLE.", level="warn")
+                rt["state"] = "IDLE"
+                rt["currentActionIndex"] = 0
+        else:
+            # Index was already out of bounds for some reason
+            rt["state"] = "IDLE"
+            rt["currentActionIndex"] = 0
+
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")
     _emit_auto_update(auto)
     
     # Run AI immediately if enabled upon save
+    # (The AI runner itself will now handle safety if a run is already in progress)
     sched = auto.get("schedule", {})
     if sched.get("ai_enabled"):
         socketio.start_background_task(_run_ai_for_automation, auto_id)
@@ -1262,6 +1307,11 @@ def handle_toggle_automation(data):
         auto["runtime"]["state"] = "INIT_SET"
         auto["runtime"]["retryCount"] = 0
         _auto_log(auto_id, "Turned ON → INIT_SET")
+        
+        # Run AI immediately if enabled
+        sched = auto.get("schedule", {})
+        if sched.get("ai_enabled"):
+            socketio.start_background_task(_run_ai_for_automation, auto_id)
     else:
         auto["runtime"] = _new_runtime()
         _auto_log(auto_id, "Turned OFF → IDLE")

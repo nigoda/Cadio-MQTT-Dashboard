@@ -207,7 +207,7 @@ def run_scenario(scenario):
     try:
         full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER REQUEST:\n{scenario['prompt']}"
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-flash-latest",
             contents=full_prompt,
             config={
                 "response_mime_type": "application/json",
