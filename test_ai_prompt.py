@@ -14,7 +14,7 @@ if not os.path.exists(MODEL_PATH):
 
 print("Loading Llama 3.2 1B model... (this may take a few seconds)")
 from llama_cpp import Llama
-llm = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
+llm = Llama(model_path=MODEL_PATH, n_ctx=131072, verbose=False)
 print("Model loaded!\n")
 
 system_prompt = "You are an expert Agronomist AI that decides optimal irrigation schedules. Analyze weather data and output ONLY valid raw JSON."

@@ -47,7 +47,7 @@ def get_llm():
         
         try:
             # n_ctx is the context window size. 2048 is plenty for our schedule JSON.
-            _llm_instance = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
+            _llm_instance = Llama(model_path=MODEL_PATH, n_ctx=131072, verbose=False) #2048,4096, 131072
             logging.info("AI model loaded successfully!")
         finally:
             _llm_is_loading = False
