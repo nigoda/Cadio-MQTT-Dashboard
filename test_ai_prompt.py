@@ -1,48 +1,47 @@
-"""Test script to run the exact AI prompt against the local model."""
+"""Test script — Phi-4-mini with full raw data prompt."""
 import json
 import os
 import sys
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "llama-3.2-1b-instruct.gguf")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "Phi-4-mini-instruct-Q4_K_M.gguf")
 
 if not os.path.exists(MODEL_PATH):
     print(f"ERROR: Model not found at {MODEL_PATH}")
+    print(f"\nDownload it from:")
+    print(f"  https://huggingface.co/microsoft/Phi-4-mini-instruct-gguf")
+    print(f"\nPlace the Q4_K_M .gguf file in the 'models/' folder.")
     sys.exit(1)
 
-print("Loading model... (this may take a few seconds)")
+print("Loading Phi-4-mini model... (this may take a few seconds)")
 from llama_cpp import Llama
-llm = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
+llm = Llama(model_path=MODEL_PATH, n_ctx=4096, verbose=False)
 print("Model loaded!\n")
 
-system_prompt = "You are an expert Agronomist AI. Output ONLY raw JSON."
+system_prompt = "You are an expert Agronomist AI that decides optimal irrigation schedules. Analyze weather data and output ONLY valid raw JSON."
 
 user_prompt = """TODAY is Wed, 2026-05-07.
-Decide the optimal days to run the irrigation sequence for the UPCOMING 
-7 days (starting from today) based on weather data.
+Decide the optimal days to run irrigation for the UPCOMING 7 days based on ALL the data below.
 
 RULES:
-1. Do NOT schedule irrigation on days with heavy rain (> 5mm).
-2. Try to schedule irrigation before or during hot days (> 30°C).
-3. Consider the PAST weather: if it rained heavily in the last 3 days, 
-   the soil is still moist — you can skip early days.
-4. Check "last_irrigated" — this is the date+time when the system LAST 
-   watered the plants. If it was recent (within 1 day), you may skip today.
-5. Check "irrigation_history" — this shows how many watering cycles ran 
-   on each past day (e.g. {"2026-05-06": 3} means 3 cycles ran on May 6th). 
-   If many cycles ran recently, the soil has plenty of water.
-6. If "irrigation_history" is empty AND the past 3 days had NO rain, 
-   prioritize watering TODAY or TOMORROW urgently.
-7. You must select between 1 and 4 days from the upcoming forecast.
-8. You must output ONLY a raw JSON object with no markdown block formatting, 
-   no conversational text, and exactly these keys:
+1. Do NOT schedule irrigation on days with heavy rain (> 5mm precipitation).
+2. Prioritize irrigation before or during hot days (> 30°C) — plants lose moisture fast in heat.
+3. Consider PAST weather: if it rained heavily in the last 3 days, the soil is still moist — you can skip early days.
+4. Check "last_irrigated" in the Automation Details — this is when the system LAST watered. If within 1 day, you may skip today.
+5. Check "irrigation_history" — this shows how many watering cycles ran on each past day. If many cycles ran recently, soil has plenty of water.
+6. Check "cycles_completed_today" — if already > 0, the system has watered today.
+7. If "irrigation_history" is empty AND past 3 days had NO rain, prioritize watering TODAY or TOMORROW urgently.
+8. Select between 1 and 4 days from the upcoming forecast.
+9. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {
-    "selected_days": ["Mon", "Thu"],
-    "reasoning": "A short 1-sentence explanation of why these days were picked."
+    "selected_days": ["Day1", "Day2"],
+    "reasoning": "Your analysis of why these days were chosen based on the data."
 }
 
-FARM DATA:
-Automation Details: {
+Replace Day1/Day2 with actual day abbreviations (Mon/Tue/Wed/Thu/Fri/Sat/Sun) from the forecast.
+
+AUTOMATION DETAILS:
+{
     "automation_id": "auto_9j2k",
     "name": "Vegetable Patch",
     "description": "Sensitive tomatoes, need soil moisture high.",
@@ -85,7 +84,7 @@ UPCOMING 7-DAY FORECAST:
 }"""
 
 print("=" * 60)
-print("SENDING PROMPT TO AI MODEL...")
+print("SENDING PROMPT TO PHI-4-MINI...")
 print("=" * 60)
 
 response = llm.create_chat_completion(
@@ -114,6 +113,11 @@ try:
     
     if "selected_days" in parsed:
         print(f"\n✅ Selected Days: {parsed['selected_days']}")
+        bad = [d for d in parsed["selected_days"] if d == "Mon"]
+        if bad:
+            print("❌ ERROR: Model picked Mon (8.5mm rain) — should have been skipped!")
+        else:
+            print("✅ No rainy days picked!")
     if "reasoning" in parsed:
         print(f"💬 Reasoning: {parsed['reasoning']}")
 except json.JSONDecodeError as e:
