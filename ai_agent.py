@@ -219,11 +219,11 @@ RULES:
 9. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {{
-    "selected_days": ["Day1", "Day2"],
-    "reasoning": "Your analysis of why these days were chosen based on the data."
+    "selected_days": ["Mon", "Thu"],
+    "reasoning": "Your analysis."
 }}
 
-Replace Day1/Day2 with actual day abbreviations (Mon/Tue/Wed/Thu/Fri/Sat/Sun) from the forecast.
+IMPORTANT: In selected_days use ONLY short day names: Mon, Tue, Wed, Thu, Fri, Sat, Sun. Do NOT include dates or parentheses.
 
 AUTOMATION DETAILS:
 {json.dumps(auto_context, indent=2)}
@@ -237,46 +237,65 @@ TODAY ({today_day}, {today_str}):
 UPCOMING 7-DAY FORECAST:
 {json.dumps(forecast, indent=2)}"""
     
-    result = {"decision": None, "error": None}
-    
-    def run_inference():
-        try:
-            # Run inference locally via llama-cpp-python
-            response = llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                response_format={"type": "json_object"},
-                temperature=0.1,  # Low temp for deterministic logic
-                max_tokens=256    # Limit output size for faster response
-            )
-            
-            raw_text = response["choices"][0]["message"]["content"].strip()
-            result["decision"] = json.loads(raw_text)
-        except Exception as e:
-            result["error"] = str(e)
-    
-    # Run inference in a thread with timeout
-    thread = threading.Thread(target=run_inference)
-    thread.daemon = True
-    thread.start()
-    thread.join(timeout=timeout)
-    
-    if thread.is_alive():
-        logging.error(f"AI inference timed out after {timeout}s for automation {auto_context.get('automation_id')}")
-        return None
-    
-    if result["error"]:
-        logging.error(f"AI Scheduling failed for automation {auto_context.get('automation_id')}: {result['error']}")
-        return None
-    
-    decision = result["decision"]
-    if decision and ("selected_days" not in decision or "reasoning" not in decision):
-        logging.error(f"AI JSON response missing required keys for automation {auto_context.get('automation_id')}")
-        return None
-            
-    return decision
+    MAX_RETRIES = 3
+    valid_days = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        result = {"decision": None, "error": None}
+        temp = 0.1 + (attempt - 1) * 0.15  # Slightly raise temp on retries
+
+        def run_inference():
+            try:
+                response = llm.create_chat_completion(
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=temp,
+                    max_tokens=256
+                )
+                raw_text = response["choices"][0]["message"]["content"].strip()
+                result["decision"] = json.loads(raw_text)
+            except Exception as e:
+                result["error"] = str(e)
+
+        # Run inference in a thread with timeout
+        thread = threading.Thread(target=run_inference)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES} timed out")
+            continue
+
+        if result["error"]:
+            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES} error: {result['error']}")
+            continue
+
+        decision = result["decision"]
+        if not decision or "selected_days" not in decision or "reasoning" not in decision:
+            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES}: missing keys in response")
+            continue
+
+        # Clean up day names — model may return "Mon (2026-05-10)" instead of "Mon"
+        cleaned = []
+        for d in decision["selected_days"]:
+            short = d.split(" ")[0].split("(")[0].strip()
+            if short in valid_days:
+                cleaned.append(short)
+
+        if not cleaned:
+            logging.warning(f"AI attempt {attempt}/{MAX_RETRIES}: no valid day names found in {decision['selected_days']}")
+            continue
+
+        decision["selected_days"] = cleaned
+        logging.info(f"AI decision accepted on attempt {attempt}: {cleaned}")
+        return decision
+
+    logging.error(f"AI failed after {MAX_RETRIES} attempts for automation {auto_context.get('automation_id')}")
+    return None
 
 # --- FOR TESTING PURPOSES ---
 if __name__ == "__main__":
