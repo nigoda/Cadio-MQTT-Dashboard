@@ -219,11 +219,11 @@ RULES:
 9. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {{
-    "selected_days": ["Mon", "Thu"],
+    "selected_days": ["DAY1", "DAY2"],
     "reasoning": "Your analysis."
 }}
 
-IMPORTANT: In selected_days use ONLY short day names: Mon, Tue, Wed, Thu, Fri, Sat, Sun. Do NOT include dates or parentheses.
+IMPORTANT: In selected_days, replace DAY1/DAY2 with ONLY short day names (Mon, Tue, Wed, Thu, Fri, Sat, Sun) chosen from the forecast. Do NOT include dates or parentheses.
 
 AUTOMATION DETAILS:
 {json.dumps(auto_context, indent=2)}

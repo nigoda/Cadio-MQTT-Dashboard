@@ -643,30 +643,73 @@ def engine_tick(auto):
 
     if state == "INIT_SET":
         inits = auto.get("initialization", [])
-        for item in inits:
+        idx = rt.get("currentInitIndex", 0)
+        
+        if not inits:
+            rt["state"] = "INIT_VERIFY_ALL"
+            _emit_auto_update(auto)
+            return
+            
+        if idx < len(inits):
+            item = inits[idx]
             _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
-        rt["verifyStart"] = now
-        rt["state"] = "INIT_VERIFY"
-        _auto_log(auto_id, "Initialization commands sent → INIT_VERIFY")
-        _emit_auto_update(auto)
+            rt["verifyStart"] = now
+            rt["state"] = "INIT_VERIFY_INDIVIDUAL"
+            _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} sent → INIT_VERIFY_INDIVIDUAL")
+            _emit_auto_update(auto)
+        else:
+            rt["verifyStart"] = now
+            rt["state"] = "INIT_VERIFY_ALL"
+            _auto_log(auto_id, "All individual initialization commands sent. Final bulk check → INIT_VERIFY_ALL")
+            _emit_auto_update(auto)
         return
 
-    if state == "INIT_VERIFY":
+    if state == "INIT_VERIFY_INDIVIDUAL":
+        inits = auto.get("initialization", [])
+        idx = rt.get("currentInitIndex", 0)
+        if idx < len(inits):
+            item = inits[idx]
+            if _verify_switches([item], auto):
+                rt["currentInitIndex"] = idx + 1
+                rt["state"] = "INIT_SET"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} verified")
+                _emit_auto_update(auto)
+            elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                rt["retryCount"] = rt.get("retryCount", 0) + 1
+                if rt["retryCount"] >= MAX_RETRIES:
+                    rt["state"] = "ERROR_SET"
+                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} verification timeout → ERROR_SET", "error")
+                    _emit_auto_update(auto)
+                else:
+                    rt["state"] = "INIT_SET"
+                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} verify retry {rt['retryCount']}/{MAX_RETRIES}")
+                    _emit_auto_update(auto)
+        return
+
+    if state == "INIT_VERIFY_ALL":
         inits = auto.get("initialization", [])
         if not inits or _verify_switches(inits, auto):
-            rt["state"] = "WAIT_CONDITION"
-            rt["retryCount"] = 0
-            _auto_log(auto_id, "Initialization verified → WAIT_CONDITION (awaiting condition + schedule)")
+            if rt.get("loopingToFirst"):
+                rt["bufferStart"] = now
+                rt["state"] = "BUFFER"
+                _auto_log(auto_id, "All initialization verified → BUFFER")
+            else:
+                rt["state"] = "WAIT_CONDITION"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, "Initialization verified → WAIT_CONDITION (awaiting condition + schedule)")
             _emit_auto_update(auto)
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
             if rt["retryCount"] >= MAX_RETRIES:
                 rt["state"] = "ERROR_SET"
-                _auto_log(auto_id, "Init verification timeout → ERROR_SET", "error")
+                _auto_log(auto_id, "Bulk init verification timeout → ERROR_SET", "error")
                 _emit_auto_update(auto)
             else:
+                # Restart the sequential flow
+                rt["currentInitIndex"] = 0
                 rt["state"] = "INIT_SET"
-                _auto_log(auto_id, f"Init verify retry {rt['retryCount']}/{MAX_RETRIES}")
+                _auto_log(auto_id, f"Bulk init verify failed, restarting sequence! Retry {rt['retryCount']}/{MAX_RETRIES}", "warning")
                 _emit_auto_update(auto)
         return
 
@@ -795,10 +838,12 @@ def engine_tick(auto):
         next_idx = (idx + 1) % len(actions)
         
         if next_idx == 0 and rt.get("loopingToFirst"):
-            inits = auto.get("initialization", [])
-            for item in inits:
-                _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
-            _auto_log(auto_id, "Looping: Initialization commands sent (Zone 1 will start after buffer)")
+            rt["currentInitIndex"] = 0
+            rt["state"] = "INIT_SET"
+            rt["retryCount"] = 0
+            _auto_log(auto_id, "Looping: Starting sequential initialization")
+            _emit_auto_update(auto)
+            return
         else:
             action = actions[next_idx]
             _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
@@ -814,18 +859,12 @@ def engine_tick(auto):
         idx = rt.get("currentActionIndex", 0)
         next_idx = (idx + 1) % len(actions)
         
-        if next_idx == 0 and rt.get("loopingToFirst"):
-            switches_to_verify = auto.get("initialization", [])
-        else:
-            switches_to_verify = [actions[next_idx]]
+        switches_to_verify = [actions[next_idx]]
             
         if _verify_switches(switches_to_verify, auto):
             rt["bufferStart"] = now
             rt["state"] = "BUFFER"
-            if next_idx == 0 and rt.get("loopingToFirst"):
-                _auto_log(auto_id, "Init verified → BUFFER")
-            else:
-                _auto_log(auto_id, f"Overlap transition verified → BUFFER")
+            _auto_log(auto_id, f"Overlap transition verified → BUFFER")
             _emit_auto_update(auto)
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
