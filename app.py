@@ -385,6 +385,37 @@ def handle_get_history(data):
 # Irrigation Automation Engine
 # ---------------------------------------------------------------------------
 
+def _get_auto_now(auto):
+    """Return the current datetime adjusted for the automation's utcOffset.
+    JS getTimezoneOffset() returns positive values for west of UTC (e.g. UTC-5 = 300).
+    We store the same convention: utcOffset in minutes, where UTC+5:30 = -330.
+    Formula: local_time = utc_time - offset_in_minutes.
+    Falls back to server local time if no offset is configured."""
+    sched = auto.get("schedule", {}) if auto else {}
+    utc_offset_mins = sched.get("utcOffset")
+    if utc_offset_mins is not None:
+        try:
+            offset = int(utc_offset_mins)
+            return datetime.utcnow() - timedelta(minutes=offset)
+        except (ValueError, TypeError):
+            pass
+    return datetime.now()
+
+
+def _auto_log(auto_id, message, level="info"):
+    """Append a timestamped log entry for an automation (timezone-aware)."""
+    if auto_id not in automation_logs:
+        automation_logs[auto_id] = []
+    # Use the automation's timezone for the log timestamp
+    auto = automations.get(auto_id)
+    now = _get_auto_now(auto)
+    entry = {"ts": now.isoformat(), "msg": message, "level": level}
+    automation_logs[auto_id].insert(0, entry)
+    if len(automation_logs[auto_id]) > MAX_AUTO_LOG:
+        automation_logs[auto_id] = automation_logs[auto_id][:MAX_AUTO_LOG]
+    logging.info(f"[AUTO {auto_id}] {message}")
+
+
 def _new_runtime():
     """Return a fresh runtime block."""
     return {
@@ -397,17 +428,6 @@ def _new_runtime():
         "verifyStart": None,
         "bufferStart": None,
     }
-
-
-def _auto_log(auto_id, message, level="info"):
-    """Append a timestamped log entry for an automation."""
-    if auto_id not in automation_logs:
-        automation_logs[auto_id] = []
-    entry = {"ts": datetime.now().isoformat(), "msg": message, "level": level}
-    automation_logs[auto_id].insert(0, entry)
-    if len(automation_logs[auto_id]) > MAX_AUTO_LOG:
-        automation_logs[auto_id] = automation_logs[auto_id][:MAX_AUTO_LOG]
-    logging.info(f"[AUTO {auto_id}] {message}")
 
 
 def _get_switch_state(switch_topic):
@@ -477,16 +497,8 @@ def check_schedule(auto):
     start_str = sched.get("startTime", "")
     end_str = sched.get("endTime", "")
 
-    # Use utcOffset if provided, else fallback to server local time
-    utc_offset_mins = sched.get("utcOffset")
-    if utc_offset_mins is not None:
-        try:
-            offset = int(utc_offset_mins)
-            now = datetime.utcnow() - timedelta(minutes=offset)
-        except ValueError:
-            now = datetime.now()
-    else:
-        now = datetime.now()
+    # Use the automation's timezone
+    now = _get_auto_now(auto)
 
     day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     current_day = day_names[now.weekday()]
@@ -632,7 +644,7 @@ def engine_tick(auto):
             # Check cycle limit before starting a new cycle
             max_cycles = auto.get("maxCyclesPerDay", 0)
             if max_cycles > 0:
-                today_str = datetime.now().strftime("%Y-%m-%d")
+                today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
                 cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
                 if cycles_today >= max_cycles:
                     if rt.get("_cycle_paused") != today_str:
@@ -789,7 +801,7 @@ def engine_tick(auto):
             else:
                 # We reached the end of all actions. Increment cycle count first.
                 max_cycles = auto.get("maxCyclesPerDay", 0)
-                today_str = datetime.now().strftime("%Y-%m-%d")
+                today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
                 if rt.get("cycles_date") != today_str:
                     rt["cycles_date"] = today_str
                     rt["cycles_today"] = 0
@@ -802,7 +814,7 @@ def engine_tick(auto):
                 sorted_dates = sorted(rt["cycles_history"].keys())
                 while len(sorted_dates) > 7:
                     del rt["cycles_history"][sorted_dates.pop(0)]
-                rt["last_irrigated"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                rt["last_irrigated"] = _get_auto_now(auto).strftime("%Y-%m-%d %H:%M")
 
                 cycle_limit_reached = max_cycles > 0 and cycles_today >= max_cycles
 
@@ -1059,25 +1071,28 @@ def stop_engine():
 # ---------------------------------------------------------------------------
 # AI Scheduler — background thread
 # ---------------------------------------------------------------------------
-_ai_last_run_date = None  # track last AI run date to avoid re-running
 
 def _ai_scheduler_loop():
     """Background thread: checks once per minute if it's time to run the AI."""
-    global _ai_last_run_date
-    AI_RUN_HOUR = 2  # Run at 2:00 AM local time
+    AI_RUN_HOUR = 2  # Run at 2:00 AM in each automation's timezone
     logging.info("[AI-SCHEDULER] AI scheduler thread started")
     while _engine_running:
         try:
-            now = datetime.now()
-            today_str = now.strftime("%Y-%m-%d")
-            
-            # 1. Daily scheduled run at 2:00 AM
-            if now.hour == AI_RUN_HOUR and _ai_last_run_date != today_str:
-                _ai_last_run_date = today_str
-                _run_ai_for_all_automations()
+            # 1. Daily scheduled run at 2:00 AM (per-automation timezone)
+            for auto_id, auto in automations.items():
+                sched = auto.get("schedule", {})
+                if not sched.get("ai_enabled"):
+                    continue
+                auto_now = _get_auto_now(auto)
+                auto_today = auto_now.strftime("%Y-%m-%d")
+                last_run = auto.get("_ai_last_run_date")
+                if auto_now.hour == AI_RUN_HOUR and last_run != auto_today:
+                    auto["_ai_last_run_date"] = auto_today
+                    logging.info(f"[AI-SCHEDULER] 2AM triggered for '{auto_id}' (tz-aware)")
+                    socketio.start_background_task(_run_ai_for_automation, auto_id)
                 
             # 2. Dynamic automatic retry for failed runs
-            now_ts = now.timestamp()
+            now_ts = time.time()
             for auto_id, auto in automations.items():
                 fail_ts = auto.get("ai_last_fail")
                 retry_delay = auto.get("ai_retry_delay", 1800)
@@ -1169,7 +1184,7 @@ def _run_ai_for_automation(auto_id):
         rt = auto.get("runtime", {})
         if rt.get("state") not in ("IDLE", "ERROR"):
             day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-            today_name = day_names[datetime.now().weekday()]
+            today_name = day_names[_get_auto_now(auto).weekday()]
             if today_name not in new_days:
                 new_days.append(today_name)
                 reasoning += f" (Note: Today was kept in schedule because a cycle is currently active.)"
