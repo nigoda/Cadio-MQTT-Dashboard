@@ -12,6 +12,8 @@ import ssl
 import threading
 import time
 import uuid
+import re
+import math
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -1068,9 +1070,29 @@ def _ai_scheduler_loop():
         try:
             now = datetime.now()
             today_str = now.strftime("%Y-%m-%d")
+            
+            # 1. Daily scheduled run at 2:00 AM
             if now.hour == AI_RUN_HOUR and _ai_last_run_date != today_str:
                 _ai_last_run_date = today_str
                 _run_ai_for_all_automations()
+                
+            # 2. Dynamic automatic retry for failed runs
+            now_ts = now.timestamp()
+            for auto_id, auto in automations.items():
+                fail_ts = auto.get("ai_last_fail")
+                retry_delay = auto.get("ai_retry_delay", 1800)
+                if fail_ts and (now_ts - fail_ts) >= retry_delay:
+                    retry_mins = math.ceil(retry_delay / 60)
+                    logging.info(f"[AI-SCHEDULER] {retry_mins}-minute retry triggered for '{auto_id}'")
+                    _auto_log(auto_id, f"🔄 AI retrying {retry_mins}th min after failure...", level="warn")
+                    
+                    # Temporarily clear the flags so we don't trigger it again immediately
+                    auto.pop("ai_last_fail", None) 
+                    auto.pop("ai_retry_delay", None)
+                    
+                    # Run it (this will re-set the flag if it fails again)
+                    socketio.start_background_task(_run_ai_for_automation, auto_id)
+
         except Exception as e:
             logging.error(f"[AI-SCHEDULER] Error: {e}")
         time.sleep(60)  # check every minute
@@ -1124,6 +1146,7 @@ def _run_ai_for_automation(auto_id):
         weather_data = get_weather_data(lat=lat, lon=lon)
         if not weather_data:
             _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
+            auto["ai_last_fail"] = datetime.now().timestamp()
             _emit_auto_update(auto)
             _ai_running_set.discard(auto_id)
             return
@@ -1132,6 +1155,7 @@ def _run_ai_for_automation(auto_id):
         decision = get_ai_schedule_decision(weather_data, ctx)
         if not decision:
             _auto_log(auto_id, "AI failed: model returned no decision", level="error")
+            auto["ai_last_fail"] = datetime.now().timestamp()
             _emit_auto_update(auto)
             _ai_running_set.discard(auto_id)
             return
@@ -1155,6 +1179,9 @@ def _run_ai_for_automation(auto_id):
             auto["schedule"] = {}
         auto["schedule"]["days"] = new_days
         
+        # Clear any previous failure flags on success
+        auto.pop("ai_last_fail", None)
+        
         _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
         _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
         logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
@@ -1164,8 +1191,24 @@ def _run_ai_for_automation(auto_id):
         _emit_auto_update(auto) 
 
     except Exception as e:
-        logging.error(f"[AI-SCHEDULER] Error running AI for '{auto.get('name', auto_id)}': {e}")
-        _auto_log(auto_id, f"AI error: {str(e)[:100]}", level="error")
+        error_msg = str(e)
+        logging.error(f"[AI-SCHEDULER] Error running AI for '{auto.get('name', auto_id)}': {error_msg}")
+        
+        # Determine retry delay
+        retry_delay = 1800  # default 30 mins
+        match = re.search(r'Please retry in ([\d\.]+)s', error_msg)
+        if match:
+            try:
+                seconds = float(match.group(1))
+                retry_delay = seconds + 60  # Add +1 minute as requested
+                _auto_log(auto_id, f"AI error: Quota exceeded. Retrying in ~{math.ceil(retry_delay/60)} mins.", level="error")
+            except ValueError:
+                _auto_log(auto_id, f"AI error: {error_msg[:100]}", level="error")
+        else:
+            _auto_log(auto_id, f"AI error: {error_msg[:100]}", level="error")
+            
+        auto["ai_last_fail"] = datetime.now().timestamp()
+        auto["ai_retry_delay"] = retry_delay
     finally:
         _emit_auto_update(auto)
         _ai_running_set.discard(auto_id)

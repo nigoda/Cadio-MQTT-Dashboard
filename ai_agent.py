@@ -305,7 +305,7 @@ UPCOMING 7-DAY FORECAST:
         
     except Exception as e:
         logging.error(f"Gemini API failed for automation {auto_context.get('automation_id')}: {e}")
-        return None
+        raise e
 
 # --- FOR TESTING PURPOSES ---
 if __name__ == "__main__":
