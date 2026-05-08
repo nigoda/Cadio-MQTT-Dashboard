@@ -1081,7 +1081,8 @@ def _ai_scheduler_loop():
             # 1. Daily scheduled run at 2:00 AM (per-automation timezone)
             for auto_id, auto in automations.items():
                 sched = auto.get("schedule", {})
-                if not sched.get("ai_enabled"):
+                # Only trigger 2 AM run if AI is enabled AND automation is ON
+                if not sched.get("ai_enabled") or auto.get("status") != "ON":
                     continue
                 auto_now = _get_auto_now(auto)
                 auto_today = auto_now.strftime("%Y-%m-%d")

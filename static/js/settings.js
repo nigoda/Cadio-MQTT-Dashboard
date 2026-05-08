@@ -74,7 +74,16 @@ document.addEventListener('DOMContentLoaded', () => {
     cardPersonal.onclick = () => {
         if (currentMode === 'custom') return;
         updateUI('custom');
-        // No auto-save here, wait for key input
+        
+        // If we already have a key saved, auto-switch the mode on the server
+        if (originalKey) {
+            socket.emit('update_api_settings', {
+                api_mode: 'custom',
+                custom_api_key: originalKey
+            });
+            showToast('Switched to Personal AI');
+            updateSaveButtonState(false);
+        }
     };
 
     inputKey.oninput = () => {
