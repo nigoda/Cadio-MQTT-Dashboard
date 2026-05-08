@@ -473,7 +473,7 @@
     }
 
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
-      <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px; ${aiEnabled ? 'opacity:0.4;pointer-events:none;' : ''}">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d) ? 'active' : ''}">${d}</span>`).join("")}</div></div>
+      <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px; ${aiEnabled ? 'pointer-events:none; border: 1px dashed var(--ha-primary); padding: 4px; border-radius: 8px;' : ''}">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d) ? 'active' : ''}">${d}</span>`).join("")}</div></div>
       <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${timeStr}</div></div>
       <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
         <span style="font-size: 14px; font-weight: bold; color: var(--ha-primary, #03a9f4); letter-spacing: 0.5px;">🤖 AI</span>

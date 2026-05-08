@@ -1150,10 +1150,18 @@ def _run_ai_for_automation(auto_id):
                 new_days.append(today_name)
                 reasoning += f" (Note: Today was kept in schedule because a cycle is currently active.)"
 
-        sched["days"] = new_days
+        # Assign the days back to the global reference to guarantee persistence
+        if "schedule" not in auto:
+            auto["schedule"] = {}
+        auto["schedule"]["days"] = new_days
+        
         _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
         _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
         logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
+        
+        # Deep Sync: Send specific log message AND full update
+        socketio.emit("log_message", {"entity": auto.get("name"), "state": "AI Schedule Updated"})
+        _emit_auto_update(auto) 
 
     except Exception as e:
         logging.error(f"[AI-SCHEDULER] Error running AI for '{auto.get('name', auto_id)}': {e}")

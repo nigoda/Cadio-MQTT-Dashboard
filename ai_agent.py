@@ -79,11 +79,21 @@ def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
         "timezone": "auto",
         "past_days": past_days
     }
-    import urllib3
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    
+
+    session = requests.Session()
+    retry_strategy = requests.adapters.Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET"],
+        raise_on_status=False
+    )
+    adapter = requests.adapters.HTTPAdapter(max_retries=retry_strategy)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
     try:
-        response = requests.get(url, params=params, timeout=10, verify=False)
+        response = session.get(url, params=params, timeout=(5, 20), verify=True)
         response.raise_for_status()
         data = response.json()
         
@@ -124,9 +134,14 @@ def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
             "past_days": past,
             "forecast": forecast
         }
-    except Exception as e:
-        logging.error(f"Failed to fetch weather data: {e}")
+    except requests.exceptions.Timeout as e:
+        logging.error(f"Weather fetch timed out after 20s: {e}")
         return None
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Failed to fetch weather data from Open-Meteo: {e}")
+        return None
+    finally:
+        session.close()
 
 # Backward-compatible alias
 def get_7_day_forecast(lat=DEFAULT_LAT, lon=DEFAULT_LON):
@@ -249,6 +264,10 @@ UPCOMING 7-DAY FORECAST:
         # We can combine system and user prompt for Gemini
         full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER REQUEST:\n{user_prompt}"
         
+        # Modify prompt to request DATES instead of NAMES
+        full_prompt = full_prompt.replace('replace DAY1/DAY2 with ONLY short day names (Mon, Tue, Wed, Thu, Fri, Sat, Sun)', 'replace DAY1/DAY2 with ONLY full ISO dates (YYYY-MM-DD)')
+        full_prompt = full_prompt.replace('selected_days": ["DAY1", "DAY2"]', 'selected_dates": ["YYYY-MM-DD", "YYYY-MM-DD"]')
+        
         response = _genai_client.models.generate_content(
             model="gemini-flash-latest",
             contents=full_prompt,
@@ -261,24 +280,27 @@ UPCOMING 7-DAY FORECAST:
         raw_text = response.text.strip()
         decision = json.loads(raw_text)
         
-        if not decision or "selected_days" not in decision or "reasoning" not in decision:
+        if not decision or "selected_dates" not in decision or "reasoning" not in decision:
             logging.error(f"AI missing keys in response: {decision}")
             return None
             
-        # Clean up day names just in case
-        valid_days = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
-        cleaned = []
-        for d in decision["selected_days"]:
-            short = d.split(" ")[0].split("(")[0].strip()
-            if short in valid_days:
-                cleaned.append(short)
+        # Accept the dates exactly as returned
+        cleaned_dates = decision["selected_dates"]
+        
+        # Backward compatibility for the rest of the app: 
+        # Convert dates back to short day names for the "selected_days" key
+        selected_days = []
+        for d_str in cleaned_dates:
+            try:
+                dt = datetime.strptime(d_str, "%Y-%m-%d")
+                selected_days.append(dt.strftime("%a"))
+            except:
+                continue
                 
-        if not cleaned:
-            logging.error(f"AI returned no valid days: {decision['selected_days']}")
-            return None
-            
-        decision["selected_days"] = cleaned
-        logging.info(f"Gemini API decision accepted: {cleaned}")
+        decision["selected_days"] = selected_days
+        decision["selected_dates"] = cleaned_dates # Keep dates for precision
+        
+        logging.info(f"Gemini API decision accepted for dates: {cleaned_dates}")
         return decision
         
     except Exception as e:
