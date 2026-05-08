@@ -62,6 +62,7 @@
   // Socket.IO
   // -------------------------------------------------------
   const socket = io();
+  window.socket = socket; // Expose for other JS files (automation.js, settings.js)
 
   // -------------------------------------------------------
   // Login

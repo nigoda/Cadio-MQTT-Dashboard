@@ -13,6 +13,67 @@
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
     <link rel="icon" type="image/png" href="/static/Logo.png">
+    <style>
+        .ha-plan-card {
+            background: var(--ha-card);
+            border: 2px solid var(--ha-divider);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+        .ha-plan-card:hover {
+            border-color: var(--ha-primary);
+            background: var(--ha-card-hover);
+            transform: translateY(-2px);
+        }
+        .ha-plan-card.active {
+            border-color: var(--ha-primary);
+            background: rgba(3, 169, 244, 0.05);
+            box-shadow: 0 0 20px rgba(3, 169, 244, 0.15);
+        }
+        .ha-plan-card .material-symbols-outlined {
+            font-size: 32px;
+            margin-bottom: 12px;
+            color: var(--ha-text-secondary);
+            transition: color 0.3s;
+        }
+        .ha-plan-card.active .material-symbols-outlined {
+            color: var(--ha-primary);
+        }
+        .ha-plan-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .ha-plan-card p {
+            font-size: 0.8rem;
+            color: var(--ha-text-secondary);
+            line-height: 1.4;
+            margin-bottom: 15px;
+        }
+        .ha-plan-status {
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            padding: 4px 12px;
+            border-radius: 20px;
+            background: var(--ha-divider);
+            display: inline-block;
+            color: var(--ha-text-secondary);
+        }
+        .ha-plan-card.active .ha-plan-status {
+            background: var(--ha-primary);
+            color: white;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
 </head>
 
 <body>
@@ -85,6 +146,10 @@
                 <button class="ha-nav-item" data-tab="api">
                     <span class="material-symbols-outlined">api</span>
                     <span>API Details</span>
+                </button>
+                <button class="ha-nav-item" data-tab="settings">
+                    <span class="material-symbols-outlined">settings</span>
+                    <span>AI Settings</span>
                 </button>
             </nav>
             <div class="ha-sidebar-footer">
@@ -616,6 +681,53 @@ NO     → Device is offline (Last Will message from broker)</pre>
                 </div>
             </section>
 
+            <!-- ===== AI Settings Tab ===== -->
+            <section id="tab-settings" class="ha-view">
+                <div class="ha-view-header">
+                    <h1>AI Settings</h1>
+                </div>
+                <div class="ha-masonry">
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">key</span> Gemini API Configuration
+                        </div>
+                        <div class="ha-api-section">
+                            <p style="color:var(--ha-text-secondary); font-size:0.9rem; margin-bottom:20px;">
+                                Choose how the AI Agent connects to Google Gemini. You can use the server's default key or provide your own for higher personal limits.
+                            </p>
+                            
+                            <div class="ha-plan-selector" style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;">
+                                <div id="plan-shared" class="ha-plan-card">
+                                    <span class="material-symbols-outlined">cloud_done</span>
+                                    <h3>Shared AI</h3>
+                                    <p>Ready to use. Uses the server's built-in AI connection.</p>
+                                    <div class="ha-plan-status">Active</div>
+                                </div>
+                                <div id="plan-personal" class="ha-plan-card">
+                                    <span class="material-symbols-outlined">person</span>
+                                    <h3>Personal AI</h3>
+                                    <p>Highest limits. Connects using your own Gemini Key.</p>
+                                    <div class="ha-plan-status">Select</div>
+                                </div>
+                            </div>
+
+                            <div id="custom-key-wrap" class="hidden" style="animation: fadeIn 0.3s ease;">
+                                <div class="ha-field" style="margin-top: 10px;">
+                                    <input type="password" id="api-custom-key" placeholder=" ">
+                                    <label>Paste Your Gemini API Key</label>
+                                </div>
+                                <p class="hint" style="font-size:0.75rem; color:var(--ha-text-secondary); margin-bottom:15px; display:flex; align-items:center; gap:5px;">
+                                    <span class="material-symbols-outlined" style="font-size:14px;">info</span>
+                                    Get a free key at <a href="https://aistudio.google.com/app/apikey" target="_blank" style="color:var(--ha-primary);">Google AI Studio</a>
+                                </p>
+                            </div>
+
+                            <button id="btn-save-settings" class="ha-btn-primary" style="width: 100%; border-radius: 12px; height: 48px; font-weight: 500;">Save Personal Key</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
         </main>
 
         <!-- ===== Entity Detail Panel ===== -->
@@ -715,6 +827,7 @@ NO     → Device is offline (Last Will message from broker)</pre>
 
     <script src="/static/js/dashboard.js?v={{ cache_bust }}"></script>
     <script src="/static/js/automation.js?v={{ cache_bust }}"></script>
+    <script src="/static/js/settings.js?v={{ cache_bust }}"></script>
 </body>
 
 </html>

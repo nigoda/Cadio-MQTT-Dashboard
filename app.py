@@ -1192,6 +1192,37 @@ def handle_get_automations():
     emit("automations_list", result)
 
 
+# ---------------------------------------------------------------------------
+# API Settings events
+# ---------------------------------------------------------------------------
+from settings_manager import load_settings, save_settings
+from ai_agent import refresh_client
+
+@socketio.on("get_api_settings")
+def handle_get_api_settings():
+    settings = load_settings()
+    # Mask key for safety
+    safe_settings = copy.deepcopy(settings)
+    if safe_settings.get("custom_api_key"):
+        key = safe_settings["custom_api_key"]
+        safe_settings["custom_api_key"] = key[:4] + "*" * (len(key)-8) + key[-4:] if len(key) > 8 else "****"
+    emit("api_settings", safe_settings)
+
+@socketio.on("update_api_settings")
+def handle_update_api_settings(data):
+    current = load_settings()
+    
+    # If key is masked (starts with ****), don't update it unless it changed
+    new_key = data.get("custom_api_key", "")
+    if new_key.startswith("****") or "*" in new_key:
+        data["custom_api_key"] = current.get("custom_api_key", "")
+    
+    save_settings(data)
+    refresh_client()
+    handle_get_api_settings() # send back updated/masked settings
+    emit("log_message", {"entity": "System", "state": "API Settings Updated"})
+
+
 @socketio.on("create_automation")
 def handle_create_automation(data):
     """Create a new automation."""

@@ -19,7 +19,31 @@ This guide is designed for **developers** and **AI agents** - any language, any 
 - [Broker Rules & Limitations](#broker-rules--limitations)
 - [Supported Entity Types](#supported-entity-types)
 - [Quick Start for AI Agents](#quick-start-for-ai-agents)
-- [Installing llama-cpp-python](#installing-llama-cpp-python)
+- [AI Configuration (Gemini API)](#ai-configuration-gemini-api)
+
+---
+
+## AI Configuration (Gemini API)
+
+The platform's AI Agronomist requires a **Google Gemini API Key** to function. You have two ways to configure this:
+
+### 1. Default Server Key (.env)
+The "Shared AI" plan uses the key stored on the server.
+1. Create a `.env` file in the root directory.
+2. Add your key: `GEMINI_API_KEY=your_key_here`.
+3. This key is available to all dashboard users by default.
+
+### 2. User Personal Key (settings.json)
+Users can provide their own key through the dashboard's **AI Settings** page.
+1. Select the **"Personal AI"** plan.
+2. Paste your private Gemini key.
+3. This key is saved locally in `settings.json` and overrides the default server key for that session.
+4. **Security**: The key is masked in the UI (e.g., `ABCD****WXYZ`) and stored strictly on your local machine.
+
+### Security Best Practices
+- **Do not share** your `.env` or `settings.json` files.
+- These files are automatically ignored by Git (via `.gitignore`) to prevent accidental leaks.
+- You can get a free Gemini API key at [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 ---
 
@@ -410,111 +434,4 @@ Any language with an MQTT client library works: Python, JavaScript, Java, C#, Go
 
 ---
 
-## Installing llama-cpp-python
-
-`llama-cpp-python` is required for AI features. The installation method varies by platform:
-
-### Windows
-
-On Windows, the source distribution has very long file paths that can exceed Windows' default 260-character limit. Use pre-built wheels instead:
-
-**Option 1: CPU-only (recommended for most users)**
-
-```bash
-pip install typing-extensions>=4.5.0 diskcache>=5.6.1
-pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-```
-
-**Option 2: CUDA (for NVIDIA GPU acceleration)**
-
-```bash
-pip install typing-extensions>=4.5.0 diskcache>=5.6.1
-pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cu124
-```
-
-**Troubleshooting:**
-
-If you still get "No such file or directory" errors, enable Windows Long Path support:
-
-1. Open Registry Editor (`Win + R`, type `regedit`, press Enter)
-2. Navigate to: `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem`
-3. Find `LongPathsEnabled`, set its value to `1`
-4. Restart your computer
-
-### Linux
-
-**Ubuntu/Debian:**
-
-```bash
-# Install build dependencies
-sudo apt update
-sudo apt install python3-dev build-essential cmake ninja-build
-
-# Install llama-cpp-python
-pip install llama-cpp-python>=0.2.85
-```
-
-**Fedora/RHEL:**
-
-```bash
-# Install build dependencies
-sudo dnf install python3-devel gcc gcc-c++ cmake ninja-build
-
-# Install llama-cpp-python
-pip install llama-cpp-python>=0.2.85
-```
-
-**Arch Linux:**
-
-```bash
-# Install build dependencies
-sudo pacman -S python3 base-devel cmake ninja
-
-# Install llama-cpp-python
-pip install llama-cpp-python>=0.2.85
-```
-
-**GPU Acceleration (CUDA):**
-
-```bash
-CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python>=0.2.85 --upgrade --force-reinstall --no-cache-dir
-```
-
-### macOS
-
-**Intel Macs:**
-
-```bash
-# Install build dependencies
-xcode-select --install
-brew install cmake ninja
-
-# Install llama-cpp-python
-pip install llama-cpp-python>=0.2.85
-```
-
-**Apple Silicon (M1/M2/M3/M4):**
-
-```bash
-# Install build dependencies
-xcode-select --install
-brew install cmake ninja
-
-# Install with Metal support for GPU acceleration
-CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python>=0.2.85 --upgrade --force-reinstall --no-cache-dir
-```
-
-**Note:** On Apple Silicon, the Metal backend provides significant performance improvements for AI inference.
-
 ---
-
-### Platform-Specific Quick Reference
-
-| Platform | Command |
-|----------|---------|
-| Windows (CPU) | `pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cpu` |
-| Windows (CUDA) | `pip install llama-cpp-python>=0.2.85 --index-url https://abetlen.github.io/llama-cpp-python/whl/cu124` |
-| Linux (CPU) | `pip install llama-cpp-python>=0.2.85` |
-| Linux (CUDA) | `CMAKE_ARGS="-DGGML_CUDA=on" pip install llama-cpp-python>=0.2.85 --force-reinstall --no-cache-dir` |
-| macOS (Intel) | `pip install llama-cpp-python>=0.2.85` |
-| macOS (Apple Silicon) | `CMAKE_ARGS="-DGGML_METAL=on" pip install llama-cpp-python>=0.2.85 --force-reinstall --no-cache-dir` |

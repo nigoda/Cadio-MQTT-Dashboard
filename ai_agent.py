@@ -19,26 +19,54 @@ DEFAULT_LON = 77.67727845265588
 from dotenv import load_dotenv
 from google import genai
 
+from settings_manager import load_settings
+
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Global Client Instance
 _genai_client = None
+_current_api_key = None
 
-if GEMINI_API_KEY:
+def refresh_client():
+    """Initializes or re-initializes the Gemini client based on current settings."""
+    global _genai_client, _current_api_key
+    
+    settings = load_settings()
+    if settings.get("api_mode") == "custom" and settings.get("custom_api_key"):
+        api_key = settings["custom_api_key"]
+    else:
+        api_key = os.getenv("GEMINI_API_KEY", "")
+
+    if not api_key:
+        _genai_client = None
+        _current_api_key = None
+        logging.warning("No Gemini API key found (Default or Custom). AI disabled.")
+        return False
+
+    if api_key == _current_api_key and _genai_client is not None:
+        return True # Already initialized with this key
+
     try:
-        _genai_client = genai.Client(api_key=GEMINI_API_KEY)
+        _genai_client = genai.Client(api_key=api_key)
+        _current_api_key = api_key
+        logging.info(f"Gemini Client initialized using {'CUSTOM' if settings.get('api_mode') == 'custom' else 'DEFAULT'} key.")
+        return True
     except Exception as e:
         logging.error(f"Failed to initialize Gemini Client: {e}")
-else:
-    logging.warning("GEMINI_API_KEY not found in environment or .env file.")
+        _genai_client = None
+        _current_api_key = None
+        return False
+
+# Initial load
+refresh_client()
 
 def is_model_loading():
     """Gemini API doesn't need loading, always returns False."""
     return False
 
 def is_model_loaded():
-    """Returns True if the API key is configured."""
-    return bool(GEMINI_API_KEY)
+    """Returns True if the API key is configured and client is ready."""
+    return _genai_client is not None
 
 def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
     """Fetches past weather + 7-day forecast from Open-Meteo (No API Key required).

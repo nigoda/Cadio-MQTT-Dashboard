@@ -16,3 +16,6 @@ env/
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Config & Keys
+settings.json
