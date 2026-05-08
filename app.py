@@ -1232,24 +1232,27 @@ def _run_ai_for_automation(auto_id):
         fail_count = auto.get("ai_fail_count", 0) + 1
         auto["ai_fail_count"] = fail_count
 
-        # Determine retry delay
-        retry_delay = 1800  # default 30 mins
+        # Determine retry delay based on attempt number
+        retry_delay = 1800  # default for 3rd+ failure
         
         if fail_count >= 3:
-            # 3 strikes, you're out (for 30 mins)
+            # Strike 3: wait 30 mins
             retry_delay = 1800
-            _auto_log(auto_id, f"AI error: 3 failed attempts. Falling back to 30-min retry.", level="error")
-            auto["ai_fail_count"] = 0 # Reset for next cycle
+            _auto_log(auto_id, f"AI error (Attempt {fail_count}/3): Multiple failures. Falling back to 30-min retry.", level="error")
+            auto["ai_fail_count"] = 0 # Reset count for the next cycle after 30 mins
         else:
             match = re.search(r'Please retry in ([\d\.]+)s', error_msg)
             if match:
                 try:
                     seconds = float(match.group(1))
-                    retry_delay = seconds + 60  # Add +1 minute as requested
+                    # Staggered buffers: +1m for first fail, +5m for second fail
+                    buffer = 60 if fail_count == 1 else 300
+                    retry_delay = seconds + buffer
                     _auto_log(auto_id, f"AI error (Attempt {fail_count}/3): Quota exceeded. Retrying in ~{math.ceil(retry_delay/60)} mins.", level="error")
                 except ValueError:
                     _auto_log(auto_id, f"AI error (Attempt {fail_count}/3): {error_msg[:100]}", level="error")
             else:
+                # If no specific time requested, use standard 30m
                 _auto_log(auto_id, f"AI error (Attempt {fail_count}/3): {error_msg[:100]}", level="error")
             
         auto["ai_last_fail"] = time.time()
