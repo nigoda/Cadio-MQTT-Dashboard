@@ -51,13 +51,39 @@ mqtt_client = None
 mqtt_connected = False
 pending_subs = 0          # track outstanding SUBSCRIBE calls
 
-# ---------------------------------------------------------------------------
 # Irrigation Automation stores
 # ---------------------------------------------------------------------------
 automations: dict = {}          # auto_id -> automation dict
 automation_logs: dict = {}      # auto_id -> list of log entries
 MAX_AUTO_LOG = 200
 VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
+DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — device was already responding)
+
+# MQTT Watchdog globals
+_mqtt_last_connected_time = time.time()
+
+def _mqtt_watchdog():
+    """Background thread to ensure MQTT reconnects even if credentials expire."""
+    global mqtt_connected, _mqtt_last_connected_time
+    logging.info("[WATCHDOG] MQTT monitor thread started")
+    while _engine_running:
+        try:
+            if mqtt_connected:
+                _mqtt_last_connected_time = time.time()
+            else:
+                # If disconnected for more than 45 seconds, assume session/credentials expired
+                elapsed = time.time() - _mqtt_last_connected_time
+                if elapsed > 45:
+                    if MQTT_USERNAME and MQTT_PASSWORD:
+                        logging.warning(f"[WATCHDOG] MQTT disconnected for {int(elapsed)}s. Re-authenticating with Nivixsa...")
+                        # Reset timer to give the new attempt time to connect
+                        _mqtt_last_connected_time = time.time()
+                        # Calling start_mqtt without args uses existing globals
+                        socketio.start_background_task(start_mqtt)
+        except Exception as e:
+            logging.error(f"[WATCHDOG] Error in MQTT Watchdog: {e}")
+        time.sleep(10)
+
 MAX_RETRIES = 3
 BUFFER_SECONDS = 5              # default buffer between actions
 ENGINE_INTERVAL = 1.0           # state machine tick interval (seconds)
@@ -80,6 +106,10 @@ def on_connect(client, userdata, flags, rc):
         5: "Not authorised",
     }
     mqtt_connected = rc == 0
+    if mqtt_connected:
+        global _mqtt_last_connected_time
+        _mqtt_last_connected_time = time.time()
+        
     status = codes.get(rc, f"Unknown ({rc})")
     logging.info(f"MQTT on_connect: rc={rc} -> {status}")
     socketio.emit("mqtt_status", {"connected": mqtt_connected, "message": status})
@@ -845,8 +875,42 @@ def engine_tick(auto):
         if idx < len(actions):
             action = actions[idx]
             if not _verify_switches([action], auto):
+                # Freeze the action timer
+                elapsed_so_far = now - (rt.get("timerStart") or now)
+                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_so_far)
+                rt["timerStart"] = None
+                # Send correction command and enter verify state
                 _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""))
-                _auto_log(auto_id, "State enforcement: correcting switch drift", "warning")
+                rt["driftRetryCount"] = 0
+                rt["verifyStart"] = now
+                rt["state"] = "ACTION_DRIFT_VERIFY"
+                _auto_log(auto_id, f"Switch drift detected on Action {idx+1} — correcting", "warning")
+                _emit_auto_update(auto)
+        return
+
+    if state == "ACTION_DRIFT_VERIFY":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        action = actions[idx] if idx < len(actions) else {}
+        if _verify_switches([action], auto):
+            # Switch corrected — resume ACTION_RUN with remaining time
+            rt["timerStart"] = now
+            rt["state"] = "ACTION_RUN"
+            rt["driftRetryCount"] = 0
+            _auto_log(auto_id, f"Drift corrected on Action {idx+1} — resuming")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > DRIFT_VERIFY_TIMEOUT:
+            rt["driftRetryCount"] = rt.get("driftRetryCount", 0) + 1
+            if rt["driftRetryCount"] >= MAX_RETRIES:
+                rt["state"] = "ERROR_SET"
+                _auto_log(auto_id, f"Action {idx+1} drift correction failed after {MAX_RETRIES} retries → ERROR_SET", "error")
+                _emit_auto_update(auto)
+            else:
+                # Re-send and try again
+                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""))
+                rt["verifyStart"] = now
+                _auto_log(auto_id, f"Drift correction retry {rt['driftRetryCount']}/{MAX_RETRIES} on Action {idx+1}", "warning")
+                _emit_auto_update(auto)
         return
 
     if state == "OVERLAP_NEXT_SET":

@@ -238,11 +238,11 @@ RULES:
 10. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {{
-    "selected_days": ["DAY1", "DAY2"],
+    "selected_dates": ["YYYY-MM-DD", "YYYY-MM-DD"],
     "reasoning": "Your analysis."
 }}
 
-IMPORTANT: In selected_days, replace DAY1/DAY2 with ONLY short day names (Mon, Tue, Wed, Thu, Fri, Sat, Sun) chosen from the forecast. Do NOT include dates or parentheses.
+IMPORTANT: In selected_dates, replace YYYY-MM-DD with ONLY full ISO dates chosen from the forecast.
 
 AUTOMATION DETAILS:
 {json.dumps(auto_context, indent=2)}
@@ -257,16 +257,15 @@ UPCOMING 7-DAY FORECAST:
 {json.dumps(forecast, indent=2)}"""
     
     if not _genai_client:
+        refresh_client()
+        
+    if not _genai_client:
         logging.error("Cannot run AI scheduling: Gemini Client is not initialized.")
         return None
 
     try:
-        # We can combine system and user prompt for Gemini
+        # Combine system and user prompt for Gemini
         full_prompt = f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER REQUEST:\n{user_prompt}"
-        
-        # Modify prompt to request DATES instead of NAMES
-        full_prompt = full_prompt.replace('replace DAY1/DAY2 with ONLY short day names (Mon, Tue, Wed, Thu, Fri, Sat, Sun)', 'replace DAY1/DAY2 with ONLY full ISO dates (YYYY-MM-DD)')
-        full_prompt = full_prompt.replace('selected_days": ["DAY1", "DAY2"]', 'selected_dates": ["YYYY-MM-DD", "YYYY-MM-DD"]')
         
         response = _genai_client.models.generate_content(
             model="gemini-flash-latest",
