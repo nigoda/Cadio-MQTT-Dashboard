@@ -111,6 +111,62 @@
   }
 
   // ─── Render List ───
+  function calculateAutoProgress(auto) {
+    if (!auto || !auto.actions || auto.actions.length === 0) return { pct: 0, text: "0s / 0s" };
+    const rt = auto.runtime || {};
+    const actions = auto.actions;
+    const idx = rt.currentActionIndex || 0;
+    const bufTime = auto.bufferTime ?? 5;
+
+    let totalAutoSec = 0;
+    for (let i = 0; i < actions.length; i++) {
+      totalAutoSec += (actions[i].duration || 0);
+    }
+    if (actions.length > 1) {
+      totalAutoSec += actions.length * bufTime;
+    }
+
+    let elapsedPreviousSec = 0;
+    for (let i = 0; i < idx && i < actions.length; i++) {
+      elapsedPreviousSec += (actions[i].duration || 0);
+    }
+    if (idx > 0) {
+      elapsedPreviousSec += idx * bufTime;
+    }
+
+    const curAction = idx < actions.length ? actions[idx] : actions[actions.length - 1];
+    const dur = curAction.duration || 0;
+
+    let elapsedCurSec = 0;
+    if (rt.state === "ACTION_RUN") {
+      const timerStart = rt.timerStart || (Date.now() / 1000);
+      const elapsedSec = Math.max(0, (Date.now() / 1000) - timerStart);
+      elapsedCurSec = Math.min(dur, elapsedSec);
+    } else if (rt.state === "BUFFER") {
+      const bufStart = rt.bufferStart || (Date.now() / 1000);
+      const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
+      elapsedCurSec = dur + bufElapsed;
+    } else if (rt.state === "COMPLETED") {
+      elapsedPreviousSec = totalAutoSec;
+    } else if (rt.state && rt.state.includes("OVERLAP")) {
+      elapsedCurSec = dur;
+    } else if (rt.state && rt.state.includes("REVERT")) {
+      elapsedCurSec = idx < actions.length - 1 || rt.loopingToFirst ? dur + bufTime : dur;
+    }
+
+    const totalElapsedSec = elapsedPreviousSec + elapsedCurSec;
+    let pct = totalAutoSec > 0 ? Math.min(100, Math.round((totalElapsedSec / totalAutoSec) * 100)) : 0;
+    if (rt.state === "COMPLETED") pct = 100;
+
+    const formatTimeShort = (sec) => {
+      if (sec < 60) return Math.round(sec) + "s";
+      return Math.round(sec / 60) + "m";
+    };
+
+    const progText = `${formatTimeShort(totalElapsedSec)} / ${formatTimeShort(totalAutoSec)}`;
+    return { pct, text: progText };
+  }
+
   function renderList() {
     const autos = Object.values(_autos);
     if (autos.length === 0) {
@@ -120,12 +176,23 @@
     autoList.innerHTML = autos.map(a => {
       const cls = stateClass(a);
       const sel = a.id === _selectedId ? " active" : "";
+      const isRunning = a.status === "ON" && a.runtime && a.runtime.state !== "IDLE" && a.runtime.state !== "ERROR";
+      const prog = isRunning ? calculateAutoProgress(a) : { pct: 0, text: "" };
+
       return `<div class="irr-auto-item${sel}" data-id="${a.id}">
-        <div class="irr-auto-item-info">
-          <div class="irr-auto-item-name">${escHtml(a.name)}</div>
-          <div class="irr-auto-item-status"><span class="irr-status-dot ${cls}"></span> ${stateLabel(a)}</div>
+        <div style="display:flex; flex-direction:column; flex:1; min-width:0;">
+          <div style="display:flex; align-items:center; gap:10px; width:100%;">
+            <div class="irr-auto-item-info">
+              <div class="irr-auto-item-name">${escHtml(a.name)}</div>
+              <div class="irr-auto-item-status"><span class="irr-status-dot ${cls}"></span> ${stateLabel(a)}</div>
+            </div>
+            ${isRunning ? `<div class="irr-auto-item-pct">${prog.pct}%</div>` : ""}
+            <label class="ha-toggle" style="pointer-events:auto; margin-left: 4px;"><input type="checkbox" ${a.status === "ON" ? "checked" : ""} data-id="${a.id}"><span class="ha-toggle-track"></span><span class="ha-toggle-thumb"></span></label>
+          </div>
+          <div class="irr-auto-item-progress ${isRunning ? "visible" : ""}">
+            <div class="irr-auto-item-progress-fill" style="width: ${prog.pct}%"></div>
+          </div>
         </div>
-        <label class="ha-toggle" style="pointer-events:auto"><input type="checkbox" ${a.status === "ON" ? "checked" : ""} data-id="${a.id}"><span class="ha-toggle-track"></span><span class="ha-toggle-thumb"></span></label>
       </div>`;
     }).join("");
 
@@ -177,42 +244,24 @@
     let nextSub = "—";
 
     if (actions.length > 0) {
-      const bufTime = auto.bufferTime ?? 5;
-      let totalAutoSec = 0;
-      for (let i = 0; i < actions.length; i++) {
-        totalAutoSec += (actions[i].duration || 0);
-      }
-      if (actions.length > 1) {
-        totalAutoSec += actions.length * bufTime;
-      }
-
-      let elapsedPreviousSec = 0;
-      for (let i = 0; i < idx && i < actions.length; i++) {
-        elapsedPreviousSec += (actions[i].duration || 0);
-      }
-      if (idx > 0) {
-        elapsedPreviousSec += idx * bufTime;
-      }
-
+      const prog = calculateAutoProgress(auto);
+      pct = prog.pct;
+      progText = prog.text;
+      
+      // We still need nextStep/nextSub calculation here since calculateAutoProgress only does pct/text
       const curAction = idx < actions.length ? actions[idx] : actions[actions.length - 1];
       const dur = curAction.duration || 0;
-
-      let elapsedCurSec = 0;
-      let remainingCurSec = dur;
-
+      
       if (rt.state === "ACTION_RUN") {
         const timerStart = rt.timerStart || (Date.now() / 1000);
         const elapsedSec = Math.max(0, (Date.now() / 1000) - timerStart);
-        elapsedCurSec = Math.min(dur, elapsedSec);
-        remainingCurSec = Math.max(0, dur - elapsedCurSec);
-
-        curSub = `${curAction.switchName || 'Switch'} ${curAction.state} for ${formatTime(elapsedCurSec)}`;
+        const remainingCurSec = Math.max(0, dur - elapsedSec);
+        curSub = `${curAction.switchName || 'Switch'} ${curAction.state} for ${formatTime(elapsedSec)}`;
 
         if (idx + 1 < actions.length) {
           const nextAction = actions[idx + 1];
           nextStep = `${nextAction.switchName || 'Switch'} ${nextAction.state}`;
         } else {
-          // If looping, next step is Action 1
           if (rt.loopingToFirst || (rt.state === "ACTION_RUN" && !rt.pauseReason)) {
             const nextAction = actions[0];
             nextStep = `Initialization & ${nextAction.switchName || 'Switch'} ${nextAction.state}`;
@@ -224,33 +273,21 @@
         nextSub = `In ${formatTime(remainingCurSec)}`;
 
       } else if (rt.state === "BUFFER") {
+        const bufTime = auto.bufferTime ?? 5;
         const bufStart = rt.bufferStart || (Date.now() / 1000);
         const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
-        elapsedCurSec = dur + bufElapsed;
-
         curSub = `Waiting for buffer`;
         nextSub = `In ${formatTime(Math.max(0, bufTime - bufElapsed))}`;
         nextStep = `Revert ${curAction.switchName || 'Switch'}`;
 
       } else if (rt.state === "IDLE" || rt.state === "COMPLETED") {
         curSub = rt.state === "COMPLETED" ? "Finished cycle" : "Waiting for start";
-        if (rt.state === "COMPLETED") elapsedPreviousSec = totalAutoSec;
       } else {
-        if (rt.state.includes("OVERLAP")) {
-          elapsedCurSec = dur;
-        } else if (rt.state.includes("REVERT")) {
-          elapsedCurSec = idx < actions.length - 1 || rt.loopingToFirst ? dur + bufTime : dur;
-        }
         curSub = `Action ${Math.min(idx + 1, actions.length)}: ${curAction.switchName || 'Switch'} ${curAction.state}`;
         if (rt.loopingToFirst && rt.state.includes("OVERLAP")) {
           curSub = `Looping: Initialization & Action 1`;
         }
       }
-
-      const totalElapsedSec = elapsedPreviousSec + elapsedCurSec;
-      pct = totalAutoSec > 0 ? Math.min(100, Math.round((totalElapsedSec / totalAutoSec) * 100)) : 0;
-      progText = `${formatTime(totalElapsedSec)} / ${formatTime(totalAutoSec)}`;
-      if (rt.state === "COMPLETED") pct = 100;
     }
 
     $("#irr-cur-state-sub").textContent = curSub;
@@ -259,6 +296,26 @@
     $("#irr-progress-text").textContent = progText;
     $("#irr-next-step").textContent = nextStep;
     $("#irr-next-step-sub").textContent = nextSub;
+
+    // Also update progress bars in the list for ALL running automations
+    document.querySelectorAll(".irr-auto-item").forEach(el => {
+      const a = _autos[el.dataset.id];
+      if (!a) return;
+      const isRunning = a.status === "ON" && a.runtime && a.runtime.state !== "IDLE" && a.runtime.state !== "ERROR";
+      const progBar = el.querySelector(".irr-auto-item-progress");
+      const progFill = el.querySelector(".irr-auto-item-progress-fill");
+      const pctLabel = el.querySelector(".irr-auto-item-pct");
+
+      if (isRunning) {
+        const prog = calculateAutoProgress(a);
+        if (progBar) progBar.classList.add("visible");
+        if (progFill) progFill.style.width = prog.pct + "%";
+        if (pctLabel) pctLabel.textContent = prog.pct + "%";
+      } else {
+        if (progBar) progBar.classList.remove("visible");
+        if (pctLabel) pctLabel.textContent = "";
+      }
+    });
   }
 
   setInterval(() => {

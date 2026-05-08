@@ -1154,6 +1154,29 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-status-dot.off { background: #666; }
 .irr-status-dot.completed { background: #03a9f4; }
 .irr-status-dot.waiting { background: #9c27b0; }
+.irr-auto-item-progress {
+    height: 4px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+    display: none;
+    width: 100%;
+}
+.irr-auto-item-progress.visible {
+    display: block;
+}
+.irr-auto-item-progress-fill {
+    height: 100%;
+    background: var(--ha-primary);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+.irr-auto-item-pct {
+    font-size: 10px;
+    color: var(--ha-text-secondary);
+    margin-left: auto;
+}
 
 /* Controller status */
 .irr-controller-status {
