@@ -1094,12 +1094,29 @@ def _ai_scheduler_loop():
             # 2. Dynamic automatic retry for failed runs
             now_ts = time.time()
             for auto_id, auto in automations.items():
+                sched = auto.get("schedule", {})
+                
+                # If turned OFF or AI disabled, clear any pending retries
+                if auto.get("status") == "OFF" or not sched.get("ai_enabled"):
+                    auto.pop("ai_last_fail", None)
+                    auto.pop("ai_retry_delay", None)
+                    auto.pop("ai_fail_count", None)
+                    continue
+                
+                # If manually Paused, don't trigger retries yet (wait for resume)
+                if auto.get("isPaused"):
+                    continue
+
                 fail_ts = auto.get("ai_last_fail")
                 retry_delay = auto.get("ai_retry_delay", 1800)
                 if fail_ts and (now_ts - fail_ts) >= retry_delay:
                     retry_mins = math.ceil(retry_delay / 60)
-                    logging.info(f"[AI-SCHEDULER] {retry_mins}-minute retry triggered for '{auto_id}'")
-                    _auto_log(auto_id, f"🔄 AI retrying {retry_mins}th min after failure...", level="warn")
+                    suffix = "th"
+                    if retry_mins % 10 == 1 and retry_mins % 100 != 11: suffix = "st"
+                    elif retry_mins % 10 == 2 and retry_mins % 100 != 12: suffix = "nd"
+                    elif retry_mins % 10 == 3 and retry_mins % 100 != 13: suffix = "rd"
+                    
+                    logging.info(f"[AI-SCHEDULER] {retry_mins}{suffix}-minute retry triggered for '{auto_id}'")
                     
                     # Temporarily clear the flags so we don't trigger it again immediately
                     auto.pop("ai_last_fail", None) 
@@ -1196,6 +1213,7 @@ def _run_ai_for_automation(auto_id):
         
         # Clear any previous failure flags on success
         auto.pop("ai_last_fail", None)
+        auto.pop("ai_fail_count", None)
         
         _auto_log(auto_id, f"🤖 AI updated days: {old_days} → {new_days}")
         _auto_log(auto_id, f"🤖 Reasoning: {reasoning}")
@@ -1209,20 +1227,31 @@ def _run_ai_for_automation(auto_id):
         error_msg = str(e)
         logging.error(f"[AI-SCHEDULER] Error running AI for '{auto.get('name', auto_id)}': {error_msg}")
         
+        # Track consecutive failures
+        fail_count = auto.get("ai_fail_count", 0) + 1
+        auto["ai_fail_count"] = fail_count
+
         # Determine retry delay
         retry_delay = 1800  # default 30 mins
-        match = re.search(r'Please retry in ([\d\.]+)s', error_msg)
-        if match:
-            try:
-                seconds = float(match.group(1))
-                retry_delay = seconds + 60  # Add +1 minute as requested
-                _auto_log(auto_id, f"AI error: Quota exceeded. Retrying in ~{math.ceil(retry_delay/60)} mins.", level="error")
-            except ValueError:
-                _auto_log(auto_id, f"AI error: {error_msg[:100]}", level="error")
+        
+        if fail_count >= 3:
+            # 3 strikes, you're out (for 30 mins)
+            retry_delay = 1800
+            _auto_log(auto_id, f"AI error: 3 failed attempts. Falling back to 30-min retry.", level="error")
+            auto["ai_fail_count"] = 0 # Reset for next cycle
         else:
-            _auto_log(auto_id, f"AI error: {error_msg[:100]}", level="error")
+            match = re.search(r'Please retry in ([\d\.]+)s', error_msg)
+            if match:
+                try:
+                    seconds = float(match.group(1))
+                    retry_delay = seconds + 60  # Add +1 minute as requested
+                    _auto_log(auto_id, f"AI error (Attempt {fail_count}/3): Quota exceeded. Retrying in ~{math.ceil(retry_delay/60)} mins.", level="error")
+                except ValueError:
+                    _auto_log(auto_id, f"AI error (Attempt {fail_count}/3): {error_msg[:100]}", level="error")
+            else:
+                _auto_log(auto_id, f"AI error (Attempt {fail_count}/3): {error_msg[:100]}", level="error")
             
-        auto["ai_last_fail"] = datetime.now().timestamp()
+        auto["ai_last_fail"] = time.time()
         auto["ai_retry_delay"] = retry_delay
     finally:
         _emit_auto_update(auto)
