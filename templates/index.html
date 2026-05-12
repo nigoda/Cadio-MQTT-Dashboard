@@ -358,6 +358,43 @@
                         <div id="auto-f-init" class="irr-form-list"></div>
                         <button id="auto-f-init-add" class="ha-btn-text">+ Add Switch</button>
 
+                        <div style="display: flex; gap: 24px; flex-wrap: wrap; margin-top: 24px;">
+                            <!-- Left Column: Scheduler -->
+                            <div style="flex: 1; min-width: 250px;">
+                                <h3 class="irr-form-heading" style="margin-top: 0;">Scheduler</h3>
+                                <div class="irr-day-picker" id="auto-f-days"></div>
+                                <div class="irr-form-row" style="margin-top:12px; margin-bottom: 16px;">
+                                    <label class="ha-checkbox-label"
+                                        style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
+                                        <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
+                                    </label>
+                                </div>
+                                <div id="auto-f-times-list" class="irr-form-list" style="margin-top: 8px;"></div>
+                                <button id="auto-f-time-add" class="ha-btn-text" style="margin-top: 4px;">+ Add Time Range</button>
+                            </div>
+
+                            <!-- Right Column: Error State -->
+                            <div style="flex: 1; min-width: 250px;">
+                                <h3 class="irr-form-heading" style="margin-top: 0;">Error State (Fail-Safe)</h3>
+                                <div id="auto-f-error" class="irr-form-list"></div>
+                                <button id="auto-f-error-add" class="ha-btn-text">+ Add Switch</button>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 24px; display: flex; gap: 24px; flex-wrap: wrap;">
+                            <div style="flex: 1; min-width: 250px;">
+                                <h4 style="margin:0 0 8px 0; font-size:13px; color:var(--ha-text-secondary); text-transform:uppercase; letter-spacing:0.5px;">Enforce During Schedule</h4>
+                                <div id="auto-f-set-true" class="irr-form-list"></div>
+                                <button id="auto-f-set-true-add" class="ha-btn-text">+ Add Switch</button>
+                            </div>
+
+                            <div style="flex: 1; min-width: 250px;">
+                                <h4 style="margin:0 0 8px 0; font-size:13px; color:var(--ha-text-secondary); text-transform:uppercase; letter-spacing:0.5px;">Enforce Outside Schedule</h4>
+                                <div id="auto-f-set-false" class="irr-form-list"></div>
+                                <button id="auto-f-set-false-add" class="ha-btn-text">+ Add Switch</button>
+                            </div>
+                        </div>
+
                         <h3 class="irr-form-heading">Condition Builder (AND / OR)</h3>
                         <div id="auto-f-cond" class="irr-form-list"></div>
                         <button id="auto-f-cond-add" class="ha-btn-text">+ Add Condition</button>
@@ -397,29 +434,8 @@
                             </div>
                         </div>
 
-                        <div style="display: flex; gap: 24px; flex-wrap: wrap;">
-                            <!-- Left Column: Scheduler -->
-                            <div style="flex: 1; min-width: 250px;">
-                                <h3 class="irr-form-heading">Scheduler</h3>
-                                <div class="irr-day-picker" id="auto-f-days"></div>
-                                <div class="irr-form-row" style="margin-top:12px; margin-bottom: 16px;">
-                                    <label class="ha-checkbox-label"
-                                        style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--ha-text-primary);cursor:pointer;">
-                                        <input type="checkbox" id="auto-f-24hr"> 24-Hour Active (Ignore Time Range)
-                                    </label>
-                                </div>
-                                <div id="auto-f-times-list" class="irr-form-list" style="margin-top: 8px;"></div>
-                                <button id="auto-f-time-add" class="ha-btn-text" style="margin-top: 4px;">+ Add Time Range</button>
 
-                            </div>
 
-                            <!-- Right Column: Error State -->
-                            <div style="flex: 1; min-width: 250px;">
-                                <h3 class="irr-form-heading">Error State (Fail-Safe)</h3>
-                                <div id="auto-f-error" class="irr-form-list"></div>
-                                <button id="auto-f-error-add" class="ha-btn-text">+ Add Switch</button>
-                            </div>
-                        </div>
                     </div>
                     <div class="irr-modal-footer">
                         <button id="auto-modal-cancel" class="ha-btn-secondary"

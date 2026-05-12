@@ -66,7 +66,7 @@
       OVERLAP_NEXT_SET: auto.runtime?.loopingToFirst ? "Init & Setting Next" : "Setting Next",
       OVERLAP_NEXT_VERIFY: auto.runtime?.loopingToFirst ? "Verify Init & Next" : "Verifying Next",
       ACTION_REVERT: "Reverting", ACTION_VERIFY_REVERT: "Verifying Revert", BUFFER: "Buffer",
-      PAUSED_CONDITION: "Paused (Condition)", PAUSED_SCHEDULE: "Paused (Schedule)", PAUSED_USER: "Paused (User)",
+      PAUSED_CONDITION: "Paused (Condition)", PAUSED_SCHEDULE: "Paused (Schedule)", PAUSED_USER: "Paused (User)", PAUSED_ENFORCE: "Pausing for Schedule",
       COMPLETED: "Completed", ERROR_SET: "Error Recovery", ERROR_VERIFY: "Error Verify", ERROR: "Error"
     };
     return map[rs] || rs;
@@ -542,6 +542,16 @@
       </div>
     </div>`;
 
+    const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+    const setFalseHTML = (sched.setIfFalse || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+
+    if (setTrueHTML || setFalseHTML) {
+      schedBody.innerHTML += `<div style="display:flex;gap:20px;margin-top:16px;">
+        ${setTrueHTML ? `<div style="flex:1;"><span class="irr-label">During Schedule</span><div style="margin-top:6px;">${setTrueHTML}</div></div>` : ''}
+        ${setFalseHTML ? `<div style="flex:1;"><span class="irr-label">Outside Schedule</span><div style="margin-top:6px;">${setFalseHTML}</div></div>` : ''}
+      </div>`;
+    }
+
     // Use event delegation on the parent body to guarantee the click is captured regardless of CSS
     schedBody.onclick = (e) => {
       const toggleWrap = e.target.closest(".ha-toggle");
@@ -653,6 +663,9 @@
 
     // Init rows
     renderFormRows("auto-f-init", auto?.initialization || [], "switch");
+    // Set if True / Set if False rows
+    renderFormRows("auto-f-set-true", auto?.schedule?.setIfTrue || [], "switch");
+    renderFormRows("auto-f-set-false", auto?.schedule?.setIfFalse || [], "switch");
     // Condition rows
     renderFormRows("auto-f-cond", auto?.condition || [], "condition");
     // Action rows
@@ -701,8 +714,8 @@
   }
 
   // Add row buttons
-  ["auto-f-init-add", "auto-f-error-add"].forEach(id => {
-    $(` #${id}`)?.addEventListener("click", () => addFormRow($(`#${id.replace("-add", "")}`), "switch", {}));
+  ["auto-f-init-add", "auto-f-error-add", "auto-f-set-true-add", "auto-f-set-false-add"].forEach(id => {
+    $(`#${id}`)?.addEventListener("click", () => addFormRow($(`#${id.replace("-add", "")}`), "switch", {}));
   });
   $("#auto-f-cond-add")?.addEventListener("click", () => addFormRow($("#auto-f-cond"), "condition", {}));
   $("#auto-f-actions-add")?.addEventListener("click", () => addFormRow($("#auto-f-actions"), "action", {}));
@@ -753,7 +766,9 @@
       timeRanges,
       is24hr,
       utcOffset: parseInt($("#auto-f-tz").value, 10) || 0,
-      ai_enabled: editAuto?.schedule?.ai_enabled || false
+      ai_enabled: editAuto?.schedule?.ai_enabled || false,
+      setIfTrue: collectSwitchRows("auto-f-set-true"),
+      setIfFalse: collectSwitchRows("auto-f-set-false")
     };
     const latStr = $("#auto-f-lat").value;
     const lonStr = $("#auto-f-lon").value;

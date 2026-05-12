@@ -614,10 +614,84 @@ def engine_tick(auto):
             _emit_auto_update(auto)
         return
 
+    bg_unverified = False
+    if state not in ("ERROR", "ERROR_SET", "ERROR_VERIFY", "IDLE", "INIT_SET", "INIT_VERIFY_INDIVIDUAL", "INIT_VERIFY_ALL", "OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY") and not auto.get("isPaused"):
+        # --- Background Enforce (Set if True / Set if False) ---
+        sched_is_true = check_schedule(auto)
+        sched_cfg = auto.get("schedule", {})
+        
+        enforce_list = sched_cfg.get("setIfTrue", []) if sched_is_true else sched_cfg.get("setIfFalse", [])
+        
+        for item in enforce_list:
+            topic = item.get("switchCmdTopic", "")
+            last_sent_key = f"_last_sent_{topic}"
+            retry_key = f"_retry_{topic}"
+
+            if not _verify_switches([item], auto):
+                bg_unverified = True
+                # VERIFY_TIMEOUT is used to prevent spamming
+                if now - rt.get(last_sent_key, 0) > VERIFY_TIMEOUT:
+                    retries = rt.get(retry_key, 0)
+                    if retries >= MAX_RETRIES:
+                        rt["state"] = "ERROR_SET"
+                        _auto_log(auto_id, f"Scheduler enforce failed for {item.get('switchName')} after {MAX_RETRIES} retries → ERROR_SET", "error")
+                        _emit_auto_update(auto)
+                        return
+
+                    _mqtt_set_switch(topic, item.get("state", ""))
+                    rt[last_sent_key] = now
+                    rt[retry_key] = retries + 1
+                    level = "info" if retries == 0 else "warning"
+                    _auto_log(auto_id, f"Scheduler background enforce: {item.get('switchName')} → {item.get('state')} (Attempt {retries + 1}/{MAX_RETRIES})", level)
+                    _emit_auto_update(auto)
+            else:
+                if retry_key in rt:
+                    rt.pop(retry_key, None)
+                if last_sent_key in rt:
+                    rt.pop(last_sent_key, None)
+
+    # Priority 1.5: Enforce Pause
+    if bg_unverified:
+        if state != "PAUSED_ENFORCE" and state != "IDLE" and state != "ERROR" and state != "PAUSED_USER":
+            rt["prePauseEnforce"] = state
+            # freeze timers
+            if "timerStart" in rt and rt["timerStart"]:
+                elapsed = now - rt["timerStart"]
+                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed)
+                rt["timerStart"] = None
+            if "bufferStart" in rt and rt["bufferStart"]:
+                elapsed = now - rt["bufferStart"]
+                rt["remainingBuffer"] = max(0, auto.get("bufferTime", BUFFER_SECONDS) - elapsed)
+                rt["bufferStart"] = None
+            if "verifyStart" in rt and rt["verifyStart"]:
+                elapsed = now - rt["verifyStart"]
+                rt["remainingVerify"] = max(0, VERIFY_TIMEOUT - elapsed)
+                rt["verifyStart"] = None
+                
+            rt["state"] = "PAUSED_ENFORCE"
+            _auto_log(auto_id, "Pausing main sequence to enforce schedule")
+            _emit_auto_update(auto)
+        return
+
+    # Priority 1.6: Enforce Resume
+    if not bg_unverified and state == "PAUSED_ENFORCE":
+        rt["state"] = rt.get("prePauseEnforce", "IDLE")
+        # resume timers
+        if "remainingTime" in rt and rt["remainingTime"] is not None:
+            rt["timerStart"] = now
+        if "remainingBuffer" in rt and rt["remainingBuffer"] is not None:
+            rt["bufferStart"] = now - (auto.get("bufferTime", BUFFER_SECONDS) - rt["remainingBuffer"])
+            del rt["remainingBuffer"]
+        if "remainingVerify" in rt and rt["remainingVerify"] is not None:
+            rt["verifyStart"] = now - (VERIFY_TIMEOUT - rt["remainingVerify"])
+            del rt["remainingVerify"]
+        _auto_log(auto_id, f"Schedule verified → Resuming {rt['state']}")
+        _emit_auto_update(auto)
+
     # Priority 2: User Pause
     if auto.get("isPaused"):
         if state != "PAUSED_USER" and state != "IDLE" and state != "ERROR":
-            rt["prePauseState"] = state
+            rt["prePauseUser"] = state
             # freeze timers
             if "timerStart" in rt and rt["timerStart"]:
                 elapsed = now - rt["timerStart"]
@@ -639,7 +713,7 @@ def engine_tick(auto):
 
     # Priority 3: User Resume
     if not auto.get("isPaused") and state == "PAUSED_USER":
-        rt["state"] = rt.get("prePauseState", "IDLE")
+        rt["state"] = rt.get("prePauseUser", "IDLE")
         # resume timers
         if "remainingTime" in rt and rt["remainingTime"] is not None:
             rt["timerStart"] = now
@@ -966,6 +1040,57 @@ def engine_tick(auto):
             rt["retryCount"] = 0
             _auto_log(auto_id, f"Buffer ({buffer_time}s) done → ACTION_REVERT")
             _emit_auto_update(auto)
+            return
+        # Enforce expected switch states during buffer
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        switches_to_enforce = []
+        # Current action (still ON, not yet reverted)
+        if idx < len(actions):
+            switches_to_enforce.append(actions[idx])
+        # Next action (overlap — already set ON)
+        next_idx = (idx + 1) % len(actions)
+        if next_idx != idx and next_idx < len(actions) and not rt.get("loopingToFirst"):
+            switches_to_enforce.append(actions[next_idx])
+        for sw in switches_to_enforce:
+            if not _verify_switches([sw], auto):
+                # Freeze buffer timer and correct
+                elapsed_buf = now - (rt.get("bufferStart") or now)
+                rt["remainingBuffer"] = max(0, buffer_time - elapsed_buf)
+                rt["bufferStart"] = None
+                _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""))
+                rt["driftRetryCount"] = 0
+                rt["verifyStart"] = now
+                rt["driftAction"] = sw
+                rt["state"] = "BUFFER_DRIFT_VERIFY"
+                _auto_log(auto_id, f"Buffer drift detected on {sw.get('switchName', '')} — correcting", "warning")
+                _emit_auto_update(auto)
+                return
+        return
+
+    if state == "BUFFER_DRIFT_VERIFY":
+        sw = rt.get("driftAction", {})
+        if _verify_switches([sw], auto):
+            # Corrected — resume buffer with remaining time
+            rt["bufferStart"] = now - (auto.get("bufferTime", BUFFER_SECONDS) - (rt.get("remainingBuffer") or 0))
+            rt.pop("remainingBuffer", None)
+            rt.pop("driftAction", None)
+            rt["driftRetryCount"] = 0
+            rt["state"] = "BUFFER"
+            _auto_log(auto_id, f"Buffer drift corrected on {sw.get('switchName', '')} — resuming")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > DRIFT_VERIFY_TIMEOUT:
+            rt["driftRetryCount"] = rt.get("driftRetryCount", 0) + 1
+            if rt["driftRetryCount"] >= MAX_RETRIES:
+                rt.pop("driftAction", None)
+                rt["state"] = "ERROR_SET"
+                _auto_log(auto_id, f"Buffer drift correction failed after {MAX_RETRIES} retries → ERROR_SET", "error")
+                _emit_auto_update(auto)
+            else:
+                _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""))
+                rt["verifyStart"] = now
+                _auto_log(auto_id, f"Buffer drift retry {rt['driftRetryCount']}/{MAX_RETRIES} on {sw.get('switchName', '')}", "warning")
+                _emit_auto_update(auto)
         return
 
     if state == "ACTION_REVERT":
@@ -1112,15 +1237,15 @@ def _preload_ai_model():
     """Pre-load the AI model in a background thread so it's ready when needed."""
     def _load():
         try:
-            from ai_agent import get_llm, is_model_loaded
-            logging.info("[AI-PRELOAD] Pre-loading AI model in background...")
-            llm = get_llm()
-            if llm:
-                logging.info("[AI-PRELOAD] AI model pre-loaded successfully and ready!")
+            from ai_agent import refresh_client, is_model_loaded
+            logging.info("[AI-PRELOAD] Initializing Gemini API client...")
+            refresh_client()
+            if is_model_loaded():
+                logging.info("[AI-PRELOAD] Gemini API client ready!")
             else:
-                logging.warning("[AI-PRELOAD] AI model pre-load failed - will retry on first AI call")
+                logging.warning("[AI-PRELOAD] Gemini API client not ready - will retry on first AI call")
         except Exception as e:
-            logging.warning(f"[AI-PRELOAD] Could not pre-load AI model: {e}")
+            logging.warning(f"[AI-PRELOAD] Could not pre-load AI client: {e}")
     
     # Start in background thread so it doesn't block engine startup
     threading.Thread(target=_load, daemon=True, name="AI-Preload").start()
