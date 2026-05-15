@@ -82,6 +82,7 @@ class UserSession:
         self.automations = {}
         self.automation_logs = {}
         self._sockets = set() # Track active browser tabs
+        self.otp = None # Secure code for admin access
 
     @property
     def has_sockets(self):
@@ -113,18 +114,21 @@ class SessionManager:
         self._socket_to_email = {} # sid -> email
 
     def create_session(self, email, password, **kwargs):
+        email = email.lower()
         if email not in self._sessions:
             self._sessions[email] = UserSession(email, password, **kwargs)
         return self._sessions[email]
 
     def get_session(self, email):
-        return self._sessions.get(email)
+        if not email: return None
+        return self._sessions.get(email.lower())
 
     def get_session_by_sid(self, sid):
         email = self._socket_to_email.get(sid)
-        return self._sessions.get(email) if email else None
+        return self.get_session(email) if email else None
 
     def register_socket(self, sid, email):
+        if not email: return
         session = self.get_session(email)
         if session:
             session._sockets.add(sid)
@@ -138,6 +142,20 @@ class SessionManager:
                 sess._sockets.discard(sid)
                 return sess
         return None
+
+    def is_online(self, email):
+        """Checks if a user has an active MQTT session."""
+        return email.lower() in self._sessions
+
+    def active_count(self):
+        """Returns the number of unique, connected users."""
+        # Only count sessions that have an email and are actively connected
+        count = 0
+        unique_emails = set()
+        for email, sess in list(self._sessions.items()):
+            if email and sess.mqtt_connected:
+                unique_emails.add(email.lower())
+        return len(unique_emails)
 
     def get_all_automations(self):
         """Generator to yield all automations across all active users."""
@@ -160,6 +178,7 @@ session_mgr = SessionManager()
 
 # Per-socket user session tracking (for multi-user isolation)
 _user_sessions: dict = {}       # socket_sid -> email
+_impersonation_tokens: dict = {} # token -> email (Temporary access tokens)
 
 def _get_user_email():
     """Get the email of the currently connected user from their socket session."""
@@ -395,7 +414,7 @@ def admin_logout():
     return redirect("/")
 
 def _admin_telemetry_loop():
-    """Background task to send system health to admin dashboard."""
+    """Background task to send system health and user stats to admin dashboard."""
     while True:
         try:
             # CPU/RAM
@@ -409,7 +428,7 @@ def _admin_telemetry_loop():
                     db_size_mb = round(os.path.getsize("cadio.db") / (1024 * 1024), 2)
             except (OSError, PermissionError): pass
             
-            # Broadcast all
+            # Broadcast Health
             socketio.emit("admin_health", {
                 "cpu": cpu,
                 "ram_gb": round(ram.used / (1024**3), 2),
@@ -417,21 +436,32 @@ def _admin_telemetry_loop():
                 "db_size": db_size_mb,
                 "latency": 42
             }, room="admin_room")
+
+            # Broadcast Live User Stats
+            _emit_admin_stats()
+
         except Exception: pass
-        time.sleep(2)
+        time.sleep(5) # Push every 5 seconds for live feel
 
 def _emit_admin_stats():
-    """Helper to broadcast latest stats to all connected admin sessions."""
+    """Helper to broadcast latest stats and user list to all connected admin sessions."""
     import db
     try:
         all_users = db.get_all_users_for_admin()
+        
+        # Enrich users with LIVE online status
+        for u in all_users:
+            u['online'] = session_mgr.is_online(u['email'])
+
         blocked = len([u for u in all_users if u['blocked']])
         socketio.emit("admin_update", {
             "active_sessions": session_mgr.active_count(),
             "blocked_count": blocked,
-            "total_users": len(all_users)
+            "total_users": len(all_users),
+            "users": all_users # Send full list for live updates
         }, room="admin_room")
-    except Exception: pass
+    except Exception as e:
+        logging.error(f"[ADMIN] Failed to emit stats: {e}")
 
 @socketio.on("admin_user_block")
 def handle_admin_user_block(data):
@@ -461,15 +491,26 @@ def handle_admin_user_block(data):
 
 @socketio.on("admin_user_delete")
 def handle_admin_user_delete(data):
-    # ONLY Level 1 can delete users
+    """Admin action: Permanently delete a user."""
     if session.get("admin_level", 3) > 1: return
     
     email = data.get("email")
+    if not email: return
+    
+    # 1. Kill and remove active session
     import db
-    # 1. Kill active session
     session_mgr.remove_session(email)
-    # 2. Wipe from DB
+    
+    # 2. Kick any active sockets
+    sids_to_kick = [sid for sid, e in list(_user_sessions.items()) if e.lower() == email.lower()]
+    for sid in sids_to_kick:
+        emit("mqtt_status", {"connected": False, "message": "Account deleted by admin."}, room=sid)
+        _user_sessions.pop(sid, None)
+        disconnect(sid=sid)
+        
+    # 3. Wipe from DB
     db.delete_user(email)
+    logging.info(f"[ADMIN] User {email} PERMANENTLY DELETED and session killed.")
     _emit_admin_stats()
 
 @socketio.on("join_admin")
@@ -512,22 +553,59 @@ def handle_join_admin():
 
 @app.route("/admin/impersonate/<email>")
 def admin_impersonate(email):
+    """Admin only: Securely impersonate a user using a verified token."""
     email = email.lower()
-    # Level 1 and 2 can impersonate
     if not session.get("admin_email") or session.get("admin_level", 3) > 2:
         return "Unauthorized", 403
         
+    token = request.args.get("token")
+    if not token or _impersonation_tokens.get(token) != email:
+        return "Invalid or expired security token. Access denied.", 403
+    
+    # Token used once, remove it
+    _impersonation_tokens.pop(token, None)
+
     import db
     user = db.get_user(email)
-    if not user:
-        return "User not found", 404
-        
-    # Set session variables to "Login" as this user
+    if not user: return "User not found", 404
+    
     session["email"] = user["email"]
     session["password"] = user["password"]
-    
-    logging.info(f"[ADMIN] Impersonating user: {email}")
+    logging.info(f"[ADMIN] Impersonating user via OTP: {email}")
     return redirect("/")
+
+@socketio.on("admin_request_otp")
+def handle_admin_request_otp(data):
+    """Admin requests an OTP to login as a user."""
+    if session.get("admin_level", 3) > 2: return
+    email = data.get("email", "").strip().lower()
+    sess = session_mgr.get_session(email)
+    if not sess:
+        emit("admin_otp_error", {"message": "User is not currently online. Admin can only login if user dashboard is active."})
+        return
+    
+    import random
+    code = str(random.randint(100000, 999999))
+    sess.otp = code
+    # Show code on USER dashboard
+    socketio.emit("security_code_request", {"code": code}, room=sess.room)
+    emit("admin_otp_sent", {"email": email})
+
+@socketio.on("admin_verify_otp")
+def handle_admin_verify_otp(data):
+    """Admin submits the code provided by the user."""
+    if session.get("admin_level", 3) > 2: return
+    email = data.get("email", "").strip().lower()
+    code = data.get("code")
+    sess = session_mgr.get_session(email)
+    
+    if sess and sess.otp == code:
+        token = str(uuid.uuid4())
+        _impersonation_tokens[token] = email
+        sess.otp = None # Clear it
+        emit("admin_otp_success", {"email": email, "token": token})
+    else:
+        emit("admin_otp_error", {"message": "Invalid security code."})
 
 def _emit_auto_update(auto):
     """Broadcast automation state update to the owning user's room."""
@@ -574,13 +652,36 @@ def handle_ws_connect():
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
 
 
+@socketio.on("logout")
+def handle_logout():
+    """Handles global logout for a user across all devices."""
+    sid = request.sid
+    email = _user_sessions.get(sid)
+    if not email: return
+    
+    logging.info(f"[SESSION] Global logout initiated for {email}")
+    
+    # 1. Notify all SIDs for this user to logout
+    sids = [s for s, e in list(_user_sessions.items()) if e.lower() == email.lower()]
+    for s in sids:
+        emit("force_logout", {"message": "You have been logged out globally."}, room=s)
+        _user_sessions.pop(s, None)
+    
+    # 2. Kill the MQTT session
+    session_mgr.remove_session(email)
+    _emit_admin_stats()
+
 @socketio.on("disconnect")
 def handle_ws_disconnect():
     sid = request.sid
-    _user_sessions.pop(sid, None)
-    session = session_mgr.unregister_socket(sid)
-    if session:
-        leave_room(session.room)
+    # Standard disconnect (browser close) doesn't necessarily kill the MQTT session 
+    # unless it was the last socket.
+    email = _user_sessions.pop(sid, None)
+    if email:
+        session_mgr.unregister_socket(sid)
+        # If no more sockets for this user, we could stop MQTT, 
+        # but usually we keep it alive for automations.
+    _emit_admin_stats()
 
 
 @socketio.on("login")

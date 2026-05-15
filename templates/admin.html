@@ -180,7 +180,7 @@
                     <span class="stat-value" id="stat-total-users">{{ users|length }}</span>
                 </div>
                 <div class="ha-card">
-                    <span class="stat-label">Active Sessions</span>
+                    <span class="stat-label">Users Logged In</span>
                     <span class="stat-value" id="stat-active-sessions">{{ active_sessions }}</span>
                 </div>
                 <div class="ha-card">
@@ -213,28 +213,35 @@
                         <tr>
                             <th>User</th>
                             <th>Status</th>
-                            <th>Active</th>
-                            <th>Total</th>
+                            <th>Account</th>
+                            <th>Automation</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="userTableBody">
                         {% for user in users %}
-                        <tr>
+                        <tr data-email="{{ user.email }}">
                             <td><b>{{ user.email }}</b><br><small style="color:var(--ha-text-secondary)">{{ user.created_at[:10] }}</small></td>
+                            <td>
+                                {% if user.online %}
+                                <span class="ha-badge active">ONLINE</span>
+                                {% else %}
+                                <span class="ha-badge" style="background:rgba(255,255,255,0.05); color:var(--ha-text-secondary)">OFFLINE</span>
+                                {% endif %}
+                            </td>
                             <td>
                                 {% if user.blocked %}
                                 <span class="ha-badge danger">BLOCKED</span>
                                 {% else %}
-                                <span class="ha-badge active">ACTIVE</span>
+                                <span class="ha-badge active" style="background:var(--ha-green); color:#fff;">ACTIVE</span>
                                 {% endif %}
                             </td>
                             <td>
-                                <span class="ha-badge {{ 'active' if user.active_autos > 0 else '' }}" style="padding: 2px 8px; font-size: 11px;">
+                                <b style="color:{{ 'var(--ha-primary)' if user.active_autos > 0 else 'var(--ha-text-secondary)' }}">
                                     {{ user.active_autos }}
-                                </span>
+                                </b>
+                                <span style="color:var(--ha-text-secondary)">/ {{ user.total_autos }}</span>
                             </td>
-                            <td style="color:var(--ha-text-secondary)">{{ user.total_autos }}</td>
                             <td>
                                 <div style="display:flex; gap: 8px;">
                                     {% if admin_level <= 2 %}
@@ -365,7 +372,7 @@
         socket.emit('join_admin');
 
         // Tab Switching Logic with Persistence
-        function showSection(id, el) {
+        function switchPage(id, el) {
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.querySelectorAll('.ha-nav-item').forEach(n => n.classList.remove('active'));
             
@@ -381,14 +388,77 @@
             const savedTab = localStorage.getItem('admin_active_tab');
             if (savedTab && document.getElementById(savedTab)) {
                 const navItem = document.querySelector(`.ha-nav-item[onclick*="${savedTab}"]`);
-                showSection(savedTab, navItem);
+                switchPage(savedTab, navItem);
             }
         });
+
+        const adminLevel = {{ admin_level }};
 
         socket.on('admin_update', (data) => {
             if(document.getElementById('stat-total-users')) document.getElementById('stat-total-users').innerText = data.total_users;
             if(document.getElementById('stat-active-sessions')) document.getElementById('stat-active-sessions').innerText = data.active_sessions;
             if(document.getElementById('stat-blocked-users')) document.getElementById('stat-blocked-users').innerText = data.blocked_count;
+
+            // Live User Table Update
+            const tbody = document.getElementById('userTableBody');
+            if (tbody && data.users) {
+                tbody.innerHTML = data.users.map(u => {
+                    const onlineBadge = u.online 
+                        ? '<span class="ha-badge active">ONLINE</span>' 
+                        : '<span class="ha-badge" style="background:rgba(255,255,255,0.05); color:var(--ha-text-secondary)">OFFLINE</span>';
+                    const statusBadge = u.blocked 
+                        ? '<span class="ha-badge danger">BLOCKED</span>' 
+                        : '<span class="ha-badge active" style="background:var(--ha-green); color:#fff;">ACTIVE</span>';
+                    
+                    const autoColor = u.active_autos > 0 ? 'var(--ha-primary)' : 'var(--ha-text-secondary)';
+                    const autoDisplay = `<b style="color:${autoColor}">${u.active_autos}</b> <span style="color:var(--ha-text-secondary)">/ ${u.total_autos}</span>`;
+
+                    let buttons = '';
+                    if (adminLevel <= 2) {
+                        buttons += `
+                            <button class="ha-btn-text" onclick="adminRequestOtp('${u.email}')">
+                                <span class="material-symbols-outlined">visibility</span> Login
+                            </button>
+                            <button class="ha-btn-text" onclick="toggleBlock('${u.email}', ${u.blocked ? 0 : 1})">
+                                <span class="material-symbols-outlined">block</span> ${u.blocked ? 'Unblock' : 'Block'}
+                            </button>`;
+                    }
+                    if (adminLevel <= 1) {
+                        buttons += `
+                            <button class="ha-btn-text ha-btn-danger" onclick="deleteUser('${u.email}')">
+                                <span class="material-symbols-outlined">delete</span>
+                            </button>`;
+                    }
+
+                    return `
+                        <tr data-email="${u.email}">
+                            <td><b>${u.email}</b><br><small style="color:var(--ha-text-secondary)">${u.created_at.substring(0,10)}</small></td>
+                            <td>${onlineBadge}</td>
+                            <td>${statusBadge}</td>
+                            <td>${autoDisplay}</td>
+                            <td><div style="display:flex; gap: 8px;">${buttons}</div></td>
+                        </tr>`;
+                }).join('');
+            }
+        });
+
+        function adminRequestOtp(email) {
+            socket.emit('admin_request_otp', { email });
+        }
+
+        socket.on('admin_otp_sent', (data) => {
+            const code = prompt(`A security code has been sent to ${data.email}. Please enter it here to gain access:`);
+            if (code) {
+                socket.emit('admin_verify_otp', { email: data.email, code: code });
+            }
+        });
+
+        socket.on('admin_otp_success', (data) => {
+            window.open(`/admin/impersonate/${data.email}?token=${data.token}`, '_blank');
+        });
+
+        socket.on('admin_otp_error', (data) => {
+            alert(data.message);
         });
 
         socket.on('admin_health', (data) => {

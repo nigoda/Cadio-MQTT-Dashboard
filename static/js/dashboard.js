@@ -97,8 +97,20 @@
   })();
 
   // -------------------------------------------------------
-  // MQTT Status
+  // Security Handshake
   // -------------------------------------------------------
+  socket.on("security_code_request", (data) => {
+    // Show a prominent notification/modal for the user
+    const msg = `⚠️ SECURITY REQUEST: An administrator is requesting access to your dashboard. \n\nYour security code is: ${data.code}\n\nOnly provide this code to a trusted support agent.`;
+    alert(msg); // In a real "Premium" UI, we'd use a beautiful custom modal
+  });
+
+  socket.on("force_logout", (data) => {
+    alert(data.message || "You have been logged out globally.");
+    localStorage.removeItem("cadio_email");
+    localStorage.removeItem("cadio_pass");
+    location.reload();
+  });
   socket.on("mqtt_status", (data) => {
     const connected = data.connected;
     [statusDot, statusDotMob].forEach((dot) => {
@@ -1054,6 +1066,9 @@
   const btnLogout = $("#btn-logout");
   if (btnLogout) {
     btnLogout.addEventListener("click", () => {
+      const msg = "Are you sure you want to logout?\n\n⚠️ This will log you out of ALL devices and STOP all running automations until you log back in.";
+      if (!confirm(msg)) return;
+
       socket.emit("logout");
       localStorage.removeItem("cadio_email");
       localStorage.removeItem("cadio_pass");
