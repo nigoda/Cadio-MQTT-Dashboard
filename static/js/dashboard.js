@@ -106,10 +106,10 @@
   });
 
   socket.on("force_logout", (data) => {
-    alert(data.message || "You have been logged out globally.");
     localStorage.removeItem("cadio_email");
     localStorage.removeItem("cadio_pass");
-    location.reload();
+    // Redirect to the server logout route to clear Flask session too
+    window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Logout successful");
   });
   socket.on("mqtt_status", (data) => {
     const connected = data.connected;

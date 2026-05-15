@@ -659,17 +659,26 @@ def handle_logout():
     email = _user_sessions.get(sid)
     if not email: return
     
+    email = email.lower()
     logging.info(f"[SESSION] Global logout initiated for {email}")
     
-    # 1. Notify all SIDs for this user to logout
-    sids = [s for s, e in list(_user_sessions.items()) if e.lower() == email.lower()]
+    # 1. Notify all SIDs for this user to logout and STAY out
+    sids = [s for s, e in list(_user_sessions.items()) if e.lower() == email]
     for s in sids:
-        emit("force_logout", {"message": "You have been logged out globally."}, room=s)
+        # We use a special event that tells the client to WIPE everything
+        socketio.emit("force_logout", {"message": "Global logout performed. Session terminated."}, room=s)
         _user_sessions.pop(s, None)
     
-    # 2. Kill the MQTT session
+    # 2. Kill the MQTT session in the manager
     session_mgr.remove_session(email)
     _emit_admin_stats()
+
+@app.route("/logout")
+def global_logout_route():
+    """Route to clear Flask session and redirect home."""
+    session.pop("email", None)
+    session.pop("password", None)
+    return redirect("/")
 
 @socketio.on("disconnect")
 def handle_ws_disconnect():

@@ -454,7 +454,16 @@
         });
 
         socket.on('admin_otp_success', (data) => {
-            window.open(`/admin/impersonate/${data.email}?token=${data.token}`, '_blank');
+            const url = `/admin/impersonate/${data.email}?token=${data.token}`;
+            // Try to open automatically
+            const win = window.open(url, '_blank');
+            
+            // If blocked, show a manual link
+            if (!win || win.closed || typeof win.closed == 'undefined') {
+                showToast(`✅ Access Granted! <a href="${url}" target="_blank" style="color:#fff; text-decoration:underline; font-weight:bold; margin-left:10px;">OPEN USER DASHBOARD</a>`, 10000);
+            } else {
+                showToast(`✅ Access Granted! Opening dashboard...`);
+            }
         });
 
         socket.on('admin_otp_error', (data) => {
@@ -521,7 +530,7 @@
             setTimeout(() => location.reload(), 300);
         }
 
-        function showToast(msg) {
+        function showToast(msg, duration = 3000) {
             const t = document.createElement('div');
             t.className = 'ha-badge active';
             t.style.position = 'fixed';
@@ -530,9 +539,9 @@
             t.style.zIndex = '9999';
             t.style.padding = '12px 24px';
             t.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
-            t.textContent = msg;
+            t.innerHTML = msg;
             document.body.appendChild(t);
-            setTimeout(() => t.remove(), 3000);
+            setTimeout(() => t.remove(), duration);
         }
     </script>
 </body>
