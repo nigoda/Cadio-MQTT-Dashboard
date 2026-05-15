@@ -1919,6 +1919,10 @@ def _load_user_automations(email):
     global automations, automation_logs
     try:
         import db
+        # Save current user's state before wiping memory for the new user
+        if automations:
+            _save_all_to_db()
+            
         saved = db.load_automations(email)
         automations.clear()
         automation_logs.clear()

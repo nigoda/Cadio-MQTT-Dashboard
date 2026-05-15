@@ -65,10 +65,12 @@ ngrok http 5000
 
 ## What Happens on Startup
 
-1. The app calls the Nivixsa login API (`https://egycad.com/apis/cadio/login`) to get MQTT broker details
-2. Connects to the MQTT broker (`egycad.com:1883`) and subscribes to all entity discovery topics
-3. Entities are auto-discovered and their state/availability topics are subscribed
-4. Flask serves the dashboard on port 5000 with real-time WebSocket updates
+1. The app initializes the local SQLite database (`cadio.db`) and runs schema migrations
+2. It checks for a saved user session (auto-login) or reads credentials from `.env`
+3. The app calls the Nivixsa login API (`https://egycad.com/apis/cadio/login`) to get MQTT broker details
+4. Connects to the MQTT broker (`egycad.com:1883`) and subscribes to all entity discovery topics
+5. Entities are auto-discovered and their state/availability topics are subscribed
+6. Flask serves the dashboard on port 5000 with real-time WebSocket updates
 
 ---
 
@@ -110,8 +112,12 @@ To use the AI-driven irrigation scheduling, you must configure a free Gemini API
 ```
 Nivixsa-dashboard/
 ├── app.py                  # Flask backend — MQTT bridge + SocketIO
+├── db.py                   # Database layer — SQLite, Encryption, User/Auto management
+├── ai_agent.py             # AI Agent — Gemini integration + Scheduling logic
 ├── requirements.txt        # Python dependencies
-├── check_availability.py   # Standalone entity checker script
+├── cadio.db                # SQLite database (Auto-created)
+├── .env                    # Environment variables (Credentials)
+├── .encryption_key         # Fernet encryption key (Auto-created)
 ├── README.md               # API reference documentation
 ├── SETUP.md                # This file
 ├── templates/
@@ -120,7 +126,8 @@ Nivixsa-dashboard/
     ├── css/
     │   └── style.css       # Dashboard styling (HA dark theme)
     └── js/
-        └── dashboard.js    # Dashboard frontend logic
+        ├── dashboard.js    # Core frontend logic
+        └── settings.js     # AI Settings & API management logic
 ```
 
 ---
@@ -200,3 +207,5 @@ And hard refresh the browser (**Ctrl+Shift+R**).
 | requests       | ≥ 2.28    | HTTP client for Nivixsa login API   |
 | google-genai   | ≥ 0.1     | Gemini API integration (AI scheduling) |
 | python-dotenv  | ≥ 1.0     | Environment variable management   |
+| cryptography   | ≥ 42.0    | Fernet encryption for credentials |
+| bcrypt         | ≥ 4.1     | Password hashing for security     |

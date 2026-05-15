@@ -33,12 +33,12 @@ The "Shared AI" plan uses the key stored on the server.
 2. Add your key: `GEMINI_API_KEY=your_key_here`.
 3. This key is available to all dashboard users by default.
 
-### 2. User Personal Key (settings.json)
+### 2. User Personal Key (Dashboard Settings)
 Users can provide their own key through the dashboard's **AI Settings** page.
 1. Select the **"Personal AI"** plan.
 2. Paste your private Gemini key.
-3. This key is saved locally in `settings.json` and overrides the default server key for that session.
-4. **Security**: The key is masked in the UI (e.g., `ABCD****WXYZ`) and stored strictly on your local machine.
+3. This key is saved securely in the **local SQLite database (`cadio.db`)**.
+4. **Security**: The key is encrypted using **Fernet (AES-128)** before being saved. It is masked in the UI (e.g., `ABCD****WXYZ`) and can be removed at any time through the same settings page.
 
 ### Security Best Practices
 - **Do not share** your `.env` or `settings.json` files.
