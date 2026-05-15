@@ -17,6 +17,7 @@ import atexit
 import math
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from functools import wraps
 
 load_dotenv()
 
@@ -25,7 +26,7 @@ import requests
 import psutil
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
-from flask import Flask, render_template, request, session, redirect
+from flask import Flask, render_template, request, session, redirect, g
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
 # ---------------------------------------------------------------------------
@@ -384,18 +385,17 @@ def admin_login():
         
         import db
         admin = db.get_admin(email)
-        if admin and admin["password"] == password:
-            session["admin_email"] = admin["email"]
-            session["admin_level"] = admin["level"]
+        if admin and db.verify_password(password, admin["password_hash"]):
+            session_token = db.create_admin_session(admin["email"], request.headers.get("User-Agent"))
+            session["admin_session_token"] = session_token
             return redirect("/admin")
         return render_template("admin_login.html", error="Invalid admin credentials")
     return render_template("admin_login.html")
 
 @app.route("/admin")
+@admin_required
 def admin_dashboard():
     # Verify sess (Any admin level can see overview)
-    if not session.get("admin_email"):
-        return redirect("/admin/login")
     
     import db
     users = db.get_all_users_for_admin()
@@ -403,14 +403,16 @@ def admin_dashboard():
     return render_template("admin.html", 
                           users=users, 
                           admins=admins,
-                          admin_email=session.get("admin_email"),
-                          admin_level=session.get("admin_level"),
+                          admin_email=request.admin["email"],
+                          admin_level=request.admin["level"],
                           active_sessions=session_mgr.active_count())
 
 @app.route("/admin/logout")
 def admin_logout():
-    session.pop("admin_email", None)
-    session.pop("admin_password", None)
+    session_token = session.pop("admin_session_token", None)
+    if session_token:
+        import db
+        db.delete_admin_session(session_token)
     return redirect("/")
 
 def _admin_telemetry_loop():
@@ -464,10 +466,10 @@ def _emit_admin_stats():
         logging.error(f"[ADMIN] Failed to emit stats: {e}")
 
 @socketio.on("admin_user_block")
+@socket_admin_required
 def handle_admin_user_block(data):
     """Admin action: Block/Unblock a user."""
-    # Level 1 and 2 can block
-    if session.get("admin_level", 3) > 2: return
+    if g.admin["level"] > 2: return
     
     email = data.get("email")
     status = data.get("status") # 1 to block, 0 to unblock
@@ -490,9 +492,10 @@ def handle_admin_user_block(data):
     _emit_admin_stats()
 
 @socketio.on("admin_user_delete")
+@socket_admin_required
 def handle_admin_user_delete(data):
     """Admin action: Permanently delete a user."""
-    if session.get("admin_level", 3) > 1: return
+    if g.admin["level"] > 1: return
     
     email = data.get("email")
     if not email: return
@@ -514,17 +517,17 @@ def handle_admin_user_delete(data):
     _emit_admin_stats()
 
 @socketio.on("join_admin")
+@socket_admin_required
 def handle_join_admin():
-    if not session.get("admin_email"): return
     join_room("admin_room")
-    logging.info(f"[ADMIN] {session.get('admin_email')} joined admin telemetry room")
+    logging.info(f"[ADMIN] {g.admin['email']} joined admin telemetry room")
     _emit_admin_stats()
 
 @socketio.on("admin_team_add")
+@socket_admin_required
 def handle_admin_team_add(data=None):
     if not data: return
-    # ONLY Level 1 can manage team
-    if session.get("admin_level", 3) > 1: return
+    if g.admin["level"] > 1: return
     
     email = data.get("email")
     password = data.get("password")
@@ -534,13 +537,13 @@ def handle_admin_team_add(data=None):
     _emit_admin_stats()
 
 @socketio.on("admin_team_delete")
+@socket_admin_required
 def handle_admin_team_delete(data):
-    # ONLY Level 1 can manage team
-    if session.get("admin_level", 3) > 1: return
+    if g.admin["level"] > 1: return
     
     email = data.get("email")
     # Prevent self-deletion
-    if email == session.get("admin_email"): return
+    if email == g.admin["email"]: return
     
     import db
     db.delete_admin(email)
@@ -552,10 +555,11 @@ def handle_join_admin():
         _emit_admin_stats()
 
 @app.route("/admin/impersonate/<email>")
+@admin_required
 def admin_impersonate(email):
     """Admin only: Securely impersonate a user using a verified token."""
     email = email.lower()
-    if not session.get("admin_email") or session.get("admin_level", 3) > 2:
+    if request.admin["level"] > 2:
         return "Unauthorized", 403
         
     token = request.args.get("token")
@@ -575,9 +579,10 @@ def admin_impersonate(email):
     return redirect("/")
 
 @socketio.on("admin_request_otp")
+@socket_admin_required
 def handle_admin_request_otp(data):
     """Admin requests an OTP to login as a user."""
-    if session.get("admin_level", 3) > 2: return
+    if g.admin["level"] > 2: return
     email = data.get("email", "").strip().lower()
     sess = session_mgr.get_session(email)
     if not sess:
@@ -592,9 +597,10 @@ def handle_admin_request_otp(data):
     emit("admin_otp_sent", {"email": email})
 
 @socketio.on("admin_verify_otp")
+@socket_admin_required
 def handle_admin_verify_otp(data):
     """Admin submits the code provided by the user."""
-    if session.get("admin_level", 3) > 2: return
+    if g.admin["level"] > 2: return
     email = data.get("email", "").strip().lower()
     code = data.get("code")
     sess = session_mgr.get_session(email)
@@ -648,29 +654,51 @@ def index():
 
 @socketio.on("connect")
 def handle_ws_connect():
+    session_token = session.get('user_session_token')
+    if session_token:
+        import db
+        user_email = db.get_user_by_session(session_token)
+        if user_email:
+            user = db.get_user(user_email)
+            if user:
+                # We have a valid session, log the user in automatically
+                handle_login({"email": user["email"], "password": db.decrypt_password(user["password_enc"])})
+                return
+
     # On initial connect, send "not connected" — user must login first
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
 
 
 @socketio.on("logout")
 def handle_logout():
-    """Handles global logout for a user across all devices."""
+    """Handles global logout by deleting the session token and notifying other clients."""
     sid = request.sid
     email = _user_sessions.get(sid)
     if not email: return
     
     email = email.lower()
-    logging.info(f"[SESSION] Global logout initiated for {email}")
+    logging.info(f"[SESSION] Logout for {email}")
+
+    # 1. Invalidate the database session
+    session_token = session.pop('user_session_token', None)
+    if session_token:
+        import db
+        db.delete_session(session_token)
     
-    # 1. Notify all SIDs for this user to logout and STAY out
+    # 2. Broadcast to other clients of this user to force logout
+    socketio.emit("force_logout", {
+        "email": email,
+        "message": "Session terminated."
+    })
+    
+    # 3. Kill the MQTT session
+    session_mgr.remove_session(email)
+
+    # 4. Clean up the SID mapping
     sids = [s for s, e in list(_user_sessions.items()) if e.lower() == email]
     for s in sids:
-        # We use a special event that tells the client to WIPE everything
-        socketio.emit("force_logout", {"message": "Global logout performed. Session terminated."}, room=s)
         _user_sessions.pop(s, None)
     
-    # 2. Kill the MQTT session in the manager
-    session_mgr.remove_session(email)
     _emit_admin_stats()
 
 @app.route("/logout")
@@ -678,6 +706,7 @@ def global_logout_route():
     """Route to clear Flask session and redirect home."""
     session.pop("email", None)
     session.pop("password", None)
+    session.pop("user_session_token", None)
     return redirect("/")
 
 @socketio.on("disconnect")
@@ -725,6 +754,11 @@ def handle_login(data):
     if not success:
         emit("mqtt_status", {"connected": False, "message": "Cadio Login Failed (Check email/password)"})
         return
+    
+    # Create a database-backed session
+    import db
+    session_token = db.create_session(email, request.headers.get("User-Agent"))
+    session['user_session_token'] = session_token
         
     # 4. Register socket and join user's private room
     _user_sessions[request.sid] = email
@@ -760,33 +794,7 @@ def handle_login(data):
     _emit_admin_stats()
 
 
-@socketio.on("logout")
-def handle_logout():
-    user_email = _get_user_email()
-    session = session_mgr.get_session(user_email)
-    
-    # Save automations to DB
-    if session:
-        try:
-            import db
-            for auto_id, auto in session.automations.items():
-                db.save_automation(user_email, auto)
-            db.clear_last_login(user_email)
-            logging.info(f"[SESSION:{user_email}] Saved {len(session.automations)} automations on logout")
-        except Exception as e:
-            logging.error(f"[SESSION:{user_email}] Logout save failed: {e}")
-    
-    # Unregister socket
-    _user_sessions.pop(request.sid, None)
-    if session:
-        session_mgr.unregister_socket(request.sid)
-        leave_room(session.room)
-        # Only tear down if no other tabs are connected
-        if not session.has_sockets:
-            session_mgr.remove_session(user_email)
-    
-    _emit_admin_stats()
-    emit("mqtt_status", {"connected": False, "message": "Not connected"})
+
 
 
 @socketio.on("publish")
@@ -1332,7 +1340,7 @@ def engine_tick(auto):
                 _emit_auto_update(auto)
             else:
                 rt["state"] = "ACTION_SET"
-                _auto_log(auto_id, f"Action {idx+1} verify retry {rt['retryCount']}")
+                _auto_log(auto_id, f"Action {idx+1} verify retry {rt['retryCount']}/{MAX_RETRIES}")
                 _emit_auto_update(auto)
         return
 

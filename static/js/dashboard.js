@@ -106,10 +106,12 @@
   });
 
   socket.on("force_logout", (data) => {
-    localStorage.removeItem("cadio_email");
-    localStorage.removeItem("cadio_pass");
-    // Redirect to the server logout route to clear Flask session too
-    window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Logout successful");
+    const currentEmail = localStorage.getItem("cadio_email") || $("#login-email")?.value;
+    if (data.email && currentEmail && data.email.toLowerCase() === currentEmail.toLowerCase()) {
+      localStorage.removeItem("cadio_email");
+      localStorage.removeItem("cadio_pass");
+      window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Logout successful");
+    }
   });
   socket.on("mqtt_status", (data) => {
     const connected = data.connected;

@@ -13,9 +13,9 @@ import json
 import os
 import base64
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+import secrets
 
-import bcrypt
 from cryptography.fernet import Fernet
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadio.db")
@@ -76,6 +76,24 @@ def init_db():
             password_enc  TEXT NOT NULL,
             level         INTEGER DEFAULT 3,
             created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_token TEXT PRIMARY KEY,
+            user_email    TEXT NOT NULL COLLATE NOCASE,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at    TEXT,
+            user_agent    TEXT,
+            FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS admin_sessions (
+            session_token TEXT PRIMARY KEY,
+            admin_email   TEXT NOT NULL COLLATE NOCASE,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at    TEXT,
+            user_agent    TEXT,
+            FOREIGN KEY (admin_email) REFERENCES admins(email) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS automations (
@@ -617,3 +635,64 @@ def get_users_with_active_automations():
         if pw:
             result.append({"email": row["email"], "password": pw})
     return result
+
+
+# ---------------------------------------------------------------------------
+# Session management
+# ---------------------------------------------------------------------------
+
+def create_session(user_email, user_agent):
+    """Create a new session token for a user."""
+    conn = _get_conn()
+    token = secrets.token_hex(32)
+    expires_at = datetime.utcnow() + timedelta(days=30)
+    conn.execute(
+        "INSERT INTO sessions (session_token, user_email, user_agent, expires_at) VALUES (?, ?, ?, ?)",
+        (token, user_email, user_agent, expires_at.isoformat())
+    )
+    conn.commit()
+    return token
+
+def get_user_by_session(session_token):
+    """Get user email by session token."""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "SELECT user_email FROM sessions WHERE session_token = ? AND expires_at > ?",
+        (session_token, datetime.utcnow().isoformat())
+    )
+    row = cursor.fetchone()
+    return row['user_email'] if row else None
+
+def delete_session(session_token):
+    """Delete a session token."""
+    conn = _get_conn()
+    conn.execute("DELETE FROM sessions WHERE session_token = ?", (session_token,))
+    conn.commit()
+
+def create_admin_session(admin_email, user_agent):
+    """Create a new session token for an admin."""
+    conn = _get_conn()
+    token = secrets.token_hex(32)
+    expires_at = datetime.utcnow() + timedelta(days=1) # Shorter session for admins
+    conn.execute(
+        "INSERT INTO admin_sessions (session_token, admin_email, user_agent, expires_at) VALUES (?, ?, ?, ?)",
+        (token, admin_email, user_agent, expires_at.isoformat())
+    )
+    conn.commit()
+    return token
+
+def get_admin_by_session(session_token):
+    """Get admin email by session token."""
+    conn = _get_conn()
+    cursor = conn.execute(
+        "SELECT admin_email FROM admin_sessions WHERE session_token = ? AND expires_at > ?",
+        (session_token, datetime.utcnow().isoformat())
+    )
+    row = cursor.fetchone()
+    return row['admin_email'] if row else None
+
+def delete_admin_session(session_token):
+    """Delete an admin session token."""
+    conn = _get_conn()
+    conn.execute("DELETE FROM admin_sessions WHERE session_token = ?", (session_token,))
+    conn.commit()

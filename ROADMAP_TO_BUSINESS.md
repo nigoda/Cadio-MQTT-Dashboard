@@ -21,8 +21,11 @@ This document outlines the technical steps required to transform your private da
 - [x] **Admin Authentication**: Professional login page with Email/Password and session persistence.
 - [x] **User Management Table**:
     - [x] Search & Filter users (Dynamic table).
-    - [x] Status indicators (Connected/Blocked/Disabled).
+    - [x] Status indicators (Online/Offline vs Active/Blocked).
+    - [x] **Secure Admin Impersonation**: Mandatory OTP handshake for authorized support access.
     - [x] **Deactivate Account** kill-switch (Real DB binding).
+- [ ] **Global Session Invalidation**:
+    - [ ] Implement database-backed session tokens to ensure logouts sync across all devices perfectly (Roadmap Item).
 - [x] **System Health Monitoring**:
     - [x] Integration with `psutil` to track Server RAM/CPU (Real-time).
     - [x] Live Engine Console logs.
