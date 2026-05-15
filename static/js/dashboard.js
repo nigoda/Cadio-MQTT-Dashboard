@@ -70,8 +70,31 @@
   loginForm.addEventListener("submit", (e) => {
     e.preventDefault();
     loginError.classList.add("hidden");
-    socket.emit("login", { email: loginEmail.value, password: loginPass.value });
+    const email = loginEmail.value;
+    const pass = loginPass.value;
+    // Store credentials for auto-reconnect on page refresh
+    localStorage.setItem("cadio_email", email);
+    localStorage.setItem("cadio_pass", pass);
+    socket.emit("login", { email, password: pass });
   });
+
+  // Auto-login from localStorage on page load / reconnect
+  (function autoLogin() {
+    // Priority 1: pre-filled fields (impersonation)
+    if (loginEmail.value && loginPass.value) {
+      console.log("[DASHBOARD] Auto-logging in via impersonation...");
+      socket.emit("login", { email: loginEmail.value, password: loginPass.value });
+      return;
+    }
+    // Priority 2: saved credentials
+    const savedEmail = localStorage.getItem("cadio_email");
+    const savedPass = localStorage.getItem("cadio_pass");
+    if (savedEmail && savedPass) {
+      console.log("[DASHBOARD] Auto-logging in from saved session...");
+      loginEmail.value = savedEmail;
+      socket.emit("login", { email: savedEmail, password: savedPass });
+    }
+  })();
 
   // -------------------------------------------------------
   // MQTT Status
@@ -92,9 +115,13 @@
       if (msg.includes("account blocked")) {
         loginError.textContent = "⚠️ Your CADIO account has been temporarily blocked. Please wait and try again later.";
         loginError.style.color = "#e67e22";
+        localStorage.removeItem("cadio_email");
+        localStorage.removeItem("cadio_pass");
       } else if (msg.includes("bad credentials") || msg.includes("not authorised") || msg.includes("cadio login failed")) {
         loginError.textContent = "❌ Invalid email or password. Please check your CADIO credentials.";
         loginError.style.color = "";
+        localStorage.removeItem("cadio_email");
+        localStorage.removeItem("cadio_pass");
       } else {
         loginError.textContent = data.message;
         loginError.style.color = "";
@@ -1010,6 +1037,8 @@
   if (btnLogout) {
     btnLogout.addEventListener("click", () => {
       socket.emit("logout");
+      localStorage.removeItem("cadio_email");
+      localStorage.removeItem("cadio_pass");
       appEl.classList.add("hidden");
       loginOverlay.classList.remove("hidden");
       loginPass.value = "";

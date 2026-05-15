@@ -58,7 +58,7 @@ def init_db():
     conn = _get_conn()
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS users (
-            email         TEXT PRIMARY KEY,
+            email         TEXT PRIMARY KEY COLLATE NOCASE,
             password_hash TEXT NOT NULL DEFAULT '',
             password_enc  TEXT NOT NULL DEFAULT '',
             api_key_enc   TEXT DEFAULT '',
@@ -70,9 +70,17 @@ def init_db():
             blocked_at    TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS admins (
+            email         TEXT PRIMARY KEY COLLATE NOCASE,
+            password_hash TEXT NOT NULL,
+            password_enc  TEXT NOT NULL,
+            level         INTEGER DEFAULT 3,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE TABLE IF NOT EXISTS automations (
             id          TEXT PRIMARY KEY,
-            user_email  TEXT NOT NULL,
+            user_email  TEXT NOT NULL COLLATE NOCASE,
             name        TEXT NOT NULL DEFAULT 'New Automation',
             description TEXT DEFAULT '',
             status      TEXT DEFAULT 'OFF',
@@ -86,18 +94,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS automation_logs (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             automation_id TEXT NOT NULL,
-            user_email  TEXT NOT NULL,
+            user_email  TEXT NOT NULL COLLATE NOCASE,
             message     TEXT NOT NULL,
             timestamp   TEXT NOT NULL DEFAULT (datetime('now')),
             FOREIGN KEY (automation_id) REFERENCES automations(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS admins (
-            email         TEXT PRIMARY KEY,
-            password_hash TEXT NOT NULL,
-            password_enc  TEXT NOT NULL,
-            level         INTEGER DEFAULT 3, -- 1: Super, 2: Support, 3: Observer
-            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE INDEX IF NOT EXISTS idx_auto_user ON automations(user_email);
@@ -233,6 +233,7 @@ def _decrypt(ciphertext):
 
 def save_user(email, password):
     """Save or update a user record with bcrypt hash + encrypted password."""
+    email = email.lower()
     conn = _get_conn()
     now = datetime.utcnow().isoformat()
     pw_hash = _hash_pw(password)
@@ -258,6 +259,7 @@ def clear_last_login(email):
 
 def get_user(email):
     """Get user record. Returns dict with email, password, or None."""
+    email = email.lower()
     conn = _get_conn()
     row = conn.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
     if row:
@@ -286,6 +288,7 @@ def get_last_user():
 
 def save_api_settings(email, api_mode, api_key):
     """Save API settings for a user (Fernet encrypted)."""
+    email = email.lower()
     conn = _get_conn()
     key_enc = _encrypt(api_key)
     conn.execute(
@@ -297,6 +300,7 @@ def save_api_settings(email, api_mode, api_key):
 
 def get_api_settings(email):
     """Get API settings for a user. Returns dict with api_mode and custom_api_key."""
+    email = email.lower()
     conn = _get_conn()
     row = conn.execute(
         "SELECT api_mode, api_key_enc FROM users WHERE email = ?",
@@ -363,8 +367,6 @@ def is_user_blocked(email):
     return bool(row["blocked"]) if row else False
 
 
-    return {"blocked": False, "failed_reconnects": 0, "blocked_at": None}
-
 
 def get_all_users_for_admin():
     """Fetch all users with automation counts and status for the admin dashboard."""
@@ -415,6 +417,7 @@ def delete_user(email):
 
 def save_admin(email, password, level=3):
     """Save or update an admin record."""
+    email = email.lower()
     conn = _get_conn()
     pw_hash = _hash_pw(password)
     pw_enc = _encrypt(password)
@@ -432,6 +435,7 @@ def save_admin(email, password, level=3):
 
 def get_admin(email):
     """Get admin record for login."""
+    email = email.lower()
     conn = _get_conn()
     row = conn.execute("SELECT * FROM admins WHERE email = ?", (email,)).fetchone()
     if row:
@@ -452,6 +456,7 @@ def get_all_admins():
 
 def delete_admin(email):
     """Remove an admin from the team."""
+    email = email.lower()
     conn = _get_conn()
     conn.execute("DELETE FROM admins WHERE email = ?", (email,))
     conn.commit()
@@ -497,6 +502,7 @@ def _row_to_auto(row):
 
 def save_automation(user_email, auto):
     """Insert or update a single automation."""
+    user_email = user_email.lower()
     conn = _get_conn()
     vals = _auto_to_row(user_email, auto)
     conn.execute(
@@ -527,6 +533,7 @@ def save_runtime(auto_id, runtime):
 
 def load_automations(user_email):
     """Load all automations for a user. Returns list of automation dicts."""
+    user_email = user_email.lower()
     conn = _get_conn()
     rows = conn.execute(
         "SELECT * FROM automations WHERE user_email = ? ORDER BY created_at",
@@ -549,6 +556,7 @@ def delete_automation(auto_id):
 
 def append_log(auto_id, user_email, message):
     """Append a log entry for an automation."""
+    user_email = user_email.lower()
     conn = _get_conn()
     conn.execute(
         """INSERT INTO automation_logs (automation_id, user_email, message, timestamp)
