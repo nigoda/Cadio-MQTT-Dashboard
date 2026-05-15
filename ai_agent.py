@@ -22,6 +22,7 @@ from google import genai
 import db
 
 load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # Global Client Instance
 _genai_client = None
@@ -44,7 +45,7 @@ def refresh_client(user_email=None):
     if settings.get("api_mode") == "custom" and settings.get("custom_api_key"):
         api_key = settings["custom_api_key"]
     else:
-        api_key = os.getenv("GEMINI_API_KEY", "")
+        api_key = GEMINI_API_KEY
 
     if not api_key:
         _genai_client = None

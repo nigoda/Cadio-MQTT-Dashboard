@@ -1878,12 +1878,16 @@ from ai_agent import refresh_client
 @socketio.on("get_api_settings")
 def handle_get_api_settings():
     import db
+    from ai_agent import GEMINI_API_KEY
     settings = db.get_api_settings(_get_user_email())
     # Mask key for safety
     safe_settings = copy.deepcopy(settings)
     if safe_settings.get("custom_api_key"):
         key = safe_settings["custom_api_key"]
         safe_settings["custom_api_key"] = key[:4] + "*" * (len(key)-8) + key[-4:] if len(key) > 8 else "****"
+    
+    # Add info about whether the system has a shared key
+    safe_settings["has_shared_key"] = bool(GEMINI_API_KEY and GEMINI_API_KEY != "YOUR_GEMINI_API_KEY_HERE")
     emit("api_settings", safe_settings)
 
 @socketio.on("update_api_settings")

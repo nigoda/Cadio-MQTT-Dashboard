@@ -11,15 +11,17 @@ document.addEventListener('DOMContentLoaded', () => {
     
     let currentMode = 'default';
     let originalKey = '';
+    let _hasSharedKey = true; // Local cache
 
     socket.on('api_settings', (data) => {
         currentMode = data.api_mode || 'default';
         originalKey = data.custom_api_key || '';
+        _hasSharedKey = data.has_shared_key;
         
         // Always update the input value to prevent "ghost" masks from lingering
         inputKey.value = data.custom_api_key || '';
         
-        updateUI(currentMode);
+        updateUI(currentMode, _hasSharedKey);
         
         // Only show "Saved" state if there is actually a key present
         if (data.custom_api_key) {
@@ -29,12 +31,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function updateUI(mode) {
+    function updateUI(mode, hasSharedKey = true) {
         currentMode = mode;
+        
+        // Shared Card Logic
+        if (!hasSharedKey) {
+            cardShared.classList.add('disabled');
+            cardShared.style.opacity = '0.5';
+            cardShared.style.pointerEvents = 'none';
+            cardShared.querySelector('.ha-plan-status').textContent = 'Not Configured';
+            // Force user to personal if shared isn't there
+            if (mode === 'default') mode = 'custom';
+        } else {
+            cardShared.classList.remove('disabled');
+            cardShared.style.opacity = '1';
+            cardShared.style.pointerEvents = 'all';
+        }
+
         if (mode === 'default') {
             cardShared.classList.add('active');
             cardPersonal.classList.remove('active');
-            cardShared.querySelector('.ha-plan-status').textContent = 'Active';
+            if (hasSharedKey) cardShared.querySelector('.ha-plan-status').textContent = 'Active';
             cardPersonal.querySelector('.ha-plan-status').textContent = 'Select';
             customWrap.classList.add('hidden');
             btnSave.classList.add('hidden');
@@ -42,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
             cardPersonal.classList.add('active');
             cardShared.classList.remove('active');
             cardPersonal.querySelector('.ha-plan-status').textContent = 'Active';
-            cardShared.querySelector('.ha-plan-status').textContent = 'Select';
+            if (hasSharedKey) cardShared.querySelector('.ha-plan-status').textContent = 'Select';
             customWrap.classList.remove('hidden');
             btnSave.classList.remove('hidden');
         }
@@ -65,9 +82,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     cardShared.onclick = () => {
-        if (currentMode === 'default') return;
+        if (currentMode === 'default' || !_hasSharedKey) return;
         
-        updateUI('default');
+        updateUI('default', _hasSharedKey);
         socket.emit('update_api_settings', {
             api_mode: 'default',
             custom_api_key: inputKey.value.trim()
@@ -77,7 +94,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     cardPersonal.onclick = () => {
         if (currentMode === 'custom') return;
-        updateUI('custom');
+        updateUI('custom', _hasSharedKey);
         
         // If we already have a key saved, auto-switch the mode on the server
         if (originalKey) {
@@ -105,7 +122,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     custom_api_key: ''
                 });
                 showToast('Personal Key Removed');
-                updateUI('default');
+                updateUI('default', _hasSharedKey);
             }
             return;
         }

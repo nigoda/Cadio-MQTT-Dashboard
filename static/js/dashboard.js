@@ -109,6 +109,8 @@
     if (connected && data.message === "Connected") {
       loginOverlay.classList.add("hidden");
       appEl.classList.remove("hidden");
+      // Fetch settings once logged in to sync UI state
+      socket.emit("get_api_settings");
     }
     if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
       const msg = data.message.toLowerCase();
