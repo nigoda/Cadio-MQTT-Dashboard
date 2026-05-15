@@ -132,26 +132,6 @@ Nivixsa-dashboard/
 
 ---
 
-## Running the Availability Checker
-
-A standalone script to list all entities and their online status:
-
-```bash
-python check_availability.py
-```
-
-This connects to the broker, discovers all entities, and prints a table:
-
-```
-Entity                     Name             Type             Status       State
-----------------------------------------------------------------------------------------------------
-  2CF4327CA967_0           Line 0           switch           [+] ONLINE   OFF
-  2CF4327CA967_6           Line 1           light            [+] ONLINE   ON | bri=100
-  A4CF12F03246_0           Line 0           switch           [+] ONLINE   OFF
-
-Total: 19 | Online: 19 | Offline: 0
-```
-
 ---
 
 ## Troubleshooting

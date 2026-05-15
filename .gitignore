@@ -1,23 +1,29 @@
-# AI Models
-models/
-*.gguf
-
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 
-# Virtual Environments
+# Environments
+.venv/
 venv/
 env/
 .env
 
-# OS Files
+# Database & Keys (CRITICAL: Do not upload these)
+cadio.db
+cadio.db-shm
+cadio.db-wal
+.encryption_key
+settings.json
+
+# IDEs and OS
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
+*.log
 
-# Config & Keys
-settings.json
-cadio.db
-.encryption_key
+# Legacy AI (No longer used with Gemini)
+models/
+*.gguf
