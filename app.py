@@ -398,6 +398,32 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def socket_admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # The session is tied to the HTTP request that established the socket
+        session_token = session.get("admin_session_token")
+        if not session_token:
+            emit("admin_error", {"message": "Authentication required."})
+            return
+
+        import db
+        admin_email = db.get_admin_by_session(session_token)
+        if not admin_email:
+            emit("admin_error", {"message": "Invalid or expired session."})
+            return
+        
+        admin = db.get_admin(admin_email)
+        if not admin:
+            emit("admin_error", {"message": "Admin not found."})
+            return
+
+        # A bit of a hack for socketio context, but works.
+        g.admin = admin
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":

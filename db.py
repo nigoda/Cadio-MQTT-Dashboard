@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timedelta
 import secrets
 
+import bcrypt
 from cryptography.fernet import Fernet
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cadio.db")
@@ -220,12 +221,16 @@ def _hash_pw(password):
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def _verify_pw(password, hashed):
+def verify_password(password, hashed):
     """Verify a password against a bcrypt hash."""
     try:
         return bcrypt.checkpw(password.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
+
+def decrypt_password(encrypted_password):
+    """Decrypt a password with Fernet."""
+    return _decrypt(encrypted_password)
 
 
 def _encrypt(plaintext):
@@ -260,10 +265,10 @@ def save_user(email, password):
         """INSERT INTO users (email, password_hash, password_enc, last_login)
            VALUES (?, ?, ?, ?)
            ON CONFLICT(email) DO UPDATE SET
-               password_hash = excluded.password_hash,
-               password_enc = excluded.password_enc,
-               last_login = excluded.last_login""",
-        (email, pw_hash, pw_enc, now)
+               password_hash = ?,
+               password_enc = ?,
+               last_login = ?""",
+        (email, pw_hash, pw_enc, now, pw_hash, pw_enc, now)
     )
     conn.commit()
 
@@ -283,7 +288,7 @@ def get_user(email):
     if row:
         return {
             "email": row["email"],
-            "password": _decrypt(row["password_enc"]),
+            "password_enc": row["password_enc"],
             "created_at": row["created_at"],
             "last_login": row["last_login"],
         }
@@ -459,7 +464,7 @@ def get_admin(email):
     if row:
         return {
             "email": row["email"],
-            "password": _decrypt(row["password_enc"]),
+            "password_hash": row["password_hash"],
             "level": row["level"]
         }
     return None
