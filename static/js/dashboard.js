@@ -994,21 +994,37 @@
   navItems.forEach((btn) => {
     btn.addEventListener("click", () => {
       const tab = btn.dataset.tab;
-      navItems.forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      $$(".ha-view").forEach((v) => v.classList.remove("active"));
-      const target = $(`#tab-${tab}`);
-      if (target) target.classList.add("active");
-
-      // Close mobile sidebar
-      if (sidebar) sidebar.classList.remove("open");
-
-      // Lazy renders
-      if (tab === "log") renderLogTable();
-      if (tab === "developer") renderDevLog();
-      if (tab === "history") renderAll();
+      showTab(tab);
     });
   });
+
+  function showTab(tabId) {
+    navItems.forEach((b) => b.classList.toggle("active", b.dataset.tab === tabId));
+    $$(".ha-view").forEach((v) => v.classList.remove("active"));
+    const target = $(`#tab-${tabId}`);
+    if (target) target.classList.add("active");
+
+    // Close mobile sidebar
+    if (sidebar) sidebar.classList.remove("open");
+
+    // Save to persistence
+    localStorage.setItem("user_active_tab", tabId);
+
+    // Lazy renders
+    if (tabId === "log") renderLogTable();
+    if (tabId === "developer") renderDevLog();
+    if (tabId === "history") renderAll();
+    if (tabId === "api") {
+      renderApiCode();
+      renderApiEntitiesTable();
+    }
+  }
+
+  // Initialize from persistence
+  (function initTab() {
+    const savedTab = localStorage.getItem("user_active_tab") || "overview";
+    showTab(savedTab);
+  })();
 
   function isTabActive(tab) {
     const el = $(`#tab-${tab}`);
@@ -1708,16 +1724,6 @@ func main() {
     </table>`;
   }
 
-  // Render API tab on navigation
-  const origNavClick = navItems;
-  navItems.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (btn.dataset.tab === "api") {
-        renderApiCode();
-        renderApiEntitiesTable();
-      }
-    });
-  });
 
   // Patch render functions to bind clicks after rendering
   const _origRenderOverview = renderOverviewByDevice;

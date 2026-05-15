@@ -211,9 +211,10 @@
                 <table class="ha-data-table" id="userTable">
                     <thead>
                         <tr>
-                            <th>Email Address</th>
+                            <th>User</th>
                             <th>Status</th>
-                            <th>Devices</th>
+                            <th>Active</th>
+                            <th>Total</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -228,11 +229,16 @@
                                 <span class="ha-badge active">ACTIVE</span>
                                 {% endif %}
                             </td>
-                            <td>{{ user.active_autos }} / {{ user.total_autos }}</td>
+                            <td>
+                                <span class="ha-badge {{ 'active' if user.active_autos > 0 else '' }}" style="padding: 2px 8px; font-size: 11px;">
+                                    {{ user.active_autos }}
+                                </span>
+                            </td>
+                            <td style="color:var(--ha-text-secondary)">{{ user.total_autos }}</td>
                             <td>
                                 <div style="display:flex; gap: 8px;">
                                     {% if admin_level <= 2 %}
-                                    <button class="ha-btn-text" onclick="location.href='/admin/impersonate/{{ user.email }}'">
+                                    <button class="ha-btn-text" onclick="window.open('/admin/impersonate/{{ user.email }}', '_blank')">
                                         <span class="material-symbols-outlined">visibility</span> Login
                                     </button>
                                     <button class="ha-btn-text" onclick="toggleBlock('{{ user.email }}', {{ 1 if not user.blocked else 0 }})">
@@ -358,12 +364,26 @@
         const socket = io();
         socket.emit('join_admin');
 
-        function switchPage(pageId, el) {
+        // Tab Switching Logic with Persistence
+        function showSection(id, el) {
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
-            document.getElementById(pageId).classList.add('active');
-            document.querySelectorAll('.ha-nav-item').forEach(l => l.classList.remove('active'));
-            el.classList.add('active');
+            document.querySelectorAll('.ha-nav-item').forEach(n => n.classList.remove('active'));
+            
+            document.getElementById(id).classList.add('active');
+            if(el) el.classList.add('active');
+            
+            // Save to persistence
+            localStorage.setItem('admin_active_tab', id);
         }
+
+        // Initialize from persistence
+        window.addEventListener('DOMContentLoaded', () => {
+            const savedTab = localStorage.getItem('admin_active_tab');
+            if (savedTab && document.getElementById(savedTab)) {
+                const navItem = document.querySelector(`.ha-nav-item[onclick*="${savedTab}"]`);
+                showSection(savedTab, navItem);
+            }
+        });
 
         socket.on('admin_update', (data) => {
             if(document.getElementById('stat-total-users')) document.getElementById('stat-total-users').innerText = data.total_users;
@@ -386,13 +406,13 @@
         function toggleBlock(email, status) {
             if(!confirm(`Update status for ${email}?`)) return;
             socket.emit('admin_user_block', { email, status });
-            setTimeout(() => location.reload(), 500);
+            setTimeout(() => location.reload(), 300);
         }
 
         function deleteUser(email) {
             if(!confirm(`PERMANENT DELETE USER: ${email}?`)) return;
             socket.emit('admin_user_delete', { email });
-            setTimeout(() => location.reload(), 500);
+            setTimeout(() => location.reload(), 300);
         }
 
         function filterUsers() {
@@ -422,13 +442,27 @@
             const level = document.getElementById('newAdminLevel').value;
             if(!email || !password) return alert("Email and Password required");
             socket.emit('admin_team_add', { email, password, level });
-            setTimeout(() => location.reload(), 500);
+            setTimeout(() => location.reload(), 300);
         }
 
         function deleteAdmin(email) {
             if(!confirm(`Remove Admin Access for ${email}?`)) return;
             socket.emit('admin_team_delete', { email });
-            setTimeout(() => location.reload(), 500);
+            setTimeout(() => location.reload(), 300);
+        }
+
+        function showToast(msg) {
+            const t = document.createElement('div');
+            t.className = 'ha-badge active';
+            t.style.position = 'fixed';
+            t.style.bottom = '20px';
+            t.style.right = '20px';
+            t.style.zIndex = '9999';
+            t.style.padding = '12px 24px';
+            t.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+            t.textContent = msg;
+            document.body.appendChild(t);
+            setTimeout(() => t.remove(), 3000);
         }
     </script>
 </body>

@@ -435,17 +435,26 @@ def _emit_admin_stats():
 
 @socketio.on("admin_user_block")
 def handle_admin_user_block(data):
+    """Admin action: Block/Unblock a user."""
     # Level 1 and 2 can block
     if session.get("admin_level", 3) > 2: return
     
     email = data.get("email")
     status = data.get("status") # 1 to block, 0 to unblock
+    if not email: return
+
     import db
-    if status:
+    if status == 1:
         db.block_user(email)
-        # Force disconnect if session active
-        sess = session_mgr.get_session(email)
-        if sess: sess.stop_mqtt()
+        # 1. Kill MQTT Session
+        session_mgr.remove_session(email)
+        # 2. Kick from Sockets
+        sids_to_kick = [sid for sid, e in list(_user_sessions.items()) if e.lower() == email.lower()]
+        for sid in sids_to_kick:
+            emit("mqtt_status", {"connected": False, "message": "Account blocked by admin."}, room=sid)
+            _user_sessions.pop(sid, None)
+            disconnect(sid=sid)
+        logging.info(f"[ADMIN] User {email} BLOCKED and session terminated.")
     else:
         db.unblock_user(email)
     _emit_admin_stats()
