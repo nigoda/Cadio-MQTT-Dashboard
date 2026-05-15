@@ -108,9 +108,20 @@
   socket.on("force_logout", (data) => {
     const currentEmail = localStorage.getItem("cadio_email") || $("#login-email")?.value;
     if (data.email && currentEmail && data.email.toLowerCase() === currentEmail.toLowerCase()) {
-      localStorage.removeItem("cadio_email");
-      localStorage.removeItem("cadio_pass");
-      window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Logout successful");
+      // Show the session terminated modal
+      const modal = document.getElementById('session-terminated-modal');
+      if (modal) {
+        modal.style.display = 'block';
+      }
+      // When the user clicks OK, redirect to logout
+      const okBtn = document.getElementById('session-terminated-ok-btn');
+      if (okBtn) {
+        okBtn.onclick = function() {
+          localStorage.removeItem("cadio_email");
+          localStorage.removeItem("cadio_pass");
+          window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Session terminated.");
+        }
+      }
     }
   });
   socket.on("mqtt_status", (data) => {

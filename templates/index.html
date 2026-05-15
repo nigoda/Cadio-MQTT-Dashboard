@@ -855,36 +855,23 @@ NO     → Device is offline (Last Will message from broker)</pre>
                 </div>
             </div>
         </div>
-    </div>
 
-    <!-- Location Modal for AI -->
-    <div class="ha-modal-overlay hidden" id="ai-latlon-overlay" style="z-index: 1100;">
-        <div class="ha-modal" style="max-width: 400px;">
-            <div class="ha-modal-header">
-                <h2>🌍 Set Location for AI</h2>
-            </div>
-            <div class="ha-modal-body">
-                <p style="font-size: 14px; color: var(--ha-text-secondary); margin-bottom: 16px;">
-                    The AI Agronomist requires your Latitude and Longitude to fetch accurate weather forecasts for your farm.
-                </p>
-                <div class="irr-form-row">
-                    <div class="ha-field">
-                        <input type="number" step="0.0001" id="ai-f-lat" placeholder=" ">
-                        <label>Latitude (e.g., 12.8406)</label>
-                    </div>
+        <!-- Session Terminated Modal -->
+        <div id="session-terminated-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Session Terminated</h2>
                 </div>
-                <div class="irr-form-row">
-                    <div class="ha-field">
-                        <input type="number" step="0.0001" id="ai-f-lon" placeholder=" ">
-                        <label>Longitude (e.g., 77.6772)</label>
-                    </div>
+                <div class="modal-body">
+                    <p>Your session has been logged out from another device or by an administrator.</p>
+                    <p>Please log in again to continue.</p>
                 </div>
-            </div>
-            <div class="ha-modal-footer">
-                <button id="ai-latlon-cancel" class="ha-btn-text">Cancel</button>
-                <button id="ai-latlon-save" class="ha-btn-primary">Save Location</button>
+                <div class="modal-footer">
+                    <button id="session-terminated-ok-btn" class="btn">Login</button>
+                </div>
             </div>
         </div>
+
     </div>
 
     <script src="/static/js/dashboard.js?v={{ cache_bust }}"></script>

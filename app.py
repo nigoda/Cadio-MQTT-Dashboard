@@ -377,6 +377,27 @@ def _sync_master_admin():
     except Exception as e:
         logging.error(f"[AUTH] Master Admin sync failed: {e}")
 
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        session_token = session.get("admin_session_token")
+        if not session_token:
+            return redirect("/admin/login")
+        
+        import db
+        admin_email = db.get_admin_by_session(session_token)
+        if not admin_email:
+            return redirect("/admin/login")
+        
+        admin = db.get_admin(admin_email)
+        if not admin:
+            return redirect("/admin/login")
+        
+        # Attach admin to request context for use in the view function
+        g.admin = admin
+        return f(*args, **kwargs)
+    return decorated_function
+
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
@@ -395,16 +416,14 @@ def admin_login():
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
-    # Verify sess (Any admin level can see overview)
-    
     import db
     users = db.get_all_users_for_admin()
     admins = db.get_all_admins()
     return render_template("admin.html", 
                           users=users, 
                           admins=admins,
-                          admin_email=request.admin["email"],
-                          admin_level=request.admin["level"],
+                          admin_email=g.admin["email"],
+                          admin_level=g.admin["level"],
                           active_sessions=session_mgr.active_count())
 
 @app.route("/admin/logout")
