@@ -3,7 +3,7 @@
    ========================================== */
 (function () {
   "use strict";
-  const socket = io();
+  const socket = window.socket;
   const $ = (s) => document.querySelector(s);
   const escHtml = (s) => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
 

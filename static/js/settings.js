@@ -12,16 +12,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentMode = 'default';
     let originalKey = '';
 
-    // Load initial settings
-    socket.emit('get_api_settings');
-
     socket.on('api_settings', (data) => {
         currentMode = data.api_mode || 'default';
         originalKey = data.custom_api_key || '';
         
-        if (data.custom_api_key) {
-            inputKey.value = data.custom_api_key;
-        }
+        // Always update the input value to prevent "ghost" masks from lingering
+        inputKey.value = data.custom_api_key || '';
         
         updateUI(currentMode);
         

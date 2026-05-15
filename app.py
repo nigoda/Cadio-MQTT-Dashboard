@@ -1891,6 +1891,7 @@ def handle_update_api_settings(data):
     import db
     import copy
     user_email = _get_user_email()
+    logging.info(f"[API_SETTINGS] Saving API key for resolved user_email: {user_email}")
     current = db.get_api_settings(user_email)
     
     # If key is masked (contains *), keep the old one
