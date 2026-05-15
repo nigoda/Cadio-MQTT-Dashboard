@@ -92,6 +92,14 @@ def init_db():
             FOREIGN KEY (automation_id) REFERENCES automations(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS admins (
+            email         TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL,
+            password_enc  TEXT NOT NULL,
+            level         INTEGER DEFAULT 3, -- 1: Super, 2: Support, 3: Observer
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_auto_user ON automations(user_email);
         CREATE INDEX IF NOT EXISTS idx_logs_auto ON automation_logs(automation_id);
         CREATE INDEX IF NOT EXISTS idx_logs_ts ON automation_logs(timestamp);
@@ -355,20 +363,98 @@ def is_user_blocked(email):
     return bool(row["blocked"]) if row else False
 
 
-def get_user_status(email):
-    """Returns a dict with block status info for a user."""
+    return {"blocked": False, "failed_reconnects": 0, "blocked_at": None}
+
+
+def get_all_users_for_admin():
+    """Fetch all users with automation counts and status for the admin dashboard."""
     conn = _get_conn()
-    row = conn.execute(
-        "SELECT blocked, failed_reconnects, blocked_at FROM users WHERE email = ?",
-        (email,)
-    ).fetchone()
+    # Join with automations to get counts
+    rows = conn.execute("""
+        SELECT u.*, 
+               (SELECT COUNT(*) FROM automations a WHERE a.user_email = u.email) as total_autos,
+               (SELECT COUNT(*) FROM automations a WHERE a.user_email = u.email AND a.status = 'ON') as active_autos
+        FROM users u
+        ORDER BY u.created_at DESC
+    """).fetchall()
+    
+    users = []
+    for r in rows:
+        users.append({
+            "email": r["email"],
+            "created_at": r["created_at"],
+            "last_login": r["last_login"],
+            "blocked": bool(r["blocked"]),
+            "failed_reconnects": r["failed_reconnects"],
+            "total_autos": r["total_autos"],
+            "active_autos": r["active_autos"],
+            "api_mode": r["api_mode"]
+        })
+    return users
+
+
+def delete_user(email):
+    """Admin only: Fully wipe a user and all their data."""
+    conn = _get_conn()
+    try:
+        # Delete logs first (foreign key might handle it but let's be explicit)
+        conn.execute("DELETE FROM automation_logs WHERE user_email = ?", (email,))
+        conn.execute("DELETE FROM automations WHERE user_email = ?", (email,))
+        conn.execute("DELETE FROM users WHERE email = ?", (email,))
+        conn.commit()
+        logging.info(f"[DB-ADMIN] Deleted user {email} and all associated data.")
+        return True
+    except Exception as e:
+        logging.error(f"[DB-ADMIN] Failed to delete user {email}: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Admin Team Management (RBAC)
+# ---------------------------------------------------------------------------
+
+def save_admin(email, password, level=3):
+    """Save or update an admin record."""
+    conn = _get_conn()
+    pw_hash = _hash_pw(password)
+    pw_enc = _encrypt(password)
+    conn.execute(
+        """INSERT INTO admins (email, password_hash, password_enc, level)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(email) DO UPDATE SET
+               password_hash = excluded.password_hash,
+               password_enc = excluded.password_enc,
+               level = excluded.level""",
+        (email, pw_hash, pw_enc, level)
+    )
+    conn.commit()
+
+
+def get_admin(email):
+    """Get admin record for login."""
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM admins WHERE email = ?", (email,)).fetchone()
     if row:
         return {
-            "blocked": bool(row["blocked"]),
-            "failed_reconnects": row["failed_reconnects"],
-            "blocked_at": row["blocked_at"],
+            "email": row["email"],
+            "password": _decrypt(row["password_enc"]),
+            "level": row["level"]
         }
-    return {"blocked": False, "failed_reconnects": 0, "blocked_at": None}
+    return None
+
+
+def get_all_admins():
+    """Fetch all admin team members."""
+    conn = _get_conn()
+    rows = conn.execute("SELECT email, level, created_at FROM admins ORDER BY level ASC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_admin(email):
+    """Remove an admin from the team."""
+    conn = _get_conn()
+    conn.execute("DELETE FROM admins WHERE email = ?", (email,))
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -505,3 +591,21 @@ def save_all_runtimes(automations_dict):
             (json.dumps(runtime, default=str), now, auto_id)
         )
     conn.commit()
+
+
+def get_users_with_active_automations():
+    """Get all users who have at least one automation with status='ON'.
+    Returns list of dicts with email and decrypted password (for auto-resume)."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT DISTINCT u.email, u.password_enc
+           FROM users u
+           JOIN automations a ON a.user_email = u.email
+           WHERE a.status = 'ON' AND u.blocked = 0"""
+    ).fetchall()
+    result = []
+    for row in rows:
+        pw = _decrypt(row["password_enc"])
+        if pw:
+            result.append({"email": row["email"], "password": pw})
+    return result

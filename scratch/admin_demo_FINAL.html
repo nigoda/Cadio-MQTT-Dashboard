@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nivixsa Command Center | Business Suite</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0b0f19;
+            --sidebar-bg: #111827;
+            --card-bg: rgba(31, 41, 55, 0.6);
+            --accent: #10b981;
+            --accent-glow: rgba(16, 185, 129, 0.3);
+            --cyan: #06b6d4;
+            --gold: #f59e0b;
+            --danger: #ef4444;
+            --text: #f9fafb;
+            --text-muted: #9ca3af;
+            --border: rgba(255, 255, 255, 0.08);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Outfit', sans-serif; }
+        body { background: var(--bg); color: var(--text); display: flex; min-height: 100vh; overflow: hidden; }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border);
+            padding: 2.5rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .logo-container {
+            padding: 0 1rem;
+            margin-bottom: 2rem;
+        }
+
+        .logo-text {
+            font-size: 1.6rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), var(--cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -1px;
+        }
+
+        .nav-link {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 0.9rem 1.2rem;
+            border-radius: 14px;
+            color: var(--text-muted);
+            text-decoration: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            font-weight: 500;
+        }
+
+        .nav-link:hover { background: rgba(255, 255, 255, 0.05); color: var(--text); }
+        .nav-link.active { background: var(--accent-glow); color: var(--accent); }
+
+        /* Main Area */
+        .main { flex: 1; overflow-y: auto; padding: 2.5rem 4rem; position: relative; }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            margin-bottom: 3.5rem;
+        }
+
+        .header h1 { font-size: 2.2rem; font-weight: 700; margin-bottom: 0.3rem; }
+        .header p { color: var(--text-muted); font-size: 1rem; }
+
+        /* Stats Section */
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            padding: 1.8rem;
+            border-radius: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 4px; height: 100%;
+            background: var(--accent);
+            opacity: 0.5;
+        }
+
+        .stat-label { color: var(--text-muted); font-size: 0.85rem; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; }
+        .stat-value { font-size: 2.4rem; font-weight: 700; margin: 0.5rem 0; display: block; }
+        .stat-footer { font-size: 0.85rem; color: var(--accent); font-weight: 600; }
+
+        /* Content Sections */
+        .section { display: none; animation: slideUp 0.5s ease forwards; }
+        .section.active { display: block; }
+
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Table Design */
+        .data-surface {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 28px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; padding: 1.2rem; color: var(--text-muted); font-size: 0.9rem; border-bottom: 1px solid var(--border); }
+        td { padding: 1.2rem; border-bottom: 1px solid var(--border); }
+
+        .user-cell { display: flex; align-items: center; gap: 1rem; }
+        .avatar { width: 40px; height: 40px; border-radius: 12px; background: #374151; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+
+        /* Revenue Chart (CSS Sim) */
+        .revenue-chart {
+            height: 300px;
+            display: flex;
+            align-items: flex-end;
+            gap: 2rem;
+            padding: 2rem;
+            justify-content: center;
+        }
+
+        .bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 1rem; flex: 1; max-width: 60px; }
+        .bar { 
+            width: 100%; 
+            background: linear-gradient(to top, var(--accent), var(--cyan)); 
+            border-radius: 10px 10px 4px 4px; 
+            box-shadow: 0 4px 20px var(--accent-glow);
+            transition: all 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .bar-label { font-size: 0.8rem; color: var(--text-muted); font-weight: 600; }
+
+        /* Actions */
+        .btn {
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.05);
+            color: white;
+            padding: 0.6rem 1rem;
+            border-radius: 12px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .btn:hover { background: rgba(255,255,255,0.1); transform: translateY(-2px); }
+        .btn-danger { color: var(--danger); border-color: rgba(239, 68, 68, 0.2); }
+        .btn-danger:hover { background: rgba(239, 68, 68, 0.1); }
+
+        .search-bar {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            padding: 0.8rem 1.5rem;
+            border-radius: 16px;
+            color: white;
+            width: 350px;
+            outline: none;
+            transition: 0.3s;
+        }
+        .search-bar:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-glow); }
+
+        /* Badges */
+        .plan-badge {
+            padding: 0.4rem 1rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+        }
+        .p-free { background: rgba(156, 163, 175, 0.1); color: #9ca3af; }
+        .p-pro { background: rgba(6, 182, 212, 0.1); color: var(--cyan); }
+        .p-gold { background: rgba(245, 158, 11, 0.1); color: var(--gold); }
+    </style>
+</head>
+<body>
+
+    <aside class="sidebar">
+        <div class="logo-container">
+            <div class="logo-text">NIVIXSA.CLOUD</div>
+        </div>
+        
+        <nav>
+            <div class="nav-link active" onclick="switchPage('overview', this)">
+                <span>📊</span> Platform Overview
+            </div>
+            <div class="nav-link" onclick="switchPage('users', this)">
+                <span>👥</span> User Management
+            </div>
+            <div class="nav-link" onclick="switchPage('revenue', this)">
+                <span>💰</span> Subscription Revenue
+            </div>
+            <div class="nav-link" onclick="switchPage('health', this)">
+                <span>🔋</span> System & AI Health
+            </div>
+        </nav>
+
+        <div style="margin-top: auto; padding: 1rem; background: rgba(255,255,255,0.03); border-radius: 20px;">
+            <p style="font-size: 0.8rem; color: var(--text-muted);">Signed in as:</p>
+            <p style="font-weight: 700; font-size: 0.9rem;">Administrator (Level 1)</p>
+        </div>
+    </aside>
+
+    <main class="main">
+        <div class="header">
+            <div>
+                <h1 id="page-heading">Platform Overview</h1>
+                <p id="page-subheading">Monitoring 1,284 active smart nodes globally.</p>
+            </div>
+            <input type="text" class="search-bar" placeholder="Search across platform...">
+        </div>
+
+        <!-- OVERVIEW PAGE -->
+        <div id="overview" class="section active">
+            <div class="stats-row">
+                <div class="stat-card">
+                    <span class="stat-label">Monthly Revenue</span>
+                    <span class="stat-value">$12,480</span>
+                    <span class="stat-footer">↑ 24.5% Growth</span>
+                </div>
+                <div class="stat-card" style="--accent: var(--cyan)">
+                    <span class="stat-label">Active MQTT</span>
+                    <span class="stat-value">942</span>
+                    <span class="stat-footer">99.9% Uptime</span>
+                </div>
+                <div class="stat-card" style="--accent: var(--gold)">
+                    <span class="stat-label">AI Decisions</span>
+                    <span class="stat-value">5.2k</span>
+                    <span class="stat-footer">Avg 0.6s latency</span>
+                </div>
+                <div class="stat-card" style="--accent: var(--danger)">
+                    <span class="stat-label">Blocked Accounts</span>
+                    <span class="stat-value">3</span>
+                    <span class="stat-footer">Action required</span>
+                </div>
+            </div>
+
+            <h3 style="margin-bottom: 1.5rem;">Global Activity Summary</h3>
+            <div class="data-surface">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                    <div style="background: rgba(0,0,0,0.2); padding: 1.5rem; border-radius: 20px; border: 1px solid var(--border);">
+                        <h4 style="margin-bottom: 1rem;">Top Regions</h4>
+                        <p style="margin-bottom: 0.5rem; display: flex; justify-content: space-between;"><span>🇮🇳 India (Bangalore)</span> <b>412 Users</b></p>
+                        <p style="margin-bottom: 0.5rem; display: flex; justify-content: space-between;"><span>🇺🇸 USA (California)</span> <b>215 Users</b></p>
+                        <p style="margin-bottom: 0.5rem; display: flex; justify-content: space-between;"><span>🇬🇧 UK (London)</span> <b>124 Users</b></p>
+                        <p style="margin-bottom: 0.5rem; display: flex; justify-content: space-between;"><span>🇪🇬 Egypt (Cairo)</span> <b>88 Users</b></p>
+                    </div>
+                    <div style="background: rgba(0,0,0,0.2); padding: 1.5rem; border-radius: 20px; border: 1px solid var(--border);">
+                        <h4 style="margin-bottom: 1rem;">Recent Conversions</h4>
+                        <p style="margin-bottom: 0.5rem; color: var(--accent);">● sarah.green@landscapes.com upgraded to GOLD</p>
+                        <p style="margin-bottom: 0.5rem; color: var(--accent);">● farmer.rajesh@karnataka.gov.in upgraded to PRO</p>
+                        <p style="margin-bottom: 0.5rem; color: var(--accent);">● alex.smith@gmail.com upgraded to PRO</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- USERS PAGE -->
+        <div id="users" class="section">
+            <div class="data-surface">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User Identity</th>
+                            <th>Status</th>
+                            <th>Plan</th>
+                            <th>Valves Active</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>
+                                <div class="user-cell">
+                                    <div class="avatar" style="color: var(--accent)">SG</div>
+                                    <div>
+                                        <p style="font-weight: 700;">sarah.green@landscapes.com</p>
+                                        <p style="font-size: 0.8rem; color: var(--text-muted);">UID: 884-219 | London, UK</p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><span style="color: var(--accent); font-weight: 700;">● Connected</span></td>
+                            <td><span class="plan-badge p-gold">ENTERPRISE GOLD</span></td>
+                            <td>8 Nodes</td>
+                            <td>
+                                <button class="btn">👁️ Login As</button>
+                                <button class="btn btn-danger">🚫 Disable</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <div class="user-cell">
+                                    <div class="avatar" style="color: var(--gold)">FR</div>
+                                    <div>
+                                        <p style="font-weight: 700;">farmer.rajesh@agri.gov.in</p>
+                                        <p style="font-size: 0.8rem; color: var(--text-muted);">UID: 112-990 | Karnataka, IN</p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><span style="color: var(--accent); font-weight: 700;">● Connected</span></td>
+                            <td><span class="plan-badge p-pro">PRO MONTHLY</span></td>
+                            <td>42 Nodes</td>
+                            <td>
+                                <button class="btn">👁️ Login As</button>
+                                <button class="btn btn-danger">🚫 Disable</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <div class="user-cell">
+                                    <div class="avatar" style="color: var(--cyan)">AS</div>
+                                    <div>
+                                        <p style="font-weight: 700;">alex.smith@gmail.com</p>
+                                        <p style="font-size: 0.8rem; color: var(--text-muted);">UID: 552-104 | California, US</p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><span style="color: var(--accent); font-weight: 700;">● Connected</span></td>
+                            <td><span class="plan-badge p-pro">PRO MONTHLY</span></td>
+                            <td>3 Nodes</td>
+                            <td>
+                                <button class="btn">👁️ Login As</button>
+                                <button class="btn btn-danger">🚫 Disable</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <div class="user-cell">
+                                    <div class="avatar" style="color: #6b7280">GU</div>
+                                    <div>
+                                        <p style="font-weight: 700;">trial_user_88@hotmail.com</p>
+                                        <p style="font-size: 0.8rem; color: var(--text-muted);">UID: 990-212 | Cairo, EG</p>
+                                    </div>
+                                </div>
+                            </td>
+                            <td><span style="color: var(--danger); font-weight: 700;">● Disconnected</span></td>
+                            <td><span class="plan-badge p-free">FREE TIER</span></td>
+                            <td>0 Nodes</td>
+                            <td>
+                                <button class="btn">👁️ Login As</button>
+                                <button class="btn btn-danger">🚫 Disable</button>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- REVENUE PAGE -->
+        <div id="revenue" class="section">
+            <div class="stats-row">
+                <div class="stat-card">
+                    <span class="stat-label">New Subs (Today)</span>
+                    <span class="stat-value">+12</span>
+                    <span class="stat-footer">↑ 5% above avg</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Active Trials</span>
+                    <span class="stat-value">245</span>
+                    <span class="stat-footer">20% Conversion Rate</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Churn Rate</span>
+                    <span class="stat-value">1.4%</span>
+                    <span class="stat-footer">Extremely Low</span>
+                </div>
+                <div class="stat-card" style="border: 1px solid var(--gold);">
+                    <span class="stat-label">Projected Annual</span>
+                    <span class="stat-value" style="color: var(--gold);">$150k</span>
+                    <span class="stat-footer">Year 1 Estimate</span>
+                </div>
+            </div>
+            <div class="data-surface">
+                <h3 style="margin-bottom: 2rem;">Subscription Revenue Growth (USD)</h3>
+                <div class="revenue-chart">
+                    <div class="bar-wrap"><div class="bar" style="height: 30%;"></div><span class="bar-label">Jan</span></div>
+                    <div class="bar-wrap"><div class="bar" style="height: 45%;"></div><span class="bar-label">Feb</span></div>
+                    <div class="bar-wrap"><div class="bar" style="height: 40%;"></div><span class="bar-label">Mar</span></div>
+                    <div class="bar-wrap"><div class="bar" style="height: 65%;"></div><span class="bar-label">Apr</span></div>
+                    <div class="bar-wrap"><div class="bar" style="height: 85%;"></div><span class="bar-label">May</span></div>
+                    <div class="bar-wrap"><div class="bar" style="height: 100%;"></div><span class="bar-label">Jun</span></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- HEALTH PAGE -->
+        <div id="health" class="section">
+            <div class="stats-row">
+                <div class="stat-card">
+                    <span class="stat-label">Server CPU</span>
+                    <span class="stat-value">14.2%</span>
+                    <span class="stat-footer">Stable (R-Pi 4)</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Server RAM</span>
+                    <span class="stat-value">1.8 GB</span>
+                    <span class="stat-footer">of 4.0 GB total</span>
+                </div>
+                <div class="stat-card" style="--accent: var(--cyan)">
+                    <span class="stat-label">MQTT Latency</span>
+                    <span class="stat-value">42ms</span>
+                    <span class="stat-footer">Excellent</span>
+                </div>
+                <div class="stat-card" style="--accent: var(--accent)">
+                    <span class="stat-label">Storage</span>
+                    <span class="stat-value">12%</span>
+                    <span class="stat-footer">cadio.db is 42MB</span>
+                </div>
+            </div>
+            <div class="data-surface">
+                <h3 style="margin-bottom: 1.5rem;">Live AI Agromonist Engine Logs</h3>
+                <div style="background: #000; padding: 1.5rem; border-radius: 16px; font-family: monospace; font-size: 0.85rem; color: #10b981; line-height: 1.6; height: 300px; overflow-y: auto;">
+                    [12:24:02] [SYSTEM] Scanning 124 active sessions...<br>
+                    [12:24:05] [AI-AGENT] Running for sarah.green@landscapes.com...<br>
+                    [12:24:06] [AI-AGENT] Weather: London (Rain predicted for Wed). Skipping Wed.<br>
+                    [12:24:07] [AI-AGENT] Decision for Sarah: Mon, Fri (Duration: 30m)<br>
+                    [12:24:10] [MQTT] Published command to Node_884_Zone1 -> ON<br>
+                    [12:24:12] [SYSTEM] Watchdog: All 942 sessions healthy.<br>
+                    [12:24:15] [AI-AGENT] Running for farmer.rajesh@agri.gov.in...<br>
+                    [12:24:18] [AI-AGENT] Weather: Karnataka (Heatwave detected). Adding extra 10m cycle.<br>
+                    [12:24:20] [MQTT] Published command to Node_PUMP_MAIN -> ON<br>
+                    <span style="color: #6b7280;">> Monitoring heartbeats... [OK]</span>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        function switchPage(pageId, el) {
+            const titles = {
+                'overview': ['Platform Overview', 'Monitoring 1,284 active smart nodes globally.'],
+                'users': ['User Management', 'Manage identities, permissions, and security.'],
+                'revenue': ['Subscription Revenue', 'Analyzing growth and recurring revenue metrics.'],
+                'health': ['System & AI Health', 'Real-time telemetry from your cloud server.']
+            };
+            
+            document.getElementById('page-heading').innerText = titles[pageId][0];
+            document.getElementById('page-subheading').innerText = titles[pageId][1];
+
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.getElementById(pageId).classList.add('active');
+            
+            document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+            el.classList.add('active');
+        }
+    </script>
+</body>
+</html>

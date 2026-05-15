@@ -35,6 +35,29 @@ Open **http://localhost:5000** in your browser.
 
 ---
 
+## 🛡️ Administrative Access (Command Center)
+
+The Nivixsa Dashboard includes a professional "Master Control" interface for the platform owner to manage all users and monitor system health.
+
+### 1. Accessing the Admin Panel
+To access the admin dashboard, visit the dedicated login page:
+**http://localhost:5000/admin/login**
+
+Log in using your administrative credentials:
+*   **Email**: `ADMIN_EMAIL` (Defined in `.env`)
+*   **Password**: `ADMIN_PASSWORD` (Defined in `.env`)
+
+### 2. Admin Features
+- **Secure Login**: Professional POST-based login page with session persistence.
+- **User Registry**: View all registered users, their status, and automation counts.
+- **Security Kill-Switch**: Instantly **Block** or **Delete** users from the platform.
+- **Impersonation (Login As)**: Troubleshooting customer issues by context-switching to their view.
+- **Live Telemetry**: Real-time monitoring of **CPU**, **RAM**, **MQTT Latency**, and **DB Size**.
+
+---
+
+---
+
 ---
 
 ## Ngrok - public host
@@ -84,6 +107,8 @@ Default credentials are **not** included in the code. Enter them on the login sc
 | `MQTT_PASSWORD` | *(none)*                 | Nivixsa password      |
 | `MQTT_BROKER`   | `egycad.com`             | MQTT broker host    |
 | `MQTT_PORT`     | `1883`                   | MQTT broker port    |
+| `ADMIN_PASSWORD` | `nivixsa-admin-2024`   | Password to access /admin |
+| `GEMINI_API_KEY` | *(none)*                 | AI Scheduling engine key |
 
 ### Using Environment Variables
 
@@ -121,7 +146,9 @@ Nivixsa-dashboard/
 ├── README.md               # API reference documentation
 ├── SETUP.md                # This file
 ├── templates/
-│   └── index.html          # Dashboard HTML template
+│   ├── index.html          # Main User Dashboard
+│   ├── admin.html          # Admin Command Center
+│   └── admin_login.html    # Admin Login Page
 └── static/
     ├── css/
     │   └── style.css       # Dashboard styling (HA dark theme)

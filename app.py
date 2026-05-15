@@ -22,10 +22,12 @@ load_dotenv()
 
 import paho.mqtt.client as mqtt
 import requests
+import psutil
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 from flask import Flask, render_template, request
-from flask_socketio import SocketIO, emit
+from flask_socketio import SocketIO, emit, join_room, leave_room
+from session_manager import SessionManager, UserSession
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -58,6 +60,105 @@ cadio_login_cached = False # track if we already fetched broker details
 automations: dict = {}          # auto_id -> automation dict
 automation_logs: dict = {}      # auto_id -> list of log entries
 
+# ---------------------------------------------------------------------------
+# Multi-Tenant Session Management (The Engine)
+# ---------------------------------------------------------------------------
+
+class UserSession:
+    def __init__(self, email, password, broker=None, port=None, discovery_prefix=None):
+        self.email = email
+        self.password = password
+        self.room = f"user_{email.replace('@', '_').replace('.', '_')}"
+        self.mqtt_broker = broker or MQTT_BROKER
+        self.mqtt_port = port or MQTT_PORT
+        self.discovery_prefix = discovery_prefix or DISCOVERY_PREFIX
+        
+        self.mqtt_client = None
+        self.mqtt_connected = False
+        self._mqtt_last_connected_time = time.time()
+        
+        # In-memory stores for this specific user
+        self.device_states = {}
+        self.sensor_history = {}
+        self.automations = {}
+        self.automation_logs = {}
+        self._sockets = set() # Track active browser tabs
+
+    @property
+    def has_sockets(self):
+        return len(self._sockets) > 0
+
+    def start_mqtt(self, socketio_ref):
+        """Initialize and start this user's private MQTT connection."""
+        client_id = f"nivixsa-{self.email}-{os.getpid()}"
+        self.mqtt_client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311, userdata={"owner_email": self.email})
+        self.mqtt_client.username_pw_set(self.email, self.password)
+        self.mqtt_client.on_connect = on_connect
+        self.mqtt_client.on_disconnect = on_disconnect
+        self.mqtt_client.on_message = on_message
+        self.mqtt_client.on_subscribe = on_subscribe
+        
+        if self.mqtt_port == 8883:
+            self.mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS)
+            
+        try:
+            self.mqtt_client.connect_async(self.mqtt_broker, self.mqtt_port, 60)
+            self.mqtt_client.loop_start()
+            logging.info(f"[SESSION:{self.email}] MQTT Client Started")
+        except Exception as e:
+            logging.error(f"[SESSION:{self.email}] MQTT Start Failed: {e}")
+
+class SessionManager:
+    def __init__(self):
+        self._sessions = {}       # email -> UserSession
+        self._socket_to_email = {} # sid -> email
+
+    def create_session(self, email, password, **kwargs):
+        if email not in self._sessions:
+            self._sessions[email] = UserSession(email, password, **kwargs)
+        return self._sessions[email]
+
+    def get_session(self, email):
+        return self._sessions.get(email)
+
+    def get_session_by_sid(self, sid):
+        email = self._socket_to_email.get(sid)
+        return self._sessions.get(email) if email else None
+
+    def register_socket(self, sid, email):
+        session = self.get_session(email)
+        if session:
+            session._sockets.add(sid)
+            self._socket_to_email[sid] = email
+
+    def unregister_socket(self, sid):
+        email = self._socket_to_email.pop(sid, None)
+        if email:
+            session = self.get_session(email)
+            if session:
+                session._sockets.discard(sid)
+                return session
+        return None
+
+    def get_all_automations(self):
+        """Generator to yield all automations across all active users."""
+        for email, session in list(self._sessions.items()):
+            for auto_id, auto in list(session.automations.items()):
+                yield (session, auto_id, auto)
+
+    def remove_session(self, email):
+        session = self._sessions.pop(email, None)
+        if session and session.mqtt_client:
+            session.mqtt_client.loop_stop()
+            session.mqtt_client.disconnect()
+        logging.info(f"[SESSION-MGR] Removed session for {email}")
+
+    def active_count(self):
+        return len(self._sessions)
+
+# Global session manager instance
+session_mgr = SessionManager()
+
 # Per-socket user session tracking (for multi-user isolation)
 _user_sessions: dict = {}       # socket_sid -> email
 
@@ -68,6 +169,45 @@ def _get_user_email():
     if sid and sid in _user_sessions:
         return _user_sessions[sid]
     return MQTT_USERNAME  # fallback to global for engine/watchdog threads
+
+
+def cadio_login(email, password):
+    """Call Nivixsa login API to get MQTT broker details. Returns True on success."""
+    global MQTT_BROKER, MQTT_PORT, DISCOVERY_PREFIX
+    try:
+        headers = {
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; Pixel 5 Build/SQ3A.220705.004)",
+            "Content-Type": "application/json"
+        }
+        resp = requests.post(
+            CADIO_LOGIN_URL,
+            json={"email": email, "password": password},
+            headers=headers,
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            mqtt_host = data.get("mqtt_host")
+            if not mqtt_host:
+                return False
+            
+            MQTT_BROKER = mqtt_host
+            MQTT_PORT = int(data.get("mqtt_port", 1883))
+            DISCOVERY_PREFIX = data.get("discovery_prefix", "homeassistant")
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def _find_automation(auto_id):
+    """Find an automation by ID across all sessions."""
+    for session, aid, auto in session_mgr.get_all_automations():
+        if aid == auto_id:
+            return (session, auto)
+    return (None, None)
+
+
 MAX_AUTO_LOG = 200
 VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
 DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — device was already responding)
@@ -76,55 +216,55 @@ DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — devi
 _mqtt_last_connected_time = time.time()
 
 def _mqtt_watchdog():
-    """Background thread to ensure MQTT reconnects after internet loss."""
-    global mqtt_connected, _mqtt_last_connected_time
+    """Background thread to ensure per-session MQTT reconnects after internet loss."""
     logging.info("[WATCHDOG] MQTT monitor thread started")
-    _reconnect_backoff = 0  # 0 = not in reconnect mode
+    _reconnect_backoff = 0
     _last_loop_time = time.time()
     
     while _engine_running:
         try:
             now = time.time()
             # Detect system sleep/wake (clock jump > 12s when sleep is 5s)
-            if (now - _last_loop_time) > 12:
-                logging.warning(f"[WATCHDOG] System sleep/wake detected (Gap: {int(now - _last_loop_time)}s). Forcing reconnection...")
-                mqtt_connected = False
+            sleep_detected = (now - _last_loop_time) > 12
+            if sleep_detected:
+                logging.warning(f"[WATCHDOG] System sleep/wake detected (Gap: {int(now - _last_loop_time)}s)")
             _last_loop_time = now
 
-            if mqtt_connected:
-                _mqtt_last_connected_time = now
-                _reconnect_backoff = 0  # reset backoff on successful connection
-            else:
-                elapsed = now - _mqtt_last_connected_time
-                if elapsed > 15 and MQTT_USERNAME and MQTT_PASSWORD:
-                    # Exponential backoff: 5s, 15s, 30s, 30s, 30s...
+            # Iterate all active sessions and reconnect any disconnected ones
+            all_connected = True
+            for email, session in list(session_mgr._sessions.items()):
+                if session.mqtt_connected:
+                    continue
+                all_connected = False
+                # Only reconnect if session has stored credentials
+                if not session.password:
+                    continue
+                elapsed = now - getattr(session, '_mqtt_last_connected_time', 0)
+                if elapsed > 15 or sleep_detected:
                     delays = [5, 15, 30]
                     delay = delays[min(_reconnect_backoff, len(delays) - 1)]
                     logging.warning(
-                        f"[WATCHDOG] MQTT disconnected for {int(elapsed)}s. "
-                        f"Reconnect attempt #{_reconnect_backoff + 1} (next retry in {delay}s)..."
+                        f"[WATCHDOG:{email}] MQTT disconnected for {int(elapsed)}s. "
+                        f"Reconnect attempt (next retry in {delay}s)..."
                     )
-                    _reconnect_backoff += 1
                     try:
-                        # Stop old client cleanly before creating a new one
-                        if mqtt_client is not None:
+                        if session.mqtt_client is not None:
                             try:
-                                mqtt_client.loop_stop(force=True)
-                                mqtt_client.disconnect()
+                                session.mqtt_client.loop_stop(force=True)
+                                session.mqtt_client.disconnect()
                             except Exception:
                                 pass
-                        start_mqtt()
+                        session.start_mqtt(socketio)
                     except Exception as e:
-                        logging.error(f"[WATCHDOG] Reconnect failed: {e}")
-                    
-                    # Update loop time after blocking start_mqtt
-                    _last_loop_time = time.time()
-                    # Wait the backoff delay before trying again
-                    _mqtt_last_connected_time = time.time()
-                    time.sleep(delay)
-                    continue
+                        logging.error(f"[WATCHDOG:{email}] Reconnect failed: {e}")
+            
+            if all_connected:
+                _reconnect_backoff = 0
+            else:
+                _reconnect_backoff += 1
+                
         except Exception as e:
-            logging.error(f"[WATCHDOG] Error in MQTT Watchdog: {e}")
+            logging.error(f"[WATCHDOG] Error: {e}")
         time.sleep(5)
 
 MAX_RETRIES = 3
@@ -138,299 +278,192 @@ _ai_running_set: set = set()    # track which automations currently have AI runn
 # MQTT helpers
 # ---------------------------------------------------------------------------
 
-def on_connect(client, userdata, flags, rc):
-    global mqtt_connected, pending_subs
-    codes = {
-        0: "Connected",
-        1: "Incorrect protocol",
-        2: "Invalid client ID",
-        3: "Server unavailable",
-        4: "Bad credentials",
-        5: "Not authorised",
-    }
-    mqtt_connected = rc == 0
-    if mqtt_connected:
-        global _mqtt_last_connected_time
-        _mqtt_last_connected_time = time.time()
-        # Reset failed reconnect counter on successful connection
-        try:
-            import db
-            db.unblock_user(MQTT_USERNAME)  # clears failed_reconnects and block flag
-        except Exception:
-            pass
-        
-    # Handle bad credentials — auto-block after MAX_FAILED_RECONNECTS
-    if rc == 4 and MQTT_USERNAME:
-        try:
-            import db
-            count = db.increment_failed_reconnects(MQTT_USERNAME)
-            logging.warning(f"[BLOCK] Bad credentials for '{MQTT_USERNAME}' (attempt {count}/{db.MAX_FAILED_RECONNECTS})")
-            if count >= db.MAX_FAILED_RECONNECTS:
-                db.block_user(MQTT_USERNAME)
-                client.loop_stop()
-                socketio.emit("mqtt_status", {"connected": False, "message": "Account blocked: too many failed logins. Please try again later."})
-                logging.error(f"[BLOCK] Account '{MQTT_USERNAME}' auto-blocked. Stopping reconnect attempts.")
-                return
-        except Exception as e:
-            logging.error(f"[BLOCK] Failed to update block status: {e}")
-        
-    status = codes.get(rc, f"Unknown ({rc})")
-    logging.info(f"MQTT on_connect: rc={rc} -> {status}")
-    socketio.emit("mqtt_status", {"connected": mqtt_connected, "message": status})
-    if mqtt_connected:
-        # Use the discovery prefix from the Nivixsa login API
-        prefix = userdata.get("discovery_prefix", DISCOVERY_PREFIX)
-        SUPPORTED_COMPONENTS = [
-            "alarm_control_panel", "binary_sensor", "button", "camera",
-            "climate", "cover", "device_automation", "device_tracker",
-            "event", "fan", "humidifier", "image", "lawn_mower", "light",
-            "lock", "notify", "number", "scene", "siren", "select",
-            "sensor", "switch", "tag", "text", "update", "vacuum",
-            "valve", "water_heater",
-        ]
-        topics = []
-        # Component discovery: {prefix}/{component}/+/+/config (broker requires 2-level wildcards)
-        for comp in SUPPORTED_COMPONENTS:
-            topics.append((f"{prefix}/{comp}/+/+/config", 0))
-            topics.append((f"{prefix}/{comp}/+/+/state", 0))
-            topics.append((f"{prefix}/{comp}/+/+/set", 0))
-        # Device discovery
-        topics.append((f"{prefix}/device/+/+/config", 0))
-        # Birth/will status
-        topics.append((f"{prefix}/status", 0))
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@nivixsa.com")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "nivixsa-admin-2024")
 
-        userdata["sub_topics"] = [t for t, _ in topics]
-        pending_subs = len(topics)
-        for t, qos in topics:
-            client.subscribe(t, qos)
-        logging.info(f"Subscribing to {len(topics)} topics (prefix={prefix})")
-
-
-def on_disconnect(client, userdata, rc):
-    global mqtt_connected
-    mqtt_connected = False
-    logging.warning(f"MQTT disconnected: rc={rc}")
-    socketio.emit("mqtt_status", {"connected": False, "message": f"Disconnected (rc={rc})"})
-
-
-def on_subscribe(client, userdata, mid, granted_qos):
-    global pending_subs
-    if pending_subs > 0:
-        pending_subs -= 1
-    rejected = all(q == 128 for q in granted_qos)
-    if rejected:
-        logging.warning(f"Subscription REJECTED by broker: mid={mid} (granted_qos={granted_qos})")
-    else:
-        logging.info(f"Subscription OK: mid={mid} (granted_qos={granted_qos})")
-        userdata["any_sub_ok"] = True
-
-    # Only run post-subscribe logic once, when initial subscriptions are all done
-    if pending_subs == 0 and not userdata.get("initial_subs_done"):
-        userdata["initial_subs_done"] = True
-        any_ok = userdata.get("any_sub_ok", False)
-        if not any_ok:
-            logging.warning("ALL subscriptions were rejected by the broker ACL")
-            socketio.emit("mqtt_status", {
-                "connected": True,
-                "message": "Connected but broker rejected all subscriptions"
-            })
-        else:
-            socketio.emit("mqtt_status", {"connected": True, "message": "Connected"})
-
-
-def on_log(client, userdata, level, buf):
-    logging.debug(f"MQTT log: {buf}")
-
-
-def on_message(client, userdata, msg):
-    topic = msg.topic
-    try:
-        payload = msg.payload.decode("utf-8")
-    except UnicodeDecodeError:
-        payload = msg.payload.hex()
-
-    logging.info(f"MSG RECEIVED: {topic} -> {payload[:200]}")
-
-    # Try to parse as JSON
-    parsed = payload
-    try:
-        parsed = json.loads(payload)
-    except (json.JSONDecodeError, ValueError):
-        pass
-
-    now = datetime.now().isoformat()
-    device_states[topic] = {"payload": parsed, "raw": payload, "ts": now}
-
-    # If this is a discovery config message, auto-subscribe to state/availability topics
-    if isinstance(parsed, dict) and topic.endswith("/config"):
-        _auto_subscribe_from_config(client, userdata, parsed)
-
-    # Keep numeric history for sensor graphs
-    numeric_val = None
-    if isinstance(parsed, (int, float)):
-        numeric_val = parsed
-    elif isinstance(parsed, dict):
-        for key in ("temperature", "humidity", "temp", "hum", "value", "state", "power",
-                     "brightness", "color_temp", "battery", "rssi", "voltage", "current"):
-            if key in parsed and isinstance(parsed[key], (int, float)):
-                sub_topic = f"{topic}/{key}"
-                _append_history(sub_topic, parsed[key], now)
-    if numeric_val is not None:
-        _append_history(topic, numeric_val, now)
-
-    socketio.emit("device_update", {
-        "topic": topic,
-        "payload": parsed,
-        "raw": payload,
-        "ts": now,
-    })
-
-
-# Track topics we've already subscribed to (avoid duplicate subscriptions)
-_subscribed_topics: set = set()
-
-
-def _auto_subscribe_from_config(client, userdata, config):
-    """Parse HA discovery config and subscribe to state/availability topics."""
-    topics_to_sub = set()
-    for key in ("state_topic", "command_topic", "availability_topic",
-                "brightness_state_topic", "color_temp_state_topic",
-                "rgb_state_topic", "json_attributes_topic"):
-        if key in config and isinstance(config[key], str):
-            topics_to_sub.add(config[key])
-
-    # Also handle availability list
-    if "availability" in config and isinstance(config["availability"], list):
-        for avail in config["availability"]:
-            if isinstance(avail, dict) and "topic" in avail:
-                topics_to_sub.add(avail["topic"])
-
-    new_topics = topics_to_sub - _subscribed_topics
-    for t in new_topics:
-        client.subscribe(t, 0)
-        _subscribed_topics.add(t)
-        logging.info(f"Auto-subscribed to: {t}")
-
-
-
-def _append_history(topic, value, ts):
-    if topic not in sensor_history:
-        sensor_history[topic] = []
-    sensor_history[topic].append({"ts": ts, "value": value})
-    if len(sensor_history[topic]) > MAX_HISTORY:
-        sensor_history[topic] = sensor_history[topic][-MAX_HISTORY:]
-
-
-def cadio_login(email, password):
-    """Call Nivixsa login API to get MQTT broker details. Returns True on success."""
-    global MQTT_BROKER, MQTT_PORT, DISCOVERY_PREFIX, cadio_login_cached
-    try:
-        headers = {
-            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; Pixel 5 Build/SQ3A.220705.004)",
-            "Content-Type": "application/json"
-        }
-        resp = requests.post(
-            CADIO_LOGIN_URL,
-            json={"email": email, "password": password},
-            headers=headers,
-            timeout=15,
-        )
-        logging.info(f"Nivixsa login API status: {resp.status_code}")
-        if resp.status_code == 200:
-            data = resp.json()
-            logging.info(f"Nivixsa login response: {json.dumps(data, indent=2)}")
-            mqtt_host = data.get("mqtt_host")
-            
-            # CADIO may return 200 with an error body for invalid accounts
-            # A valid login MUST contain mqtt_host
-            if not mqtt_host:
-                logging.warning(f"Nivixsa login rejected: 200 but no mqtt_host in response (invalid account?)")
-                return False
-            
-            mqtt_port = data.get("mqtt_port")
-            discovery_prefix = data.get("discovery_prefix")
-            MQTT_BROKER = mqtt_host
-            if mqtt_port:
-                MQTT_PORT = int(mqtt_port)
-            if discovery_prefix:
-                DISCOVERY_PREFIX = discovery_prefix
-            logging.info(f"Nivixsa config: broker={MQTT_BROKER}, port={MQTT_PORT}, prefix={DISCOVERY_PREFIX}")
-            cadio_login_cached = True
-            return True
-        else:
-            logging.warning(f"Nivixsa login failed: {resp.status_code} {resp.text}")
-            return False
-    except Exception as exc:
-        logging.error(f"Nivixsa login API error: {exc}")
-        return False
-
-
-def start_mqtt(email=None, password=None):
-    global mqtt_client, MQTT_USERNAME, MQTT_PASSWORD, cadio_login_cached
-    if email and email != MQTT_USERNAME:
-        MQTT_USERNAME = email
-        cadio_login_cached = False
-    if password and password != MQTT_PASSWORD:
-        MQTT_PASSWORD = password
-        cadio_login_cached = False
-
-    if mqtt_client is not None:
-        try:
-            mqtt_client.loop_stop(force=True)
-            mqtt_client.disconnect()
-        except Exception:
-            pass
-
-    # Call Nivixsa login API to get real MQTT broker details only if we haven't cached them
-    if not cadio_login_cached:
-        if not cadio_login(MQTT_USERNAME, MQTT_PASSWORD):
-            socketio.emit("mqtt_status", {"connected": False, "message": "Bad credentials"})
-            return
-
-    # Check if this account is blocked before attempting MQTT connection
+def _sync_master_admin():
+    """Ensure the master admin from .env exists in DB with Level 1 permissions."""
     try:
         import db
-        if db.is_user_blocked(MQTT_USERNAME):
-            logging.warning(f"[BLOCK] Skipping MQTT connect for blocked account '{MQTT_USERNAME}'")
-            socketio.emit("mqtt_status", {"connected": False, "message": "Account blocked: too many failed logins. Please try again later."})
-            return
-    except Exception:
-        pass
+        db.save_admin(ADMIN_EMAIL, ADMIN_PASSWORD, level=1)
+        logging.info(f"[AUTH] Master Admin synced: {ADMIN_EMAIL} (Level 1)")
+    except Exception as e:
+        logging.error(f"[AUTH] Master Admin sync failed: {e}")
 
-    client_id = f"cadio-dashboard-{os.getpid()}"
-    mqtt_client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
-    mqtt_client.user_data_set({"sub_topics": [], "any_sub_ok": False, "discovery_prefix": DISCOVERY_PREFIX})
-    mqtt_client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
-    mqtt_client.on_connect = on_connect
-    mqtt_client.on_disconnect = on_disconnect
-    mqtt_client.on_message = on_message
-    mqtt_client.on_subscribe = on_subscribe
-    mqtt_client.on_log = on_log
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        email = request.form.get("email")
+        password = request.form.get("password")
+        
+        import db
+        admin = db.get_admin(email)
+        if admin and admin["password"] == password:
+            session["admin_email"] = admin["email"]
+            session["admin_level"] = admin["level"]
+            return redirect("/admin")
+        return render_template("admin_login.html", error="Invalid admin credentials")
+    return render_template("admin_login.html")
 
-    port = MQTT_PORT
-    if port == 8883:
-        mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS)
+@app.route("/admin")
+def admin_dashboard():
+    # Verify session (Any admin level can see overview)
+    if not session.get("admin_email"):
+        return redirect("/admin/login")
+    
+    import db
+    users = db.get_all_users_for_admin()
+    admins = db.get_all_admins()
+    return render_template("admin.html", 
+                          users=users, 
+                          admins=admins,
+                          admin_email=session.get("admin_email"),
+                          admin_level=session.get("admin_level"),
+                          active_sessions=session_mgr.active_count())
 
-    logging.info(f"Connecting to {MQTT_BROKER}:{port} as {MQTT_USERNAME} (prefix={DISCOVERY_PREFIX})")
+@app.route("/admin/logout")
+def admin_logout():
+    session.pop("admin_email", None)
+    session.pop("admin_password", None)
+    return redirect("/")
 
-    try:
-        mqtt_client.connect(MQTT_BROKER, port, keepalive=60)
-    except Exception as exc:
-        logging.error(f"MQTT connect failed on port {port}: {exc}")
-        if port == 1883:
+def _admin_telemetry_loop():
+    """Background task to send system health to admin dashboard."""
+    while True:
+        try:
+            # CPU/RAM
+            cpu = psutil.cpu_percent(interval=None)
+            ram = psutil.virtual_memory()
+            
+            # DB Storage usage
+            db_size_mb = 0
             try:
-                logging.info("Retrying with TLS on port 8883...")
-                mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS)
-                mqtt_client.connect(MQTT_BROKER, 8883, keepalive=60)
-            except Exception as exc2:
-                logging.error(f"MQTT TLS connect also failed: {exc2}")
-                socketio.emit("mqtt_status", {"connected": False, "message": f"Port 1883: {exc} | Port 8883: {exc2}"})
-                return
-        else:
-            socketio.emit("mqtt_status", {"connected": False, "message": str(exc)})
-            return
+                if os.path.exists("cadio.db"):
+                    db_size_mb = round(os.path.getsize("cadio.db") / (1024 * 1024), 2)
+            except (OSError, PermissionError): pass
+            
+            # Broadcast all
+            socketio.emit("admin_health", {
+                "cpu": cpu,
+                "ram_gb": round(ram.used / (1024**3), 2),
+                "ram_percent": ram.percent,
+                "db_size": db_size_mb,
+                "latency": 42
+            }, room="admin_room")
+        except Exception: pass
+        time.sleep(2)
 
-    mqtt_client.loop_start()
+def _emit_admin_stats():
+    """Helper to broadcast latest stats to all connected admin sessions."""
+    import db
+    try:
+        all_users = db.get_all_users_for_admin()
+        blocked = len([u for u in all_users if u['blocked']])
+        socketio.emit("admin_update", {
+            "active_sessions": session_mgr.active_count(),
+            "blocked_count": blocked,
+            "total_users": len(all_users)
+        }, room="admin_room")
+    except Exception: pass
+
+@socketio.on("admin_user_block")
+def handle_admin_user_block(data):
+    # Level 1 and 2 can block
+    if session.get("admin_level", 3) > 2: return
+    
+    email = data.get("email")
+    status = data.get("status") # 1 to block, 0 to unblock
+    import db
+    if status:
+        db.block_user(email)
+        # Force disconnect if session active
+        sess = session_mgr.get_session(email)
+        if sess: sess.stop_mqtt()
+    else:
+        db.unblock_user(email)
+    _emit_admin_stats()
+
+@socketio.on("admin_user_delete")
+def handle_admin_user_delete(data):
+    # ONLY Level 1 can delete users
+    if session.get("admin_level", 3) > 1: return
+    
+    email = data.get("email")
+    import db
+    # 1. Kill active session
+    session_mgr.remove_session(email)
+    # 2. Wipe from DB
+    db.delete_user(email)
+    _emit_admin_stats()
+
+@socketio.on("join_admin")
+# ...
+@socketio.on("admin_team_add")
+def handle_admin_team_add(data):
+    # ONLY Level 1 can manage team
+    if session.get("admin_level", 3) > 1: return
+    
+    email = data.get("email")
+    password = data.get("password")
+    level = int(data.get("level", 3))
+    import db
+    db.save_admin(email, password, level)
+    _emit_admin_stats()
+
+@socketio.on("admin_team_delete")
+def handle_admin_team_delete(data):
+    # ONLY Level 1 can manage team
+    if session.get("admin_level", 3) > 1: return
+    
+    email = data.get("email")
+    # Prevent self-deletion
+    if email == session.get("admin_email"): return
+    
+    import db
+    db.delete_admin(email)
+    _emit_admin_stats()
+def handle_join_admin():
+    if session.get("admin_email"):
+        join_room("admin_room")
+        logging.info(f"[WS] Admin {session.get('admin_email')} joined monitoring room (Level {session.get('admin_level')})")
+        _emit_admin_stats()
+
+@app.route("/admin/impersonate/<email>")
+def admin_impersonate(email):
+    # Level 1 and 2 can impersonate
+    if not session.get("admin_email") or session.get("admin_level", 3) > 2:
+        return "Unauthorized", 403
+        
+    import db
+    user = db.get_user(email)
+    if not user:
+        return "User not found", 404
+        
+    # Set session variables to "Login" as this user
+    session["email"] = user["email"]
+    session["password"] = user["password"]
+    
+    logging.info(f"[ADMIN] Impersonating user: {email}")
+    return redirect("/")
+
+def _emit_auto_update(auto):
+    """Emit an automation update to the owner's private room."""
+    owner_email = auto.get("_owner_email", MQTT_USERNAME)
+    session = session_mgr.get_session(owner_email)
+    
+    # Pre-fetch logs for this user's specific automation
+    logs = []
+    if session:
+        logs = session.automation_logs.get(auto.get("id"), [])[:20]
+    else:
+        logs = automation_logs.get(auto.get("id"), [])[:20]
+        
+    data = {"automation": auto, "logs": logs}
+    
+    if session:
+        socketio.emit("automation_update", data, room=session.room)
+    else:
+        socketio.emit("automation_update", data)
 
 
 # ---------------------------------------------------------------------------
@@ -448,74 +481,96 @@ def index():
 
 @socketio.on("connect")
 def handle_ws_connect():
-    emit("mqtt_status", {"connected": mqtt_connected,
-                          "message": "Connected" if mqtt_connected else "Not connected"})
-    # Send current state snapshot
-    for topic, data in device_states.items():
-        emit("device_update", {"topic": topic, **data})
+    # On initial connect, send "not connected" — user must login first
+    emit("mqtt_status", {"connected": False, "message": "Not connected"})
 
 
 @socketio.on("disconnect")
 def handle_ws_disconnect():
     sid = request.sid
     _user_sessions.pop(sid, None)
+    session = session_mgr.unregister_socket(sid)
+    if session:
+        leave_room(session.room)
 
 
 @socketio.on("login")
 def handle_login(data):
-    email = data.get("email", "")
+    email = data.get("email", "").strip()
     password = data.get("password", "")
     
-    # 1. Validate credentials with CADIO before saving anything
+    # 1. Check if blocked locally BEFORE hitting external API
+    import db
+    if db.is_user_blocked(email):
+        emit("mqtt_status", {"connected": False, "message": "Account blocked: security strike policy. Contact admin."})
+        return
+
+    # 2. Validate credentials with CADIO
     success = cadio_login(email, password)
     if not success:
         emit("mqtt_status", {"connected": False, "message": "Cadio Login Failed (Check email/password)"})
         return
         
-    # 2. Register this socket session to this user
+    # 3. Register socket and join user's private room
     _user_sessions[request.sid] = email
+    session = session_mgr.create_session(
+        email, password,
+        broker=MQTT_BROKER, port=MQTT_PORT, discovery_prefix=DISCOVERY_PREFIX
+    )
+    session_mgr.register_socket(request.sid, email)
+    join_room(session.room)
     
-    # 3. Save valid user to DB (unblock if previously blocked — CADIO accepted credentials)
-    import db
+    # 4. Save valid user to DB
     db.save_user(email, password)
-    db.unblock_user(email)  # clear any previous block since CADIO just accepted these credentials
+    db.unblock_user(email)
     
-    # 4. Load their automations from DB into memory
-    _load_user_automations(email)
+    # 5. Load automations into the session
+    _load_session_automations(session, email)
     
-    # 5. Now connect MQTT
-    start_mqtt(email, password)
+    # 6. Connect session's MQTT client (if not already connected)
+    if not session.mqtt_connected:
+        session.start_mqtt(socketio)
+    else:
+        # Already connected (e.g. second tab) — send current state
+        emit("mqtt_status", {"connected": True, "message": "Connected"})
+        for topic, data in session.device_states.items():
+            emit("device_update", {"topic": topic, **data})
+    
+    # 7. Send automation state to this client
+    for auto_id, auto in session.automations.items():
+        safe = copy.deepcopy(auto)
+        logs = session.automation_logs.get(auto_id, [])[:20]
+        emit("automation_update", {"automation": safe, "logs": logs})
+
+    _emit_admin_stats()
 
 
 @socketio.on("logout")
 def handle_logout():
-    global mqtt_client, mqtt_connected
     user_email = _get_user_email()
-    # Save all automations to DB before clearing
-    try:
-        import db
-        for auto_id, auto in automations.items():
-            db.save_automation(user_email, auto)
-        # Clear last_login so auto-login won't trigger on next restart
-        db.clear_last_login(user_email)
-        logging.info(f"[DB] Saved {len(automations)} automations on logout")
-    except Exception as e:
-        logging.error(f"[DB] Logout save failed: {e}")
-    # Remove socket session
-    _user_sessions.pop(request.sid, None)
-    # Disconnect MQTT
-    if mqtt_client is not None:
+    session = session_mgr.get_session(user_email)
+    
+    # Save automations to DB
+    if session:
         try:
-            mqtt_client.loop_stop()
-            mqtt_client.disconnect()
-        except Exception:
-            pass
-        mqtt_client = None
-    mqtt_connected = False
-    # Clear all in-memory state so engine stops processing
-    automations.clear()
-    automation_logs.clear()
-    device_states.clear()
+            import db
+            for auto_id, auto in session.automations.items():
+                db.save_automation(user_email, auto)
+            db.clear_last_login(user_email)
+            logging.info(f"[SESSION:{user_email}] Saved {len(session.automations)} automations on logout")
+        except Exception as e:
+            logging.error(f"[SESSION:{user_email}] Logout save failed: {e}")
+    
+    # Unregister socket
+    _user_sessions.pop(request.sid, None)
+    if session:
+        session_mgr.unregister_socket(request.sid)
+        leave_room(session.room)
+        # Only tear down if no other tabs are connected
+        if not session.has_sockets:
+            session_mgr.remove_session(user_email)
+    
+    _emit_admin_stats()
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
 
 
@@ -523,8 +578,9 @@ def handle_logout():
 def handle_publish(data):
     topic = data.get("topic", "")
     payload = data.get("payload", "")
-    if mqtt_client and mqtt_connected and topic:
-        mqtt_client.publish(topic, payload)
+    session = session_mgr.get_session_by_sid(request.sid)
+    if session and session.mqtt_client and session.mqtt_connected and topic:
+        session.mqtt_client.publish(topic, payload)
         emit("publish_ack", {"topic": topic, "payload": payload, "ok": True})
     else:
         emit("publish_ack", {"ok": False, "error": "MQTT not connected"})
@@ -533,14 +589,19 @@ def handle_publish(data):
 @socketio.on("subscribe")
 def handle_subscribe(data):
     topic = data.get("topic", "#")
-    if mqtt_client and mqtt_connected:
-        mqtt_client.subscribe(topic)
+    session = session_mgr.get_session_by_sid(request.sid)
+    if session and session.mqtt_client and session.mqtt_connected:
+        session.mqtt_client.subscribe(topic)
 
 
 @socketio.on("get_history")
 def handle_get_history(data):
     topic = data.get("topic", "")
-    history = sensor_history.get(topic, [])
+    session = session_mgr.get_session_by_sid(request.sid)
+    if session:
+        history = session.sensor_history.get(topic, [])
+    else:
+        history = sensor_history.get(topic, [])
     emit("sensor_history", {"topic": topic, "history": history})
 
 
@@ -566,16 +627,36 @@ def _get_auto_now(auto):
 
 
 def _auto_log(auto_id, message, level="info"):
-    """Append a timestamped log entry for an automation (timezone-aware)."""
-    if auto_id not in automation_logs:
-        automation_logs[auto_id] = []
-    # Use the automation's timezone for the log timestamp
-    auto = automations.get(auto_id)
+    """Append a timestamped log entry for an automation (timezone-aware).
+    Routes to session logs if the automation belongs to a session user."""
+    # Determine log target (session or global)
+    auto = None
+    session = None
+    # Check sessions first
+    for email, sess in list(session_mgr._sessions.items()):
+        if auto_id in sess.automations:
+            auto = sess.automations[auto_id]
+            session = sess
+            break
+    # Fallback to global
+    if not auto:
+        auto = automations.get(auto_id)
+
     now = _get_auto_now(auto)
     entry = {"ts": now.isoformat(), "msg": message, "level": level}
-    automation_logs[auto_id].insert(0, entry)
-    if len(automation_logs[auto_id]) > MAX_AUTO_LOG:
-        automation_logs[auto_id] = automation_logs[auto_id][:MAX_AUTO_LOG]
+
+    if session:
+        if auto_id not in session.automation_logs:
+            session.automation_logs[auto_id] = []
+        session.automation_logs[auto_id].insert(0, entry)
+        if len(session.automation_logs[auto_id]) > MAX_AUTO_LOG:
+            session.automation_logs[auto_id] = session.automation_logs[auto_id][:MAX_AUTO_LOG]
+    else:
+        if auto_id not in automation_logs:
+            automation_logs[auto_id] = []
+        automation_logs[auto_id].insert(0, entry)
+        if len(automation_logs[auto_id]) > MAX_AUTO_LOG:
+            automation_logs[auto_id] = automation_logs[auto_id][:MAX_AUTO_LOG]
     logging.info(f"[AUTO {auto_id}] {message}")
 
 
@@ -599,9 +680,16 @@ def _new_runtime(old_rt=None):
     return rt
 
 
-def _get_switch_state(switch_topic):
-    """Get the latest known state for a switch from device_states."""
-    data = device_states.get(switch_topic)
+def _get_switch_state(switch_topic, auto=None):
+    """Get the latest known state for a switch.
+    Routes to the owning session's device_states, falls back to global."""
+    source = device_states  # default fallback
+    if auto:
+        owner = auto.get("_owner_email", "")
+        session = session_mgr.get_session(owner)
+        if session:
+            source = session.device_states
+    data = source.get(switch_topic)
     if not data:
         return None
     payload = data.get("payload")
@@ -610,10 +698,21 @@ def _get_switch_state(switch_topic):
     return str(payload).upper() if payload else None
 
 
-def _mqtt_set_switch(cmd_topic, state):
-    """Publish a command to set a switch state."""
-    if mqtt_client and mqtt_connected and cmd_topic:
-        payload = json.dumps({"state": state.upper()})
+def _mqtt_set_switch(cmd_topic, state, auto=None):
+    """Publish a command to set a switch state.
+    Routes to the owning session's MQTT client, falls back to global."""
+    if not cmd_topic:
+        return
+    payload = json.dumps({"state": state.upper()})
+    if auto:
+        owner = auto.get("_owner_email", "")
+        session = session_mgr.get_session(owner)
+        if session and session.mqtt_client and session.mqtt_connected:
+            session.mqtt_client.publish(cmd_topic, payload)
+            logging.info(f"[ENGINE:{owner}] Published {payload} to {cmd_topic}")
+            return
+    # Legacy fallback
+    if mqtt_client and mqtt_connected:
         mqtt_client.publish(cmd_topic, payload)
         logging.info(f"[ENGINE] Published {payload} to {cmd_topic}")
 
@@ -631,7 +730,7 @@ def evaluate_condition(auto):
     for cond in conditions:
         sensor_topic = cond.get("sensorStateTopic", "")
         expected = str(cond.get("value", "")).upper()
-        actual = _get_switch_state(sensor_topic)
+        actual = _get_switch_state(sensor_topic, auto)
         matched = actual == expected if actual is not None else False
         results.append({"matched": matched, "logic": cond.get("logic")})
 
@@ -719,18 +818,28 @@ def _verify_switches(switch_list, auto):
     for item in switch_list:
         state_topic = item.get("switchStateTopic", "")
         expected = item.get("state", "").upper()
-        actual = _get_switch_state(state_topic)
+        actual = _get_switch_state(state_topic, auto)
         if actual != expected:
             return False
     return True
 
 
 def _emit_auto_update(auto):
-    """Broadcast automation state update to all connected clients."""
+    """Broadcast automation state update to the owning user's room."""
     safe = copy.deepcopy(auto)
     auto_id = safe.get("id", "")
-    logs = automation_logs.get(auto_id, [])[:20]
-    socketio.emit("automation_update", {"automation": safe, "logs": logs})
+    owner_email = auto.get("_owner_email", "")
+    # Try session logs first, fallback to global
+    session = session_mgr.get_session(owner_email) if owner_email else None
+    if session and auto_id in session.automation_logs:
+        logs = session.automation_logs.get(auto_id, [])[:20]
+    else:
+        logs = automation_logs.get(auto_id, [])[:20]
+    # Emit to user's room if available, otherwise broadcast (legacy)
+    if session:
+        socketio.emit("automation_update", {"automation": safe, "logs": logs}, room=session.room)
+    else:
+        socketio.emit("automation_update", {"automation": safe, "logs": logs})
 
 
 def engine_tick(auto):
@@ -777,7 +886,7 @@ def engine_tick(auto):
                         _emit_auto_update(auto)
                         return
 
-                    _mqtt_set_switch(topic, item.get("state", ""))
+                    _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[last_sent_key] = now
                     rt[retry_key] = retries + 1
                     level = "info" if retries == 0 else "warning"
@@ -912,7 +1021,7 @@ def engine_tick(auto):
             
         if idx < len(inits):
             item = inits[idx]
-            _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
+            _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"), auto)
             rt["verifyStart"] = now
             rt["state"] = "INIT_VERIFY_INDIVIDUAL"
             _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} sent → INIT_VERIFY_INDIVIDUAL")
@@ -982,7 +1091,7 @@ def engine_tick(auto):
             _emit_auto_update(auto)
             return
         action = actions[idx]
-        _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
+        _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"), auto)
         rt["verifyStart"] = now
         rt["state"] = "ACTION_VERIFY"
         _auto_log(auto_id, f"Action {idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
@@ -1104,7 +1213,7 @@ def engine_tick(auto):
                 rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_so_far)
                 rt["timerStart"] = None
                 # Send correction command and enter verify state
-                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""))
+                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
                 rt["driftRetryCount"] = 0
                 rt["verifyStart"] = now
                 rt["state"] = "ACTION_DRIFT_VERIFY"
@@ -1131,7 +1240,7 @@ def engine_tick(auto):
                 _emit_auto_update(auto)
             else:
                 # Re-send and try again
-                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""))
+                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
                 rt["verifyStart"] = now
                 _auto_log(auto_id, f"Drift correction retry {rt['driftRetryCount']}/{MAX_RETRIES} on Action {idx+1}", "warning")
                 _emit_auto_update(auto)
@@ -1151,7 +1260,7 @@ def engine_tick(auto):
             return
         else:
             action = actions[next_idx]
-            _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"))
+            _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"), auto)
             _auto_log(auto_id, f"Overlap Action {next_idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
             
         rt["verifyStart"] = now
@@ -1208,7 +1317,7 @@ def engine_tick(auto):
                 elapsed_buf = now - (rt.get("bufferStart") or now)
                 rt["remainingBuffer"] = max(0, buffer_time - elapsed_buf)
                 rt["bufferStart"] = None
-                _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""))
+                _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""), auto)
                 rt["driftRetryCount"] = 0
                 rt["verifyStart"] = now
                 rt["driftAction"] = sw
@@ -1237,7 +1346,7 @@ def engine_tick(auto):
                 _auto_log(auto_id, f"Buffer drift correction failed after {MAX_RETRIES} retries → ERROR_SET", "error")
                 _emit_auto_update(auto)
             else:
-                _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""))
+                _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""), auto)
                 rt["verifyStart"] = now
                 _auto_log(auto_id, f"Buffer drift retry {rt['driftRetryCount']}/{MAX_RETRIES} on {sw.get('switchName', '')}", "warning")
                 _emit_auto_update(auto)
@@ -1250,7 +1359,7 @@ def engine_tick(auto):
         if idx < len(actions):
             action = actions[idx]
             revert_state = "OFF" if action.get("state", "").upper() == "ON" else "ON"
-            _mqtt_set_switch(action.get("switchCmdTopic", ""), revert_state)
+            _mqtt_set_switch(action.get("switchCmdTopic", ""), revert_state, auto)
             _auto_log(auto_id, f"Action {idx+1}: Reverting {action.get('switchName','')} → {revert_state}")
         rt["verifyStart"] = now
         rt["state"] = "ACTION_VERIFY_REVERT"
@@ -1334,7 +1443,7 @@ def engine_tick(auto):
     if state == "ERROR_SET":
         err_states = auto.get("errorState", [])
         for item in err_states:
-            _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"))
+            _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"), auto)
         rt["verifyStart"] = now
         rt["state"] = "ERROR_VERIFY"
         _auto_log(auto_id, "Error state commands sent → ERROR_VERIFY", "error")
@@ -1355,22 +1464,24 @@ def engine_tick(auto):
 
 
 def _engine_loop():
-    """Background loop that ticks every automation."""
+    """Background loop that ticks every automation across all sessions."""
     global _engine_running
     _engine_running = True
     logging.info("[ENGINE] Automation engine started")
     _last_db_save = time.time()
     while _engine_running:
-        for auto_id, auto in list(automations.items()):
+        # Tick all session-based automations (multi-tenant)
+        for session, auto_id, auto in session_mgr.get_all_automations():
             try:
                 engine_tick(auto)
             except Exception as e:
-                logging.error(f"[ENGINE] Error in {auto_id}: {e}")
+                logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
         # Periodic DB save every 60 seconds
         if time.time() - _last_db_save > 60:
             try:
                 import db
-                db.save_all_runtimes(automations)
+                for email, sess in list(session_mgr._sessions.items()):
+                    db.save_all_runtimes(sess.automations)
             except Exception as e:
                 logging.error(f"[ENGINE] Periodic DB save failed: {e}")
             _last_db_save = time.time()
@@ -1427,7 +1538,7 @@ def _ai_scheduler_loop():
     while _engine_running:
         try:
             # 1. Daily scheduled run at 2:00 AM (per-automation timezone)
-            for auto_id, auto in automations.items():
+            for session, auto_id, auto in session_mgr.get_all_automations():
                 sched = auto.get("schedule", {})
                 # Only trigger 2 AM run if AI is enabled AND automation is ON
                 if not sched.get("ai_enabled") or auto.get("status") != "ON":
@@ -1442,7 +1553,7 @@ def _ai_scheduler_loop():
                 
             # 2. Dynamic automatic retry for failed runs
             now_ts = time.time()
-            for auto_id, auto in automations.items():
+            for session, auto_id, auto in session_mgr.get_all_automations():
                 sched = auto.get("schedule", {})
                 
                 # If turned OFF or AI disabled, clear any pending retries
@@ -1494,14 +1605,14 @@ def _run_ai_for_automation(auto_id):
         from ai_agent import get_weather_data, build_automation_context, get_ai_schedule_decision, is_model_loaded, is_model_loading, refresh_client
     except ImportError as e:
         logging.error(f"[AI-SCHEDULER] Could not import ai_agent module: {e}")
-        auto = automations.get(auto_id)
+        session, auto = _find_automation(auto_id)
         if auto:
             _auto_log(auto_id, f"AI error: module import failed - {e}", level="error")
             _emit_auto_update(auto)
         _ai_running_set.discard(auto_id)
         return
 
-    auto = automations.get(auto_id)
+    session, auto = _find_automation(auto_id)
     if not auto:
         _ai_running_set.discard(auto_id)
         return
@@ -1585,7 +1696,12 @@ def _run_ai_for_automation(auto_id):
         logging.info(f"[AI-SCHEDULER] '{auto.get('name')}': {old_days} → {new_days} | {reasoning}")
         
         # Deep Sync: Send specific log message AND full update
-        socketio.emit("log_message", {"entity": auto.get("name"), "state": "AI Schedule Updated"})
+        owner_email = auto.get("_owner_email", MQTT_USERNAME)
+        owner_session = session_mgr.get_session(owner_email)
+        if owner_session:
+            socketio.emit("log_message", {"entity": auto.get("name"), "state": "AI Schedule Updated"}, room=owner_session.room)
+        else:
+            socketio.emit("log_message", {"entity": auto.get("name"), "state": "AI Schedule Updated"})
         _emit_auto_update(auto) 
 
     except Exception as e:
@@ -1628,7 +1744,7 @@ def _run_ai_for_automation(auto_id):
 
 def _run_ai_for_all_automations():
     """Run the AI agent for every automation that has ai_enabled=True."""
-    for auto_id in automations.keys():
+    for session, auto_id, auto in session_mgr.get_all_automations():
         _run_ai_for_automation(auto_id)
 
 
@@ -1640,17 +1756,20 @@ def _run_ai_for_all_automations():
 def handle_run_ai_now(data):
     """Immediately trigger the AI for a specific automation (called from UI)."""
     auto_id = data.get("id")
-    if auto_id in automations:
-        # Run it in a background task so it doesn't block the socket thread
+    if _find_automation(auto_id):
         socketio.start_background_task(_run_ai_for_automation, auto_id)
 
 @socketio.on("get_automations")
 def handle_get_automations():
     """Send all automations to the client."""
+    session = session_mgr.get_session_by_sid(request.sid)
+    if not session:
+        emit("automations_list", [])
+        return
     result = []
-    for auto_id, auto in automations.items():
+    for auto_id, auto in session.automations.items():
         safe = copy.deepcopy(auto)
-        safe["logs"] = automation_logs.get(auto_id, [])[:20]
+        safe["logs"] = session.automation_logs.get(auto_id, [])[:20]
         result.append(safe)
     emit("automations_list", result)
 
@@ -1702,6 +1821,10 @@ def handle_update_api_settings(data):
 @socketio.on("create_automation")
 def handle_create_automation(data):
     """Create a new automation."""
+    session = session_mgr.get_session_by_sid(request.sid)
+    if not session:
+        emit("automation_error", {"error": "Not logged in"})
+        return
     auto_id = str(uuid.uuid4())[:8]
     auto = {
         "id": auto_id,
@@ -1717,16 +1840,16 @@ def handle_create_automation(data):
         "maxCyclesPerDay": data.get("maxCyclesPerDay", 0),
         "runtime": _new_runtime(),
     }
-    auto["_owner_email"] = _get_user_email()
-    automations[auto_id] = auto
-    automation_logs[auto_id] = []
+    auto["_owner_email"] = session.email
+    session.automations[auto_id] = auto
+    session.automation_logs[auto_id] = []
     _auto_log(auto_id, f"Automation '{auto['name']}' created")
     _emit_auto_update(auto)
     emit("automation_created", {"id": auto_id})
     # Persist to DB
     try:
         import db
-        db.save_automation(_get_user_email(), auto)
+        db.save_automation(session.email, auto)
     except Exception as e:
         logging.error(f"[DB] Failed to save new automation: {e}")
     start_engine()
@@ -1736,10 +1859,11 @@ def handle_create_automation(data):
 def handle_update_automation(data):
     """Update an existing automation's configuration."""
     auto_id = data.get("id")
-    if auto_id not in automations:
+    session = session_mgr.get_session_by_sid(request.sid)
+    if not session or auto_id not in session.automations:
         emit("automation_error", {"error": "Not found"})
         return
-    auto = automations[auto_id]
+    auto = session.automations[auto_id]
     # Update config fields
     actions_changed = "actions" in data
     old_actions = auto.get("actions", [])
@@ -1807,9 +1931,10 @@ def handle_update_automation(data):
 def handle_pause_automation(data):
     auto_id = data.get("id")
     is_paused = data.get("isPaused", False)
-    if auto_id in automations:
-        automations[auto_id]["isPaused"] = is_paused
-        _emit_auto_update(automations[auto_id])
+    session = session_mgr.get_session_by_sid(request.sid)
+    if session and auto_id in session.automations:
+        session.automations[auto_id]["isPaused"] = is_paused
+        _emit_auto_update(session.automations[auto_id])
         start_engine()
 
 
@@ -1818,9 +1943,10 @@ def handle_toggle_automation(data):
     """Toggle automation ON/OFF."""
     auto_id = data.get("id")
     status = data.get("status", "OFF")
-    if auto_id not in automations:
+    session = session_mgr.get_session_by_sid(request.sid)
+    if not session or auto_id not in session.automations:
         return
-    auto = automations[auto_id]
+    auto = session.automations[auto_id]
     auto["status"] = status
     if status == "ON":
         auto["runtime"] = _new_runtime(auto.get("runtime", {}))
@@ -1849,9 +1975,10 @@ def handle_toggle_automation(data):
 def handle_reset_automation(data):
     """Reset automation execution."""
     auto_id = data.get("id")
-    if auto_id not in automations:
+    session = session_mgr.get_session_by_sid(request.sid)
+    if not session or auto_id not in session.automations:
         return
-    auto = automations[auto_id]
+    auto = session.automations[auto_id]
     rt = auto.get("runtime", {})
     now = time.time()
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -1888,12 +2015,13 @@ def handle_reset_automation(data):
 def handle_delete_automation(data):
     """Delete an automation."""
     auto_id = data.get("id")
-    if auto_id in automations:
-        name = automations[auto_id].get("name", auto_id)
-        del automations[auto_id]
-        automation_logs.pop(auto_id, None)
-        socketio.emit("automation_deleted", {"id": auto_id})
-        logging.info(f"Automation '{name}' deleted")
+    session = session_mgr.get_session_by_sid(request.sid)
+    if session and auto_id in session.automations:
+        name = session.automations[auto_id].get("name", auto_id)
+        del session.automations[auto_id]
+        session.automation_logs.pop(auto_id, None)
+        socketio.emit("automation_deleted", {"id": auto_id}, room=session.room)
+        logging.info(f"[SESSION:{session.email}] Automation '{name}' deleted")
         # Remove from DB
         try:
             import db
@@ -1906,7 +2034,11 @@ def handle_delete_automation(data):
 def handle_get_automation_logs(data):
     """Get logs for a specific automation."""
     auto_id = data.get("id")
-    logs = automation_logs.get(auto_id, [])
+    session = session_mgr.get_session_by_sid(request.sid)
+    if session:
+        logs = session.automation_logs.get(auto_id, [])
+    else:
+        logs = automation_logs.get(auto_id, [])
     emit("automation_logs", {"id": auto_id, "logs": logs})
 
 
@@ -1938,16 +2070,65 @@ def _load_user_automations(email):
         logging.error(f"[DB] Failed to load automations for {email}: {e}")
 
 
+def _load_session_automations(session, email):
+    """Load a user's automations from DB into a UserSession object."""
+    try:
+        import db
+        saved = db.load_automations(email)
+        session.automations.clear()
+        session.automation_logs.clear()
+        for auto in saved:
+            auto_id = auto["id"]
+            auto["_owner_email"] = email
+            session.automations[auto_id] = auto
+            logs = db.get_logs(auto_id, 200)
+            session.automation_logs[auto_id] = [{"ts": l["ts"], "msg": l["message"], "level": "info"} for l in logs]
+        logging.info(f"[SESSION-MGR] Loaded {len(saved)} automations for {email}")
+    except Exception as e:
+        logging.error(f"[SESSION-MGR] Failed to load automations for {email}: {e}")
+
+
 def _save_all_to_db():
     """Save all current automations to DB (used on shutdown)."""
     try:
         import db
-        # Use global MQTT_USERNAME since this runs outside socket context
-        for auto_id, auto in automations.items():
-            db.save_automation(MQTT_USERNAME, auto)
-        logging.info(f"[DB] Saved {len(automations)} automations on shutdown")
+        for email, session in list(session_mgr._sessions.items()):
+            for auto_id, auto in session.automations.items():
+                db.save_automation(email, auto)
+        logging.info(f"[DB] Saved all session automations on shutdown (sessions: {session_mgr.active_count()})")
     except Exception as e:
         logging.error(f"[DB] Shutdown save failed: {e}")
+
+
+def _auto_resume_sessions():
+    """On server restart, reconnect all users who have active (ON) automations."""
+    try:
+        import db
+        active_users = db.get_users_with_active_automations()
+        if not active_users:
+            logging.info("[AUTO-RESUME] No users with active automations to resume.")
+            return
+        for user in active_users:
+            email = user["email"]
+            password = user["password"]
+            # Skip the legacy global user (already connected above)
+            if email == MQTT_USERNAME:
+                continue
+            # Validate credentials with CADIO
+            if not cadio_login(email, password):
+                logging.warning(f"[AUTO-RESUME] CADIO login failed for {email}, skipping")
+                continue
+            # Create session, load automations, connect MQTT
+            session = session_mgr.create_session(
+                email, password,
+                broker=MQTT_BROKER, port=MQTT_PORT, discovery_prefix=DISCOVERY_PREFIX
+            )
+            _load_session_automations(session, email)
+            session.start_mqtt(socketio)
+            logging.info(f"[AUTO-RESUME] Resumed session for {email} ({len(session.automations)} automations)")
+        logging.info(f"[AUTO-RESUME] Resumed {len(active_users)} user sessions total")
+    except Exception as e:
+        logging.error(f"[AUTO-RESUME] Failed: {e}")
 
 
 if __name__ == "__main__":
@@ -1956,20 +2137,33 @@ if __name__ == "__main__":
     # Initialize database
     import db
     db.init_db()
+    _sync_master_admin()
     # Register shutdown hook to save state
     atexit.register(_save_all_to_db)
-    # Auto-connect MQTT on startup if credentials are set via environment variables
+    # Auto-resume all users with active automations from DB
+    _auto_resume_sessions()
+    # Legacy: if environment variables are set, also create a session for that user
     if MQTT_USERNAME and MQTT_PASSWORD:
-        _load_user_automations(MQTT_USERNAME)
-        start_mqtt()
-    else:
-        # Try to auto-login from last saved user
+        session = session_mgr.create_session(
+            MQTT_USERNAME, MQTT_PASSWORD,
+            broker=MQTT_BROKER, port=MQTT_PORT, discovery_prefix=DISCOVERY_PREFIX
+        )
+        _load_session_automations(session, MQTT_USERNAME)
+        session.start_mqtt(socketio)
+    elif not session_mgr._sessions:
+        # Try to auto-login from last saved user (only if no sessions were resumed)
         last_user = db.get_last_user()
         if last_user and last_user.get("password"):
             logging.info(f"[DB] Auto-login from saved user: {last_user['email']}")
-            _load_user_automations(last_user["email"])
-            start_mqtt(last_user["email"], last_user["password"])
+            session = session_mgr.create_session(
+                last_user["email"], last_user["password"],
+                broker=MQTT_BROKER, port=MQTT_PORT, discovery_prefix=DISCOVERY_PREFIX
+            )
+            _load_session_automations(session, last_user["email"])
+            session.start_mqtt(socketio)
         elif last_user:
             logging.info(f"[DB] Found user {last_user['email']} but password not recoverable. Manual login required.")
     start_engine()
+    # Start Admin Telemetry
+    socketio.start_background_task(_admin_telemetry_loop)
     socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)

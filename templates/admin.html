@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nivixsa — Admin</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <style>
+        :root {
+            --ha-primary: #03a9f4;
+            --ha-bg: #1c1c1c;
+            --ha-surface: #1e1e1e;
+            --ha-card: #262626;
+            --ha-sidebar: #1a1a1a;
+            --ha-divider: #3a3a3a;
+            --ha-text: #e1e1e1;
+            --ha-text-secondary: #9e9e9e;
+            --ha-red: #f44336;
+            --ha-radius: 12px;
+            --ha-sidebar-width: 240px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Roboto', sans-serif; background: var(--ha-bg); color: var(--ha-text); display: flex; min-height: 100vh; overflow: hidden; }
+
+        /* Sidebar */
+        .ha-sidebar {
+            width: var(--ha-sidebar-width);
+            background: var(--ha-sidebar);
+            border-right: 1px solid var(--ha-divider);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ha-sidebar-header {
+            padding: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            border-bottom: 1px solid var(--ha-divider);
+        }
+
+        .ha-sidebar-logo-img { width: 32px; height: 32px; object-fit: contain; }
+        .ha-sidebar-title { font-size: 1.2rem; font-weight: 500; }
+
+        .ha-sidebar-nav { padding: 8px; flex: 1; }
+        .ha-nav-item {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 16px;
+            border: none;
+            background: none;
+            color: var(--ha-text);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+            font-size: 0.95rem;
+            margin-bottom: 4px;
+        }
+        .ha-nav-item:hover { background: rgba(255, 255, 255, 0.05); }
+        .ha-nav-item.active { background: rgba(3, 169, 244, 0.12); color: var(--ha-primary); }
+
+        /* Main */
+        .ha-main { flex: 1; overflow-y: auto; padding: 24px 32px; }
+        .ha-view-header { margin-bottom: 24px; display: flex; justify-content: space-between; align-items: center; }
+        .ha-view-header h1 { font-size: 24px; font-weight: 400; }
+
+        /* Stats Grid */
+        .ha-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .ha-card {
+            background: var(--ha-card);
+            border-radius: var(--ha-radius);
+            padding: 20px;
+            border: 1px solid var(--ha-divider);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .stat-label { color: var(--ha-text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-value { font-size: 2rem; display: block; margin: 4px 0; font-weight: 400; }
+
+        /* Tables */
+        .ha-data-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+        .ha-data-table th { text-align: left; padding: 12px; color: var(--ha-text-secondary); font-size: 0.85rem; border-bottom: 1px solid var(--ha-divider); }
+        .ha-data-table td { padding: 16px 12px; border-bottom: 1px solid var(--ha-divider); font-size: 0.95rem; }
+
+        /* Badges & Buttons */
+        .ha-badge { padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; background: var(--ha-divider); }
+        .ha-badge.active { background: var(--ha-primary); color: white; }
+        .ha-badge.danger { background: var(--ha-red); color: white; }
+        .ha-badge.purple { background: #9c27b0; color: white; }
+
+        .ha-btn-primary {
+            background: var(--ha-primary); color: white; border: none; padding: 8px 16px;
+            border-radius: 4px; cursor: pointer; transition: filter 0.2s; font-size: 0.9rem;
+        }
+        .ha-btn-primary:hover { filter: brightness(1.1); }
+        
+        .ha-btn-text {
+            background: none; border: none; color: var(--ha-text-secondary); cursor: pointer;
+            display: inline-flex; align-items: center; gap: 4px; font-size: 0.85rem;
+        }
+        .ha-btn-text:hover { color: var(--ha-text); }
+        .ha-btn-danger { color: var(--ha-red); }
+
+        /* Inputs */
+        input, select {
+            background: var(--ha-surface);
+            border: 1px solid var(--ha-divider);
+            color: var(--ha-text);
+            padding: 8px 12px;
+            border-radius: 4px;
+            outline: none;
+        }
+
+        /* Console */
+        .ha-console {
+            background: #000; color: #4caf50; font-family: monospace;
+            padding: 16px; border-radius: 8px; height: 300px; overflow-y: auto;
+            line-height: 1.6; font-size: 0.85rem;
+        }
+
+        .section { display: none; }
+        .section.active { display: block; }
+    </style>
+</head>
+<body>
+
+    <aside class="ha-sidebar">
+        <div class="ha-sidebar-header">
+            <img src="/static/Logo.png" alt="Nivixsa" class="ha-sidebar-logo-img">
+            <span class="ha-sidebar-title">Nivixsa Admin</span>
+        </div>
+        <nav class="ha-sidebar-nav">
+            <button class="ha-nav-item active" onclick="switchPage('overview', this)">
+                <span class="material-symbols-outlined">analytics</span>
+                <span>Overview</span>
+            </button>
+            <button class="ha-nav-item" onclick="switchPage('users', this)">
+                <span class="material-symbols-outlined">group</span>
+                <span>Users</span>
+            </button>
+            {% if admin_level <= 1 %}
+            <button class="ha-nav-item" onclick="switchPage('team', this)">
+                <span class="material-symbols-outlined">badge</span>
+                <span>Admin Team</span>
+            </button>
+            {% endif %}
+            <button class="ha-nav-item" onclick="switchPage('health', this)">
+                <span class="material-symbols-outlined">monitor_heart</span>
+                <span>System Health</span>
+            </button>
+        </nav>
+        <div style="padding: 16px; border-top: 1px solid var(--ha-divider);">
+            <div style="font-size: 11px; color: var(--ha-text-secondary); margin-bottom: 8px;">LOGGED IN AS</div>
+            <div style="font-size: 13px; font-weight: 500; margin-bottom: 12px;">{{ admin_email }}</div>
+            <button onclick="location.href='/admin/logout'" class="ha-nav-item">
+                <span class="material-symbols-outlined">logout</span>
+                <span>Admin Logout</span>
+            </button>
+        </div>
+    </aside>
+
+    <main class="ha-main">
+        <!-- Overview Section -->
+        <div id="overview" class="section active">
+            <div class="ha-view-header"><h1>Platform Overview</h1></div>
+            <div class="ha-stats-grid">
+                <div class="ha-card">
+                    <span class="stat-label">Total Users</span>
+                    <span class="stat-value" id="stat-total-users">{{ users|length }}</span>
+                </div>
+                <div class="ha-card">
+                    <span class="stat-label">Active Sessions</span>
+                    <span class="stat-value" id="stat-active-sessions">{{ active_sessions }}</span>
+                </div>
+                <div class="ha-card">
+                    <span class="stat-label">Blocked Accounts</span>
+                    <span class="stat-value" id="stat-blocked-users">{{ users|selectattr('blocked')|list|length }}</span>
+                </div>
+                <div class="ha-card">
+                    <span class="stat-label">Admin Level</span>
+                    <span class="stat-value" style="font-size: 1.5rem; margin-top:12px;">
+                        {% if admin_level == 1 %}Super Admin{% elif admin_level == 2 %}Support{% else %}Observer{% endif %}
+                    </span>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Section -->
+        <div id="users" class="section">
+            <div class="ha-view-header"><h1>User Management</h1></div>
+            <div style="display:flex; gap:16px; margin-bottom:20px;">
+                <input type="text" id="userSearch" placeholder="Search by email..." oninput="filterUsers()" style="flex:1;">
+                <select id="statusFilter" onchange="filterUsers()">
+                    <option value="all">All Statuses</option>
+                    <option value="active">Active Only</option>
+                    <option value="blocked">Blocked Only</option>
+                </select>
+            </div>
+            <div class="ha-card">
+                <table class="ha-data-table" id="userTable">
+                    <thead>
+                        <tr>
+                            <th>Email Address</th>
+                            <th>Status</th>
+                            <th>Devices</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td><b>{{ user.email }}</b><br><small style="color:var(--ha-text-secondary)">{{ user.created_at[:10] }}</small></td>
+                            <td>
+                                {% if user.blocked %}
+                                <span class="ha-badge danger">BLOCKED</span>
+                                {% else %}
+                                <span class="ha-badge active">ACTIVE</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ user.active_autos }} / {{ user.total_autos }}</td>
+                            <td>
+                                <div style="display:flex; gap: 8px;">
+                                    {% if admin_level <= 2 %}
+                                    <button class="ha-btn-text" onclick="location.href='/admin/impersonate/{{ user.email }}'">
+                                        <span class="material-symbols-outlined">visibility</span> Login
+                                    </button>
+                                    <button class="ha-btn-text" onclick="toggleBlock('{{ user.email }}', {{ 1 if not user.blocked else 0 }})">
+                                        <span class="material-symbols-outlined">block</span> {{ 'Unblock' if user.blocked else 'Block' }}
+                                    </button>
+                                    {% endif %}
+                                    {% if admin_level <= 1 %}
+                                    <button class="ha-btn-text ha-btn-danger" onclick="deleteUser('{{ user.email }}')">
+                                        <span class="material-symbols-outlined">delete</span>
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Team Section -->
+        {% if admin_level <= 1 %}
+        <div id="team" class="section">
+            <div class="ha-view-header">
+                <h1>Admin Team</h1>
+                <button class="ha-btn-primary" onclick="showAddAdmin()">+ Add Admin</button>
+            </div>
+            
+            <!-- Add Admin Form (Hidden by default) -->
+            <div id="addAdminBox" class="ha-card" style="display:none; margin-bottom:20px;">
+                <h3 style="margin-bottom:16px;">Create New Admin Access</h3>
+                <div style="display:grid; grid-template-columns: 1fr 1fr 1fr auto; gap:12px; align-items:end;">
+                    <div>
+                        <label style="font-size:11px; color:var(--ha-text-secondary)">EMAIL</label><br>
+                        <input type="email" id="newAdminEmail" style="width:100%">
+                    </div>
+                    <div>
+                        <label style="font-size:11px; color:var(--ha-text-secondary)">PASSWORD</label><br>
+                        <input type="password" id="newAdminPass" style="width:100%">
+                    </div>
+                    <div>
+                        <label style="font-size:11px; color:var(--ha-text-secondary)">LEVEL</label><br>
+                        <select id="newAdminLevel" style="width:100%">
+                            <option value="1">Level 1 (Super Admin)</option>
+                            <option value="2">Level 2 (Support)</option>
+                            <option value="3" selected>Level 3 (Observer)</option>
+                        </select>
+                    </div>
+                    <button class="ha-btn-primary" onclick="submitAddAdmin()">Create Access</button>
+                </div>
+            </div>
+
+            <div class="ha-card">
+                <table class="ha-data-table">
+                    <thead>
+                        <tr>
+                            <th>Team Member</th>
+                            <th>Permission Level</th>
+                            <th>Joined</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for admin in admins %}
+                        <tr>
+                            <td><b>{{ admin.email }}</b></td>
+                            <td>
+                                {% if admin.level == 1 %}
+                                <span class="ha-badge purple">SUPER ADMIN</span>
+                                {% elif admin.level == 2 %}
+                                <span class="ha-badge active">SUPPORT</span>
+                                {% else %}
+                                <span class="ha-badge">OBSERVER</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ admin.created_at[:10] }}</td>
+                            <td>
+                                {% if admin.email != admin_email %}
+                                <button class="ha-btn-text ha-btn-danger" onclick="deleteAdmin('{{ admin.email }}')">
+                                    <span class="material-symbols-outlined">delete</span>
+                                </button>
+                                {% else %}
+                                <small style="color:var(--ha-text-secondary)">Self</small>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Health Section -->
+        <div id="health" class="section">
+            <div class="ha-view-header"><h1>System Telemetry</h1></div>
+            <div class="ha-stats-grid">
+                <div class="ha-card">
+                    <span class="stat-label">CPU Usage</span>
+                    <span class="stat-value" id="cpu-val">0%</span>
+                </div>
+                <div class="ha-card">
+                    <span class="stat-label">RAM Usage</span>
+                    <span class="stat-value" id="ram-val">0 GB</span>
+                </div>
+                <div class="ha-card">
+                    <span class="stat-label">MQTT Latency</span>
+                    <span class="stat-value" id="latency-val">-- ms</span>
+                </div>
+                <div class="ha-card">
+                    <span class="stat-label">DB Size</span>
+                    <span class="stat-value" id="storage-val">0 MB</span>
+                </div>
+            </div>
+            <div class="ha-card" style="margin-top: 16px;">
+                <h3 style="margin-bottom: 12px; font-weight: 400;">Live Event Stream</h3>
+                <div id="console" class="ha-console"></div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const socket = io();
+        socket.emit('join_admin');
+
+        function switchPage(pageId, el) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.getElementById(pageId).classList.add('active');
+            document.querySelectorAll('.ha-nav-item').forEach(l => l.classList.remove('active'));
+            el.classList.add('active');
+        }
+
+        socket.on('admin_update', (data) => {
+            if(document.getElementById('stat-total-users')) document.getElementById('stat-total-users').innerText = data.total_users;
+            if(document.getElementById('stat-active-sessions')) document.getElementById('stat-active-sessions').innerText = data.active_sessions;
+            if(document.getElementById('stat-blocked-users')) document.getElementById('stat-blocked-users').innerText = data.blocked_count;
+        });
+
+        socket.on('admin_health', (data) => {
+            document.getElementById('cpu-val').innerText = data.cpu + '%';
+            document.getElementById('ram-val').innerText = data.ram_gb + ' GB';
+            document.getElementById('latency-val').innerText = data.latency + ' ms';
+            document.getElementById('storage-val').innerText = data.db_size + ' MB';
+            
+            const console = document.getElementById('console');
+            const msg = `<span style="color:#666">[${new Date().toLocaleTimeString()}]</span> Telemetry Tick: CPU ${data.cpu}% | RAM ${data.ram_gb}GB<br>`;
+            console.innerHTML = msg + console.innerHTML;
+            if(console.innerHTML.length > 2000) console.innerHTML = console.innerHTML.substring(0, 2000);
+        });
+
+        function toggleBlock(email, status) {
+            if(!confirm(`Update status for ${email}?`)) return;
+            socket.emit('admin_user_block', { email, status });
+            setTimeout(() => location.reload(), 500);
+        }
+
+        function deleteUser(email) {
+            if(!confirm(`PERMANENT DELETE USER: ${email}?`)) return;
+            socket.emit('admin_user_delete', { email });
+            setTimeout(() => location.reload(), 500);
+        }
+
+        function filterUsers() {
+            const query = document.getElementById('userSearch').value.toLowerCase();
+            const statusFilter = document.getElementById('statusFilter').value;
+            const rows = document.querySelectorAll('#userTable tbody tr');
+            rows.forEach(row => {
+                const email = row.querySelector('td b').innerText.toLowerCase();
+                const isBlocked = row.querySelector('.ha-badge.danger') !== null;
+                const matchesSearch = email.includes(query);
+                let matchesStatus = true;
+                if(statusFilter === 'active') matchesStatus = !isBlocked;
+                if(statusFilter === 'blocked') matchesStatus = isBlocked;
+                row.style.display = (matchesSearch && matchesStatus) ? '' : 'none';
+            });
+        }
+
+        // Team Management Functions
+        function showAddAdmin() {
+            const box = document.getElementById('addAdminBox');
+            box.style.display = box.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function submitAddAdmin() {
+            const email = document.getElementById('newAdminEmail').value;
+            const password = document.getElementById('newAdminPass').value;
+            const level = document.getElementById('newAdminLevel').value;
+            if(!email || !password) return alert("Email and Password required");
+            socket.emit('admin_team_add', { email, password, level });
+            setTimeout(() => location.reload(), 500);
+        }
+
+        function deleteAdmin(email) {
+            if(!confirm(`Remove Admin Access for ${email}?`)) return;
+            socket.emit('admin_team_delete', { email });
+            setTimeout(() => location.reload(), 500);
+        }
+    </script>
+</body>
+</html>
