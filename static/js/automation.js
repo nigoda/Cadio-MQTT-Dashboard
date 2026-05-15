@@ -184,13 +184,22 @@
           <div style="display:flex; align-items:center; gap:10px; width:100%;">
             <div class="irr-auto-item-info">
               <div class="irr-auto-item-name">${escHtml(a.name)}</div>
-              <div class="irr-auto-item-status"><span class="irr-status-dot ${cls}"></span> ${stateLabel(a)}</div>
+              <div class="irr-auto-item-status">
+                <span class="irr-status-dot ${cls}"></span> ${stateLabel(a)}
+              </div>
             </div>
-            ${isRunning ? `<div class="irr-auto-item-pct">${prog.pct}%</div>` : ""}
             <label class="ha-toggle" style="pointer-events:auto; margin-left: 4px;"><input type="checkbox" ${a.status === "ON" ? "checked" : ""} data-id="${a.id}"><span class="ha-toggle-track"></span><span class="ha-toggle-thumb"></span></label>
           </div>
-          <div class="irr-auto-item-progress ${isRunning ? "visible" : ""}">
-            <div class="irr-auto-item-progress-fill" style="width: ${prog.pct}%"></div>
+          <div style="display:flex; align-items:center; gap:12px; margin-top:8px;">
+            <div class="irr-auto-item-cycle" style="font-size:11px; color:var(--ha-text-disabled); white-space:nowrap; min-width:45px;">
+               Cycle ${a.runtime?.cycles_today || 0}${a.maxCyclesPerDay > 0 ? `/${a.maxCyclesPerDay}` : ''}
+            </div>
+            <div class="irr-auto-item-progress-container" style="flex:1; display:${isRunning ? 'flex' : 'none'}; align-items:center; gap:8px;">
+              <div class="irr-auto-item-progress" style="flex:1; margin-top:0; display:block;">
+                <div class="irr-auto-item-progress-fill" style="width: ${prog.pct}%"></div>
+              </div>
+              <div class="irr-auto-item-pct" style="font-size:11px; color:var(--ha-text-secondary); font-weight:500;">${prog.pct}%</div>
+            </div>
           </div>
         </div>
       </div>`;
@@ -302,17 +311,22 @@
       const a = _autos[el.dataset.id];
       if (!a) return;
       const isRunning = a.status === "ON" && a.runtime && a.runtime.state !== "IDLE" && a.runtime.state !== "ERROR";
-      const progBar = el.querySelector(".irr-auto-item-progress");
+      const progContainer = el.querySelector(".irr-auto-item-progress-container");
       const progFill = el.querySelector(".irr-auto-item-progress-fill");
       const pctLabel = el.querySelector(".irr-auto-item-pct");
+      const cycleLabel = el.querySelector(".irr-auto-item-cycle");
+
+      if (cycleLabel) {
+        cycleLabel.textContent = `Cycle ${a.runtime?.cycles_today || 0}${a.maxCyclesPerDay > 0 ? `/${a.maxCyclesPerDay}` : ''}`;
+      }
 
       if (isRunning) {
         const prog = calculateAutoProgress(a);
-        if (progBar) progBar.classList.add("visible");
+        if (progContainer) progContainer.style.display = "flex";
         if (progFill) progFill.style.width = prog.pct + "%";
         if (pctLabel) pctLabel.textContent = prog.pct + "%";
       } else {
-        if (progBar) progBar.classList.remove("visible");
+        if (progContainer) progContainer.style.display = "none";
         if (pctLabel) pctLabel.textContent = "";
       }
     });
@@ -333,12 +347,14 @@
     const actions = auto.actions || [];
     const errs = auto.errorState || [];
     const conds = auto.condition || [];
+    const schedTrue = auto.schedule?.setIfTrue || [];
+    const schedFalse = auto.schedule?.setIfFalse || [];
 
     // Live Switches
     const liveSw = $("#irr-live-switches");
     if (liveSw) {
       const switchMap = new Map();
-      [...inits, ...actions, ...errs].forEach(s => {
+      [...inits, ...actions, ...errs, ...schedTrue, ...schedFalse].forEach(s => {
         if (s.switchName) switchMap.set(s.switchName, s.switchStateTopic || s.switchCmdTopic);
       });
       if (switchMap.size > 0) {
@@ -699,9 +715,19 @@
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     } else if (type === "action") {
       const dur = data?.duration || 0;
+      const h = Math.floor(dur / 3600);
+      const m = Math.floor((dur % 3600) / 60);
+      const s = dur % 60;
       row.innerHTML = `<select class="f-switch">${switchOptions(data?.switchCmdTopic || "")}</select>
         <select class="f-state"><option value="ON" ${data?.state === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.state !== "ON" ? "selected" : ""}>OFF</option></select>
-        <input type="number" class="f-duration" value="${dur}" min="0" placeholder="sec">
+        <div style="display:flex;gap:4px;align-items:center;">
+          <input type="number" class="f-dur-h" value="${h}" min="0" max="99" style="width:48px;text-align:center;padding:8px 4px;" oninput="if(this.value.length > 2) this.value = this.value.slice(0,2)">
+          <span style="font-size:13px;color:var(--ha-text-secondary);margin-right:4px;">h</span>
+          <input type="number" class="f-dur-m" value="${m}" min="0" max="59" style="width:48px;text-align:center;padding:8px 4px;" oninput="if(this.value.length > 2) this.value = this.value.slice(0,2)">
+          <span style="font-size:13px;color:var(--ha-text-secondary);margin-right:4px;">m</span>
+          <input type="number" class="f-dur-s" value="${s}" min="0" max="59" style="width:48px;text-align:center;padding:8px 4px;" oninput="if(this.value.length > 2) this.value = this.value.slice(0,2)">
+          <span style="font-size:13px;color:var(--ha-text-secondary);">s</span>
+        </div>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     } else if (type === "timeRange") {
       row.innerHTML = `<div class="ha-field" style="flex:1"><input type="time" class="f-start" value="${data?.start || ""}" placeholder=" "><label>Start</label></div>
@@ -741,7 +767,10 @@
     const actions = [...$("#auto-f-actions").querySelectorAll(".irr-form-row")].map(r => {
       const sel = r.querySelector(".f-switch");
       const opt = sel?.selectedOptions[0];
-      return { switchCmdTopic: sel?.value || "", switchStateTopic: opt?.dataset.state || "", switchName: opt?.dataset.name || "", state: r.querySelector(".f-state")?.value || "ON", duration: parseInt(r.querySelector(".f-duration")?.value || "0", 10) };
+      const h = parseInt(r.querySelector(".f-dur-h")?.value || "0", 10);
+      const m = parseInt(r.querySelector(".f-dur-m")?.value || "0", 10);
+      const s = parseInt(r.querySelector(".f-dur-s")?.value || "0", 10);
+      return { switchCmdTopic: sel?.value || "", switchStateTopic: opt?.dataset.state || "", switchName: opt?.dataset.name || "", state: r.querySelector(".f-state")?.value || "ON", duration: (h * 3600) + (m * 60) + s };
     });
 
     const timeRanges = [...$("#auto-f-times-list").querySelectorAll(".irr-form-row")].map(r => ({
@@ -883,6 +912,126 @@
   btnAdd?.addEventListener("click", () => openModal(null));
   $("#auto-modal-cancel")?.addEventListener("click", closeModal);
   $("#auto-modal-close")?.addEventListener("click", closeModal);
+
+  // ─── Analytics Modal ───
+  let _durationChart = null;
+  let _cyclesChart = null;
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest("#irr-btn-analytics");
+    if (btn) {
+      if (!_selectedId || !_autos[_selectedId]) return;
+      openAnalyticsModal(_autos[_selectedId]);
+    }
+  });
+
+  $("#auto-analytics-close")?.addEventListener("click", () => {
+    $("#auto-analytics-modal").classList.add("hidden");
+  });
+
+  $("#auto-analytics-modal")?.addEventListener("click", (e) => {
+    if (e.target === $("#auto-analytics-modal")) {
+      $("#auto-analytics-modal").classList.add("hidden");
+    }
+  });
+
+  function openAnalyticsModal(auto) {
+    $("#auto-analytics-modal").classList.remove("hidden");
+    
+    // Parse data
+    const runtime = auto.runtime || {};
+    const cycHist = runtime.cycles_history || {};
+    const durHist = runtime.duration_history || {};
+    
+    // Create an array of the last 7 days (including days with no data)
+    const dates = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().split('T')[0]);
+    }
+    
+    // Calculate summaries
+    let totalCycles = 0;
+    let totalSecs = 0;
+    const cycData = [];
+    const durData = [];
+    
+    dates.forEach(d => {
+      const c = cycHist[d] || 0;
+      const s = durHist[d] || 0;
+      totalCycles += c;
+      totalSecs += s;
+      cycData.push(c);
+      durData.push(Math.round(s / 60)); // Minutes
+    });
+    
+    // Format total time
+    const tH = Math.floor(totalSecs / 3600);
+    const tM = Math.floor((totalSecs % 3600) / 60);
+    $("#auto-analytics-total-time").textContent = tH > 0 ? `${tH}h ${tM}m` : `${tM}m`;
+    $("#auto-analytics-total-cycles").textContent = totalCycles;
+    
+    const lastRun = runtime.last_irrigated || "Never";
+    $("#auto-analytics-last-run").textContent = lastRun;
+    
+    // Render Charts
+    if (_durationChart) _durationChart.destroy();
+    if (_cyclesChart) _cyclesChart.destroy();
+    
+    const ctxDur = document.getElementById("analytics-chart-duration").getContext("2d");
+    const ctxCyc = document.getElementById("analytics-chart-cycles").getContext("2d");
+    
+    Chart.defaults.color = "rgba(255, 255, 255, 0.7)";
+    Chart.defaults.font.family = "'Roboto', sans-serif";
+    
+    _durationChart = new Chart(ctxDur, {
+      type: "line",
+      data: {
+        labels: dates,
+        datasets: [{
+          label: "Minutes",
+          data: durData,
+          borderColor: "#03a9f4",
+          backgroundColor: "rgba(3, 169, 244, 0.1)",
+          borderWidth: 2,
+          fill: true,
+          tension: 0.3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, grid: { color: "rgba(255, 255, 255, 0.05)" } },
+          x: { grid: { display: false } }
+        }
+      }
+    });
+    
+    _cyclesChart = new Chart(ctxCyc, {
+      type: "bar",
+      data: {
+        labels: dates,
+        datasets: [{
+          label: "Cycles",
+          data: cycData,
+          backgroundColor: "#4caf50",
+          borderRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: "rgba(255, 255, 255, 0.05)" } },
+          x: { grid: { display: false } }
+        }
+      }
+    });
+  }
 
   // Start live timer loop
   setInterval(updateLiveTimers, 1000);

@@ -19,3 +19,5 @@ Thumbs.db
 
 # Config & Keys
 settings.json
+cadio.db
+.encryption_key

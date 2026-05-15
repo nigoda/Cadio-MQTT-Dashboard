@@ -69,6 +69,9 @@
             background: var(--ha-primary);
             color: white;
         }
+        .ha-btn-primary.saved-success {
+            background: var(--ha-green) !important;
+        }
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
@@ -248,6 +251,9 @@
                                     <button id="irr-btn-reset" class="ha-btn-text"><span
                                             class="material-symbols-outlined" style="font-size:18px">restart_alt</span>
                                         Reset</button>
+                                    <button id="irr-btn-analytics" class="ha-btn-text"><span
+                                            class="material-symbols-outlined" style="font-size:18px; color:var(--ha-primary)">bar_chart</span>
+                                        Insights</button>
                                     <button id="irr-btn-edit" class="ha-btn-text"><span
                                             class="material-symbols-outlined" style="font-size:18px">edit</span>
                                         Edit</button>
@@ -442,6 +448,46 @@
                             style="width:auto;padding:10px 24px">Cancel</button>
                         <button id="auto-modal-save" class="ha-btn-primary" style="width:auto;padding:10px 24px">Save
                             Automation</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== Analytics Modal ===== -->
+            <div id="auto-analytics-modal" class="ha-detail-overlay hidden">
+                <div class="irr-modal" style="max-width: 800px; max-height: 90vh;">
+                    <div class="irr-modal-header">
+                        <h2 id="auto-analytics-title">7-Day Insights</h2>
+                        <button id="auto-analytics-close" class="ha-icon-btn"><span
+                                class="material-symbols-outlined">close</span></button>
+                    </div>
+                    <div class="irr-modal-body" style="padding-top: 10px;">
+                        <div style="display: flex; gap: 16px; margin-bottom: 24px;">
+                            <div class="ha-plan-card" style="flex:1; padding:16px;">
+                                <span class="material-symbols-outlined" style="font-size:28px; margin-bottom:8px;">water_drop</span>
+                                <h3 style="font-size:14px; margin-bottom:4px; color:var(--ha-text-secondary);">Total Watering Time</h3>
+                                <div id="auto-analytics-total-time" style="font-size:24px; font-weight:700; color:var(--ha-primary);">0m</div>
+                            </div>
+                            <div class="ha-plan-card" style="flex:1; padding:16px;">
+                                <span class="material-symbols-outlined" style="font-size:28px; margin-bottom:8px;">cycle</span>
+                                <h3 style="font-size:14px; margin-bottom:4px; color:var(--ha-text-secondary);">Total Cycles</h3>
+                                <div id="auto-analytics-total-cycles" style="font-size:24px; font-weight:700; color:var(--ha-primary);">0</div>
+                            </div>
+                            <div class="ha-plan-card" style="flex:1; padding:16px;">
+                                <span class="material-symbols-outlined" style="font-size:28px; margin-bottom:8px;">event_available</span>
+                                <h3 style="font-size:14px; margin-bottom:4px; color:var(--ha-text-secondary);">Last Run</h3>
+                                <div id="auto-analytics-last-run" style="font-size:18px; font-weight:600; color:var(--ha-primary); margin-top:6px;">Never</div>
+                            </div>
+                        </div>
+
+                        <h3 class="irr-form-heading" style="margin-top: 0;">Irrigation Duration (Minutes per Day)</h3>
+                        <div style="width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider);">
+                            <canvas id="analytics-chart-duration"></canvas>
+                        </div>
+                        
+                        <h3 class="irr-form-heading" style="margin-top: 24px;">Cycles Run per Day</h3>
+                        <div style="width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider);">
+                            <canvas id="analytics-chart-cycles"></canvas>
+                        </div>
                     </div>
                 </div>
             </div>

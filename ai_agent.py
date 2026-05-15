@@ -19,7 +19,7 @@ DEFAULT_LON = 77.67727845265588
 from dotenv import load_dotenv
 from google import genai
 
-from settings_manager import load_settings
+import db
 
 load_dotenv()
 
@@ -27,11 +27,20 @@ load_dotenv()
 _genai_client = None
 _current_api_key = None
 
-def refresh_client():
-    """Initializes or re-initializes the Gemini client based on current settings."""
+def refresh_client(user_email=None):
+    """Initializes or re-initializes the Gemini client based on DB settings."""
     global _genai_client, _current_api_key
     
-    settings = load_settings()
+    # Try to get settings from DB for the current user
+    settings = {"api_mode": "default", "custom_api_key": ""}
+    if user_email:
+        settings = db.get_api_settings(user_email)
+    else:
+        # Try last logged in user
+        last_user = db.get_last_user()
+        if last_user:
+            settings = db.get_api_settings(last_user["email"])
+    
     if settings.get("api_mode") == "custom" and settings.get("custom_api_key"):
         api_key = settings["custom_api_key"]
     else:
@@ -57,8 +66,7 @@ def refresh_client():
         _current_api_key = None
         return False
 
-# Initial load
-refresh_client()
+# Initial load handled by app.py's _preload_ai_agent
 
 def is_model_loading():
     """Gemini API doesn't need loading, always returns False."""

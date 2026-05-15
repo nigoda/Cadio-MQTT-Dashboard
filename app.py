@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 import re
+import atexit
 import math
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
@@ -50,11 +51,23 @@ MAX_HISTORY = 200               # datapoints kept per sensor topic
 mqtt_client = None
 mqtt_connected = False
 pending_subs = 0          # track outstanding SUBSCRIBE calls
+cadio_login_cached = False # track if we already fetched broker details
 
 # Irrigation Automation stores
 # ---------------------------------------------------------------------------
 automations: dict = {}          # auto_id -> automation dict
 automation_logs: dict = {}      # auto_id -> list of log entries
+
+# Per-socket user session tracking (for multi-user isolation)
+_user_sessions: dict = {}       # socket_sid -> email
+
+def _get_user_email():
+    """Get the email of the currently connected user from their socket session."""
+    from flask import request as ws_request
+    sid = getattr(ws_request, 'sid', None)
+    if sid and sid in _user_sessions:
+        return _user_sessions[sid]
+    return MQTT_USERNAME  # fallback to global for engine/watchdog threads
 MAX_AUTO_LOG = 200
 VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
 DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — device was already responding)
@@ -63,26 +76,56 @@ DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — devi
 _mqtt_last_connected_time = time.time()
 
 def _mqtt_watchdog():
-    """Background thread to ensure MQTT reconnects even if credentials expire."""
+    """Background thread to ensure MQTT reconnects after internet loss."""
     global mqtt_connected, _mqtt_last_connected_time
     logging.info("[WATCHDOG] MQTT monitor thread started")
+    _reconnect_backoff = 0  # 0 = not in reconnect mode
+    _last_loop_time = time.time()
+    
     while _engine_running:
         try:
+            now = time.time()
+            # Detect system sleep/wake (clock jump > 12s when sleep is 5s)
+            if (now - _last_loop_time) > 12:
+                logging.warning(f"[WATCHDOG] System sleep/wake detected (Gap: {int(now - _last_loop_time)}s). Forcing reconnection...")
+                mqtt_connected = False
+            _last_loop_time = now
+
             if mqtt_connected:
-                _mqtt_last_connected_time = time.time()
+                _mqtt_last_connected_time = now
+                _reconnect_backoff = 0  # reset backoff on successful connection
             else:
-                # If disconnected for more than 45 seconds, assume session/credentials expired
-                elapsed = time.time() - _mqtt_last_connected_time
-                if elapsed > 45:
-                    if MQTT_USERNAME and MQTT_PASSWORD:
-                        logging.warning(f"[WATCHDOG] MQTT disconnected for {int(elapsed)}s. Re-authenticating with Nivixsa...")
-                        # Reset timer to give the new attempt time to connect
-                        _mqtt_last_connected_time = time.time()
-                        # Calling start_mqtt without args uses existing globals
-                        socketio.start_background_task(start_mqtt)
+                elapsed = now - _mqtt_last_connected_time
+                if elapsed > 15 and MQTT_USERNAME and MQTT_PASSWORD:
+                    # Exponential backoff: 5s, 15s, 30s, 30s, 30s...
+                    delays = [5, 15, 30]
+                    delay = delays[min(_reconnect_backoff, len(delays) - 1)]
+                    logging.warning(
+                        f"[WATCHDOG] MQTT disconnected for {int(elapsed)}s. "
+                        f"Reconnect attempt #{_reconnect_backoff + 1} (next retry in {delay}s)..."
+                    )
+                    _reconnect_backoff += 1
+                    try:
+                        # Stop old client cleanly before creating a new one
+                        if mqtt_client is not None:
+                            try:
+                                mqtt_client.loop_stop(force=True)
+                                mqtt_client.disconnect()
+                            except Exception:
+                                pass
+                        start_mqtt()
+                    except Exception as e:
+                        logging.error(f"[WATCHDOG] Reconnect failed: {e}")
+                    
+                    # Update loop time after blocking start_mqtt
+                    _last_loop_time = time.time()
+                    # Wait the backoff delay before trying again
+                    _mqtt_last_connected_time = time.time()
+                    time.sleep(delay)
+                    continue
         except Exception as e:
             logging.error(f"[WATCHDOG] Error in MQTT Watchdog: {e}")
-        time.sleep(10)
+        time.sleep(5)
 
 MAX_RETRIES = 3
 BUFFER_SECONDS = 5              # default buffer between actions
@@ -109,6 +152,27 @@ def on_connect(client, userdata, flags, rc):
     if mqtt_connected:
         global _mqtt_last_connected_time
         _mqtt_last_connected_time = time.time()
+        # Reset failed reconnect counter on successful connection
+        try:
+            import db
+            db.unblock_user(MQTT_USERNAME)  # clears failed_reconnects and block flag
+        except Exception:
+            pass
+        
+    # Handle bad credentials — auto-block after MAX_FAILED_RECONNECTS
+    if rc == 4 and MQTT_USERNAME:
+        try:
+            import db
+            count = db.increment_failed_reconnects(MQTT_USERNAME)
+            logging.warning(f"[BLOCK] Bad credentials for '{MQTT_USERNAME}' (attempt {count}/{db.MAX_FAILED_RECONNECTS})")
+            if count >= db.MAX_FAILED_RECONNECTS:
+                db.block_user(MQTT_USERNAME)
+                client.loop_stop()
+                socketio.emit("mqtt_status", {"connected": False, "message": "Account blocked: too many failed logins. Please try again later."})
+                logging.error(f"[BLOCK] Account '{MQTT_USERNAME}' auto-blocked. Stopping reconnect attempts.")
+                return
+        except Exception as e:
+            logging.error(f"[BLOCK] Failed to update block status: {e}")
         
     status = codes.get(rc, f"Unknown ({rc})")
     logging.info(f"MQTT on_connect: rc={rc} -> {status}")
@@ -259,11 +323,16 @@ def _append_history(topic, value, ts):
 
 def cadio_login(email, password):
     """Call Nivixsa login API to get MQTT broker details. Returns True on success."""
-    global MQTT_BROKER, MQTT_PORT, DISCOVERY_PREFIX
+    global MQTT_BROKER, MQTT_PORT, DISCOVERY_PREFIX, cadio_login_cached
     try:
+        headers = {
+            "User-Agent": "Dalvik/2.1.0 (Linux; U; Android 12; Pixel 5 Build/SQ3A.220705.004)",
+            "Content-Type": "application/json"
+        }
         resp = requests.post(
             CADIO_LOGIN_URL,
             json={"email": email, "password": password},
+            headers=headers,
             timeout=15,
         )
         logging.info(f"Nivixsa login API status: {resp.status_code}")
@@ -271,15 +340,22 @@ def cadio_login(email, password):
             data = resp.json()
             logging.info(f"Nivixsa login response: {json.dumps(data, indent=2)}")
             mqtt_host = data.get("mqtt_host")
+            
+            # CADIO may return 200 with an error body for invalid accounts
+            # A valid login MUST contain mqtt_host
+            if not mqtt_host:
+                logging.warning(f"Nivixsa login rejected: 200 but no mqtt_host in response (invalid account?)")
+                return False
+            
             mqtt_port = data.get("mqtt_port")
             discovery_prefix = data.get("discovery_prefix")
-            if mqtt_host:
-                MQTT_BROKER = mqtt_host
+            MQTT_BROKER = mqtt_host
             if mqtt_port:
                 MQTT_PORT = int(mqtt_port)
             if discovery_prefix:
                 DISCOVERY_PREFIX = discovery_prefix
             logging.info(f"Nivixsa config: broker={MQTT_BROKER}, port={MQTT_PORT}, prefix={DISCOVERY_PREFIX}")
+            cadio_login_cached = True
             return True
         else:
             logging.warning(f"Nivixsa login failed: {resp.status_code} {resp.text}")
@@ -290,21 +366,36 @@ def cadio_login(email, password):
 
 
 def start_mqtt(email=None, password=None):
-    global mqtt_client, MQTT_USERNAME, MQTT_PASSWORD
-    if email:
+    global mqtt_client, MQTT_USERNAME, MQTT_PASSWORD, cadio_login_cached
+    if email and email != MQTT_USERNAME:
         MQTT_USERNAME = email
-    if password:
+        cadio_login_cached = False
+    if password and password != MQTT_PASSWORD:
         MQTT_PASSWORD = password
+        cadio_login_cached = False
+
     if mqtt_client is not None:
         try:
+            mqtt_client.loop_stop(force=True)
             mqtt_client.disconnect()
         except Exception:
             pass
 
-    # Call Nivixsa login API to get real MQTT broker details
-    if not cadio_login(MQTT_USERNAME, MQTT_PASSWORD):
-        socketio.emit("mqtt_status", {"connected": False, "message": "Bad credentials"})
-        return
+    # Call Nivixsa login API to get real MQTT broker details only if we haven't cached them
+    if not cadio_login_cached:
+        if not cadio_login(MQTT_USERNAME, MQTT_PASSWORD):
+            socketio.emit("mqtt_status", {"connected": False, "message": "Bad credentials"})
+            return
+
+    # Check if this account is blocked before attempting MQTT connection
+    try:
+        import db
+        if db.is_user_blocked(MQTT_USERNAME):
+            logging.warning(f"[BLOCK] Skipping MQTT connect for blocked account '{MQTT_USERNAME}'")
+            socketio.emit("mqtt_status", {"connected": False, "message": "Account blocked: too many failed logins. Please try again later."})
+            return
+    except Exception:
+        pass
 
     client_id = f"cadio-dashboard-{os.getpid()}"
     mqtt_client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
@@ -364,16 +455,55 @@ def handle_ws_connect():
         emit("device_update", {"topic": topic, **data})
 
 
+@socketio.on("disconnect")
+def handle_ws_disconnect():
+    sid = request.sid
+    _user_sessions.pop(sid, None)
+
+
 @socketio.on("login")
 def handle_login(data):
     email = data.get("email", "")
     password = data.get("password", "")
+    
+    # 1. Validate credentials with CADIO before saving anything
+    success = cadio_login(email, password)
+    if not success:
+        emit("mqtt_status", {"connected": False, "message": "Cadio Login Failed (Check email/password)"})
+        return
+        
+    # 2. Register this socket session to this user
+    _user_sessions[request.sid] = email
+    
+    # 3. Save valid user to DB (unblock if previously blocked — CADIO accepted credentials)
+    import db
+    db.save_user(email, password)
+    db.unblock_user(email)  # clear any previous block since CADIO just accepted these credentials
+    
+    # 4. Load their automations from DB into memory
+    _load_user_automations(email)
+    
+    # 5. Now connect MQTT
     start_mqtt(email, password)
 
 
 @socketio.on("logout")
 def handle_logout():
     global mqtt_client, mqtt_connected
+    user_email = _get_user_email()
+    # Save all automations to DB before clearing
+    try:
+        import db
+        for auto_id, auto in automations.items():
+            db.save_automation(user_email, auto)
+        # Clear last_login so auto-login won't trigger on next restart
+        db.clear_last_login(user_email)
+        logging.info(f"[DB] Saved {len(automations)} automations on logout")
+    except Exception as e:
+        logging.error(f"[DB] Logout save failed: {e}")
+    # Remove socket session
+    _user_sessions.pop(request.sid, None)
+    # Disconnect MQTT
     if mqtt_client is not None:
         try:
             mqtt_client.loop_stop()
@@ -382,6 +512,9 @@ def handle_logout():
             pass
         mqtt_client = None
     mqtt_connected = False
+    # Clear all in-memory state so engine stops processing
+    automations.clear()
+    automation_logs.clear()
     device_states.clear()
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
 
@@ -446,9 +579,9 @@ def _auto_log(auto_id, message, level="info"):
     logging.info(f"[AUTO {auto_id}] {message}")
 
 
-def _new_runtime():
-    """Return a fresh runtime block."""
-    return {
+def _new_runtime(old_rt=None):
+    """Return a fresh runtime block, preserving history if old_rt is provided."""
+    rt = {
         "state": "IDLE",
         "currentActionIndex": 0,
         "timerStart": None,
@@ -457,7 +590,13 @@ def _new_runtime():
         "pauseReason": None,
         "verifyStart": None,
         "bufferStart": None,
+        "currentInitIndex": 0,
     }
+    if old_rt:
+        for k in ["cycles_today", "cycles_date", "cycles_history", "duration_history", "last_irrigated"]:
+            if k in old_rt:
+                rt[k] = old_rt[k]
+    return rt
 
 
 def _get_switch_state(switch_topic):
@@ -910,17 +1049,28 @@ def engine_tick(auto):
                     rt["cycles_date"] = today_str
                     rt["cycles_today"] = 0
                 rt["cycles_today"] = rt.get("cycles_today", 0) + 1
-                cycles_today = rt["cycles_today"]
-                # Track history
+                
+                # Track history independently of the resettable cycles_today
                 if "cycles_history" not in rt:
                     rt["cycles_history"] = {}
-                rt["cycles_history"][today_str] = cycles_today
-                sorted_dates = sorted(rt["cycles_history"].keys())
-                while len(sorted_dates) > 7:
-                    del rt["cycles_history"][sorted_dates.pop(0)]
+                if "duration_history" not in rt:
+                    rt["duration_history"] = {}
+                    
+                rt["cycles_history"][today_str] = rt["cycles_history"].get(today_str, 0) + 1
+                
+                # Add total cycle duration to today's history
+                cycle_duration = sum(act.get("duration", 0) for act in auto.get("actions", []))
+                rt["duration_history"][today_str] = rt["duration_history"].get(today_str, 0) + cycle_duration
+
+                # Prune old history
+                for h_key in ["cycles_history", "duration_history"]:
+                    sorted_dates = sorted(rt[h_key].keys())
+                    while len(sorted_dates) > 7:
+                        del rt[h_key][sorted_dates.pop(0)]
                 rt["last_irrigated"] = _get_auto_now(auto).strftime("%Y-%m-%d %H:%M")
 
-                cycle_limit_reached = max_cycles > 0 and cycles_today >= max_cycles
+                cycles_today_val = rt.get("cycles_today", 0)
+                cycle_limit_reached = max_cycles > 0 and cycles_today_val >= max_cycles
 
                 # Can we loop?
                 sched = check_schedule(auto)
@@ -929,18 +1079,18 @@ def engine_tick(auto):
                     rt["stopAfterRevert"] = False
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Cycle #{cycles_today} done → Init → Loop to Action 1")
+                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Init → Loop to Action 1")
                 elif cycle_limit_reached:
                     rt["loopingToFirst"] = True
                     rt["stopAfterRevert"] = True
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Cycle #{cycles_today} done → Max cycles ({max_cycles}/day) reached, init → revert → stop")
+                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Max cycles ({max_cycles}/day) reached, init → revert → stop")
                 else:
                     rt["loopingToFirst"] = False
                     rt["state"] = "ACTION_REVERT"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Cycle #{cycles_today} done → ACTION_REVERT")
+                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → ACTION_REVERT")
             _emit_auto_update(auto)
             return
         # State enforcement: ensure switch is still in expected state
@@ -1209,12 +1359,21 @@ def _engine_loop():
     global _engine_running
     _engine_running = True
     logging.info("[ENGINE] Automation engine started")
+    _last_db_save = time.time()
     while _engine_running:
         for auto_id, auto in list(automations.items()):
             try:
                 engine_tick(auto)
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id}: {e}")
+        # Periodic DB save every 60 seconds
+        if time.time() - _last_db_save > 60:
+            try:
+                import db
+                db.save_all_runtimes(automations)
+            except Exception as e:
+                logging.error(f"[ENGINE] Periodic DB save failed: {e}")
+            _last_db_save = time.time()
         time.sleep(ENGINE_INTERVAL)
     logging.info("[ENGINE] Automation engine stopped")
 
@@ -1332,7 +1491,7 @@ def _run_ai_for_automation(auto_id):
     _ai_running_set.add(auto_id)
     
     try:
-        from ai_agent import get_weather_data, build_automation_context, get_ai_schedule_decision, is_model_loaded, is_model_loading
+        from ai_agent import get_weather_data, build_automation_context, get_ai_schedule_decision, is_model_loaded, is_model_loading, refresh_client
     except ImportError as e:
         logging.error(f"[AI-SCHEDULER] Could not import ai_agent module: {e}")
         auto = automations.get(auto_id)
@@ -1352,6 +1511,16 @@ def _run_ai_for_automation(auto_id):
         _ai_running_set.discard(auto_id)
         return
 
+    # Ensure the AI client is loaded with THIS automation's owner's API key
+    owner_email = auto.get("_owner_email", MQTT_USERNAME)
+    refresh_client(owner_email)
+    
+    if not is_model_loaded():
+        _auto_log(auto_id, "AI skipped: AI Model not loaded or API key invalid.", level="error")
+        _emit_auto_update(auto)
+        _ai_running_set.discard(auto_id)
+        return
+
     lat = sched.get("lat")
     lon = sched.get("lon")
     if not lat or not lon:
@@ -1361,7 +1530,13 @@ def _run_ai_for_automation(auto_id):
         return
 
     logging.info(f"[AI-SCHEDULER] Running AI for '{auto.get('name', auto_id)}'")
-    _auto_log(auto_id, "🤖 AI Agent starting...")
+    try:
+        import db as _db
+        _api_settings = _db.get_api_settings(owner_email)
+        _key_label = "personal" if _api_settings.get("api_mode") == "custom" else "shared"
+    except Exception:
+        _key_label = "shared"
+    _auto_log(auto_id, f"🤖 ({_key_label}) AI Agent starting...")
     _emit_auto_update(auto) # force UI update to show log
 
     try:
@@ -1481,14 +1656,14 @@ def handle_get_automations():
 
 
 # ---------------------------------------------------------------------------
-# API Settings events
+# API Settings events (per-user, stored encrypted in DB)
 # ---------------------------------------------------------------------------
-from settings_manager import load_settings, save_settings
 from ai_agent import refresh_client
 
 @socketio.on("get_api_settings")
 def handle_get_api_settings():
-    settings = load_settings()
+    import db
+    settings = db.get_api_settings(_get_user_email())
     # Mask key for safety
     safe_settings = copy.deepcopy(settings)
     if safe_settings.get("custom_api_key"):
@@ -1498,16 +1673,29 @@ def handle_get_api_settings():
 
 @socketio.on("update_api_settings")
 def handle_update_api_settings(data):
-    current = load_settings()
+    import db
+    import copy
+    user_email = _get_user_email()
+    current = db.get_api_settings(user_email)
     
-    # If key is masked (starts with ****), don't update it unless it changed
+    # If key is masked (contains *), keep the old one
     new_key = data.get("custom_api_key", "")
-    if new_key.startswith("****") or "*" in new_key:
-        data["custom_api_key"] = current.get("custom_api_key", "")
+    if "*" in new_key:
+        new_key = current.get("custom_api_key", "")
     
-    save_settings(data)
-    refresh_client()
-    handle_get_api_settings() # send back updated/masked settings
+    api_mode = data.get("api_mode", "default")
+    db.save_api_settings(user_email, api_mode, new_key)
+    
+    refresh_client(user_email)
+    
+    # Emit the updated settings directly back to the client
+    updated_settings = db.get_api_settings(user_email)
+    safe_settings = copy.deepcopy(updated_settings)
+    if safe_settings.get("custom_api_key"):
+        key = safe_settings["custom_api_key"]
+        safe_settings["custom_api_key"] = key[:4] + "*" * (len(key)-8) + key[-4:] if len(key) > 8 else "****"
+    emit("api_settings", safe_settings)
+    
     emit("log_message", {"entity": "System", "state": "API Settings Updated"})
 
 
@@ -1529,11 +1717,18 @@ def handle_create_automation(data):
         "maxCyclesPerDay": data.get("maxCyclesPerDay", 0),
         "runtime": _new_runtime(),
     }
+    auto["_owner_email"] = _get_user_email()
     automations[auto_id] = auto
     automation_logs[auto_id] = []
     _auto_log(auto_id, f"Automation '{auto['name']}' created")
     _emit_auto_update(auto)
     emit("automation_created", {"id": auto_id})
+    # Persist to DB
+    try:
+        import db
+        db.save_automation(_get_user_email(), auto)
+    except Exception as e:
+        logging.error(f"[DB] Failed to save new automation: {e}")
     start_engine()
 
 
@@ -1594,6 +1789,12 @@ def handle_update_automation(data):
 
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")
     _emit_auto_update(auto)
+    # Persist to DB
+    try:
+        import db
+        db.save_automation(_get_user_email(), auto)
+    except Exception as e:
+        logging.error(f"[DB] Failed to save updated automation: {e}")
     
     # Run AI immediately if enabled upon save
     # (The AI runner itself will now handle safety if a run is already in progress)
@@ -1622,7 +1823,7 @@ def handle_toggle_automation(data):
     auto = automations[auto_id]
     auto["status"] = status
     if status == "ON":
-        auto["runtime"] = _new_runtime()
+        auto["runtime"] = _new_runtime(auto.get("runtime", {}))
         auto["runtime"]["state"] = "INIT_SET"
         auto["runtime"]["retryCount"] = 0
         _auto_log(auto_id, "Turned ON → INIT_SET")
@@ -1632,10 +1833,16 @@ def handle_toggle_automation(data):
         if sched.get("ai_enabled"):
             socketio.start_background_task(_run_ai_for_automation, auto_id)
     else:
-        auto["runtime"] = _new_runtime()
+        auto["runtime"] = _new_runtime(auto.get("runtime", {}))
         _auto_log(auto_id, "Turned OFF → IDLE")
     _emit_auto_update(auto)
     start_engine()
+    # Persist to DB
+    try:
+        import db
+        db.save_automation(_get_user_email(), auto)
+    except Exception as e:
+        logging.error(f"[DB] Failed to save toggle state: {e}")
 
 
 @socketio.on("reset_automation")
@@ -1645,14 +1852,36 @@ def handle_reset_automation(data):
     if auto_id not in automations:
         return
     auto = automations[auto_id]
+    rt = auto.get("runtime", {})
+    now = time.time()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    # If currently running, capture the partial duration for insights before resetting
+    if rt.get("state") == "ACTION_RUN" and rt.get("timerStart"):
+        elapsed = now - rt["timerStart"]
+        if "duration_history" not in rt:
+            rt["duration_history"] = {}
+        rt["duration_history"][today_str] = rt["duration_history"].get(today_str, 0) + elapsed
+        _auto_log(auto_id, f"Reset: Added partial duration ({int(elapsed)}s) to history")
+
     status = auto.get("status", "OFF")
-    auto["runtime"] = _new_runtime()
+    auto["runtime"] = _new_runtime(auto.get("runtime", {}))
+    # Explicitly set cycles_today to 0 on reset so the row display restarts
+    auto["runtime"]["cycles_today"] = 0
     if status == "ON":
-        auto["runtime"]["state"] = "WAIT_CONDITION"
-        _auto_log(auto_id, "RESET → WAIT_CONDITION")
+        auto["runtime"]["state"] = "INIT_SET"
+        auto["runtime"]["retryCount"] = 0
+        auto["runtime"]["currentInitIndex"] = 0
+        _auto_log(auto_id, "RESET → INIT_SET (Restarting from initialization)")
     else:
         _auto_log(auto_id, "RESET → IDLE")
     _emit_auto_update(auto)
+    # Persist to DB
+    try:
+        import db
+        db.save_automation(_get_user_email(), auto)
+    except Exception as e:
+        logging.error(f"[DB] Failed to save reset state: {e}")
 
 
 @socketio.on("delete_automation")
@@ -1665,6 +1894,12 @@ def handle_delete_automation(data):
         automation_logs.pop(auto_id, None)
         socketio.emit("automation_deleted", {"id": auto_id})
         logging.info(f"Automation '{name}' deleted")
+        # Remove from DB
+        try:
+            import db
+            db.delete_automation(auto_id)
+        except Exception as e:
+            logging.error(f"[DB] Failed to delete automation: {e}")
 
 
 @socketio.on("get_automation_logs")
@@ -1679,11 +1914,58 @@ def handle_get_automation_logs(data):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _load_user_automations(email):
+    """Load a user's automations from DB into the in-memory dict."""
+    global automations, automation_logs
+    try:
+        import db
+        saved = db.load_automations(email)
+        automations.clear()
+        automation_logs.clear()
+        for auto in saved:
+            auto_id = auto["id"]
+            auto["_owner_email"] = email
+            automations[auto_id] = auto
+            # Load logs from DB
+            logs = db.get_logs(auto_id, 200)
+            automation_logs[auto_id] = [{"ts": l["ts"], "msg": l["message"], "level": "info"} for l in logs]
+        logging.info(f"[DB] Loaded {len(saved)} automations for {email}")
+    except Exception as e:
+        logging.error(f"[DB] Failed to load automations for {email}: {e}")
+
+
+def _save_all_to_db():
+    """Save all current automations to DB (used on shutdown)."""
+    try:
+        import db
+        # Use global MQTT_USERNAME since this runs outside socket context
+        for auto_id, auto in automations.items():
+            db.save_automation(MQTT_USERNAME, auto)
+        logging.info(f"[DB] Saved {len(automations)} automations on shutdown")
+    except Exception as e:
+        logging.error(f"[DB] Shutdown save failed: {e}")
+
+
 if __name__ == "__main__":
     print("\n  Nivixsa Smart Irrigation Dashboard")
     print("  Open http://localhost:5000 in your browser\n")
+    # Initialize database
+    import db
+    db.init_db()
+    # Register shutdown hook to save state
+    atexit.register(_save_all_to_db)
     # Auto-connect MQTT on startup if credentials are set via environment variables
     if MQTT_USERNAME and MQTT_PASSWORD:
+        _load_user_automations(MQTT_USERNAME)
         start_mqtt()
+    else:
+        # Try to auto-login from last saved user
+        last_user = db.get_last_user()
+        if last_user and last_user.get("password"):
+            logging.info(f"[DB] Auto-login from saved user: {last_user['email']}")
+            _load_user_automations(last_user["email"])
+            start_mqtt(last_user["email"], last_user["password"])
+        elif last_user:
+            logging.info(f"[DB] Found user {last_user['email']} but password not recoverable. Manual login required.")
     start_engine()
     socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)

@@ -24,7 +24,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         
         updateUI(currentMode);
-        updateSaveButtonState(false);
+        
+        // Only show "Saved" state if there is actually a key present
+        if (data.custom_api_key) {
+            updateSaveButtonState(false);
+        } else {
+            updateSaveButtonState(true);
+        }
     });
 
     function updateUI(mode) {
@@ -47,15 +53,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateSaveButtonState(isDirty) {
-        if (isDirty) {
-            btnSave.style.backgroundColor = 'var(--ha-primary)';
-            btnSave.textContent = 'Save Personal Key';
+        const val = inputKey.value.trim();
+        // If it's dirty OR the input is currently empty, show the active "Save" state
+        if (isDirty || !val) {
+            btnSave.classList.remove('saved-success');
+            btnSave.textContent = (!val && originalKey) ? 'Remove Personal Key' : 'Save Personal Key';
             btnSave.style.opacity = '1';
             btnSave.style.pointerEvents = 'auto';
         } else {
-            btnSave.style.backgroundColor = 'var(--ha-green)';
+            btnSave.classList.add('saved-success');
             btnSave.textContent = 'Key Saved ✓';
-            btnSave.style.opacity = '0.8';
+            btnSave.style.opacity = '0.9';
             btnSave.style.pointerEvents = 'none';
         }
     }
@@ -95,7 +103,14 @@ document.addEventListener('DOMContentLoaded', () => {
     btnSave.onclick = () => {
         const keyVal = inputKey.value.trim();
         if (!keyVal) {
-            showToast('Please paste your Gemini API key', 'error');
+            if (confirm('Are you sure you want to remove your Personal API Key and switch back to Shared AI?')) {
+                socket.emit('update_api_settings', {
+                    api_mode: 'default',
+                    custom_api_key: ''
+                });
+                showToast('Personal Key Removed');
+                updateUI('default');
+            }
             return;
         }
 

@@ -89,10 +89,15 @@
     }
     if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
       const msg = data.message.toLowerCase();
-      if (msg.includes("bad credentials") || msg.includes("not authorised")) {
-        loginError.textContent = "Invalid email or password";
+      if (msg.includes("account blocked")) {
+        loginError.textContent = "⚠️ Your CADIO account has been temporarily blocked. Please wait and try again later.";
+        loginError.style.color = "#e67e22";
+      } else if (msg.includes("bad credentials") || msg.includes("not authorised") || msg.includes("cadio login failed")) {
+        loginError.textContent = "❌ Invalid email or password. Please check your CADIO credentials.";
+        loginError.style.color = "";
       } else {
         loginError.textContent = data.message;
+        loginError.style.color = "";
       }
       loginError.classList.remove("hidden");
     }
@@ -1218,6 +1223,8 @@
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 1500);
   }
+  window.showToast = showToast;
+
 
   // Close panel
   function closeDetailPanel() {
