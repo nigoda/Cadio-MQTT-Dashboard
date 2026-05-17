@@ -4,6 +4,8 @@
 (function () {
   "use strict";
 
+  document.addEventListener("DOMContentLoaded", () => {
+
   // -------------------------------------------------------
   // State
   // -------------------------------------------------------
@@ -1062,23 +1064,49 @@
     });
   });
 
-  // Logout
-  const btnLogout = $("#btn-logout");
-  if (btnLogout) {
-    btnLogout.addEventListener("click", () => {
-      const msg = "Are you sure you want to logout?\n\n⚠️ This will log you out of ALL devices and STOP all running automations until you log back in.";
-      if (!confirm(msg)) return;
+  // Logout System
+  const btnLogout = document.getElementById("btn-logout");
+  const confirmModal = document.getElementById("ha-confirm-modal");
+  const confirmBtnLogout = document.getElementById("confirm-logout");
+  const confirmBtnCancel = document.getElementById("confirm-cancel");
 
-      socket.emit("logout");
-      localStorage.removeItem("cadio_email");
-      localStorage.removeItem("cadio_pass");
-      appEl.classList.add("hidden");
-      loginOverlay.classList.remove("hidden");
-      loginPass.value = "";
-      loginError.classList.add("hidden");
-      if (statusText) statusText.textContent = "Disconnected";
-      [statusDot, statusDotMob].forEach((d) => { if (d) d.classList.remove("connected"); });
-    });
+  if (btnLogout && confirmModal) {
+    btnLogout.onclick = () => {
+      confirmModal.style.display = "flex";
+      setTimeout(() => confirmModal.classList.add("active"), 10);
+    };
+
+    if (confirmBtnCancel) {
+      confirmBtnCancel.onclick = () => {
+        confirmModal.classList.remove("active");
+        setTimeout(() => { confirmModal.style.display = "none"; }, 300);
+      };
+    }
+
+    if (confirmBtnLogout) {
+      confirmBtnLogout.onclick = () => {
+        // 1. Tell the server to kill all sessions
+        if (socket) socket.emit("logout");
+
+        // 2. Clear local data
+        localStorage.removeItem("cadio_email");
+        localStorage.removeItem("cadio_pass");
+        
+        // 3. UI Cleanup
+        appEl.classList.add("hidden");
+        loginOverlay.classList.remove("hidden");
+        loginPass.value = "";
+        loginError.classList.add("hidden");
+        if (statusText) statusText.textContent = "Disconnected";
+        
+        // 4. Close modal
+        confirmModal.classList.remove("active");
+        confirmModal.style.display = "none";
+        
+        // 5. Final Reset
+        location.reload(); 
+      };
+    }
   }
 
   // -------------------------------------------------------
@@ -1744,4 +1772,5 @@ func main() {
   const _origRenderOverview = renderOverviewByDevice;
   const _origRenderTypeTab = renderTypeTabByDevice;
 
+  });
 })();

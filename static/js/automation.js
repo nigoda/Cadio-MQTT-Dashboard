@@ -3,6 +3,7 @@
    ========================================== */
 (function () {
   "use strict";
+  document.addEventListener("DOMContentLoaded", () => {
   const socket = window.socket;
   const $ = (s) => document.querySelector(s);
   const escHtml = (s) => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
@@ -1035,4 +1036,5 @@
 
   // Start live timer loop
   setInterval(updateLiveTimers, 1000);
+  });
 })();

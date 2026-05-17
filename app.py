@@ -296,6 +296,18 @@ _ai_running_set: set = set()    # track which automations currently have AI runn
 # MQTT handlers
 # ---------------------------------------------------------------------------
 
+# Track topics we've already subscribed to (avoid duplicate subscriptions per session)
+_subscribed_topics: dict = {}   # email -> set of subscribed topics
+
+SUPPORTED_COMPONENTS = [
+    "alarm_control_panel", "binary_sensor", "button", "camera",
+    "climate", "cover", "device_automation", "device_tracker",
+    "event", "fan", "humidifier", "image", "lawn_mower", "light",
+    "lock", "notify", "number", "scene", "siren", "select",
+    "sensor", "switch", "tag", "text", "update", "vacuum",
+    "valve", "water_heater",
+]
+
 def on_connect(client, userdata, flags, rc):
     owner_email = userdata.get("owner_email")
     sess = session_mgr.get_session(owner_email)
@@ -304,9 +316,21 @@ def on_connect(client, userdata, flags, rc):
             sess.mqtt_connected = True
             sess._mqtt_last_connected_time = time.time()
         logging.info(f"[MQTT:{owner_email}] Connected successfully")
-        # Subscribe to discovery
         if sess:
-            client.subscribe(f"{sess.discovery_prefix}/#")
+            prefix = sess.discovery_prefix
+            # Subscribe to specific component patterns (matching working branch)
+            topics = []
+            for comp in SUPPORTED_COMPONENTS:
+                topics.append((f"{prefix}/{comp}/+/+/config", 0))
+                topics.append((f"{prefix}/{comp}/+/+/state", 0))
+                topics.append((f"{prefix}/{comp}/+/+/set", 0))
+            topics.append((f"{prefix}/device/+/+/config", 0))
+            topics.append((f"{prefix}/status", 0))
+            
+            _subscribed_topics[owner_email] = set(t for t, _ in topics)
+            for t, qos in topics:
+                client.subscribe(t, qos)
+            logging.info(f"[MQTT:{owner_email}] Subscribing to {len(topics)} topics (prefix={prefix})")
             socketio.emit("mqtt_status", {"connected": True, "message": "Connected"}, room=sess.room)
     else:
         logging.error(f"[MQTT:{owner_email}] Connection failed with code {rc}")
@@ -321,6 +345,29 @@ def on_disconnect(client, userdata, rc):
         socketio.emit("mqtt_status", {"connected": False, "message": "Disconnected"}, room=sess.room)
     logging.warning(f"[MQTT:{owner_email}] Disconnected")
 
+def _auto_subscribe_from_config(client, owner_email, config):
+    """Parse HA discovery config and subscribe to state/availability topics."""
+    topics_to_sub = set()
+    for key in ("state_topic", "command_topic", "availability_topic",
+                "brightness_state_topic", "color_temp_state_topic",
+                "rgb_state_topic", "json_attributes_topic"):
+        if key in config and isinstance(config[key], str):
+            topics_to_sub.add(config[key])
+
+    # Also handle availability list
+    if "availability" in config and isinstance(config["availability"], list):
+        for avail in config["availability"]:
+            if isinstance(avail, dict) and "topic" in avail:
+                topics_to_sub.add(avail["topic"])
+
+    already = _subscribed_topics.get(owner_email, set())
+    new_topics = topics_to_sub - already
+    for t in new_topics:
+        client.subscribe(t, 0)
+        already.add(t)
+        logging.info(f"[MQTT:{owner_email}] Auto-subscribed to: {t}")
+    _subscribed_topics[owner_email] = already
+
 def on_message(client, userdata, msg):
     owner_email = userdata.get("owner_email")
     sess = session_mgr.get_session(owner_email)
@@ -328,40 +375,62 @@ def on_message(client, userdata, msg):
 
     try:
         topic = msg.topic
-        payload_raw = msg.payload.decode()
+        try:
+            payload_raw = msg.payload.decode("utf-8")
+        except UnicodeDecodeError:
+            payload_raw = msg.payload.hex()
+
         try:
             payload = json.loads(payload_raw)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, ValueError):
             payload = payload_raw
 
+        now = datetime.utcnow().isoformat()
+
         # 1. Store state
-        sess.device_states[topic] = {"payload": payload, "ts": time.time()}
+        sess.device_states[topic] = {"payload": payload, "raw": payload_raw, "ts": now}
         
-        # 2. Handle Discovery (Home Assistant Style)
-        if "/config" in topic:
-            # We don't need to do much here since the frontend handles discovery 
-            # by listening to the broadcast, but we can log it.
-            pass
+        # 2. If discovery config, auto-subscribe to state/availability topics
+        if isinstance(payload, dict) and topic.endswith("/config"):
+            _auto_subscribe_from_config(client, owner_email, payload)
 
         # 3. Handle Sensor History (if payload is numeric)
-        try:
-            val = float(payload)
-            if topic not in sess.sensor_history:
-                sess.sensor_history[topic] = []
-            sess.sensor_history[topic].append({"ts": time.time(), "value": val})
-            if len(sess.sensor_history[topic]) > MAX_HISTORY:
-                sess.sensor_history[topic].pop(0)
-        except (ValueError, TypeError):
-            pass
+        if isinstance(payload, (int, float)):
+            _append_sensor_history(sess, topic, payload, now)
+        elif isinstance(payload, dict):
+            for key in ("temperature", "humidity", "temp", "hum", "value", "state",
+                        "power", "brightness", "color_temp", "battery", "rssi",
+                        "voltage", "current"):
+                if key in payload and isinstance(payload[key], (int, float)):
+                    sub_topic = f"{topic}/{key}"
+                    _append_sensor_history(sess, sub_topic, payload[key], now)
 
         # 4. Broadcast to user's private room
-        socketio.emit("device_update", {"topic": topic, "payload": payload}, room=sess.room)
+        socketio.emit("device_update", {
+            "topic": topic,
+            "payload": payload,
+            "raw": payload_raw,
+            "ts": now,
+        }, room=sess.room)
         
     except Exception as e:
         logging.error(f"[MQTT:{owner_email}] Error: {e}")
 
+def _append_sensor_history(sess, topic, value, ts):
+    """Append a numeric value to session sensor history."""
+    if topic not in sess.sensor_history:
+        sess.sensor_history[topic] = []
+    sess.sensor_history[topic].append({"ts": ts, "value": value})
+    if len(sess.sensor_history[topic]) > MAX_HISTORY:
+        sess.sensor_history[topic] = sess.sensor_history[topic][-MAX_HISTORY:]
+
 def on_subscribe(client, userdata, mid, granted_qos):
-    pass
+    owner_email = userdata.get("owner_email")
+    rejected = all(q == 128 for q in granted_qos)
+    if rejected:
+        logging.warning(f"[MQTT:{owner_email}] Subscription REJECTED: mid={mid}")
+    else:
+        logging.debug(f"[MQTT:{owner_email}] Subscription OK: mid={mid}")
 
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@nivixsa.com")
@@ -545,11 +614,6 @@ def handle_admin_team_delete(data):
     import db
     db.delete_admin(email)
     _emit_admin_stats()
-def handle_join_admin():
-    if session.get("admin_email"):
-        join_room("admin_room")
-        logging.info(f"[WS] Admin {session.get('admin_email')} joined monitoring room (Level {session.get('admin_level')})")
-        _emit_admin_stats()
 
 @app.route("/admin/impersonate/<email>")
 def admin_impersonate(email):
@@ -652,25 +716,6 @@ def handle_ws_connect():
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
 
 
-@socketio.on("logout")
-def handle_logout():
-    """Handles global logout for a user across all devices."""
-    sid = request.sid
-    email = _user_sessions.get(sid)
-    if not email: return
-    
-    logging.info(f"[SESSION] Global logout initiated for {email}")
-    
-    # 1. Notify all SIDs for this user to logout
-    sids = [s for s, e in list(_user_sessions.items()) if e.lower() == email.lower()]
-    for s in sids:
-        emit("force_logout", {"message": "You have been logged out globally."}, room=s)
-        _user_sessions.pop(s, None)
-    
-    # 2. Kill the MQTT session
-    session_mgr.remove_session(email)
-    _emit_admin_stats()
-
 @socketio.on("disconnect")
 def handle_ws_disconnect():
     sid = request.sid
@@ -716,8 +761,16 @@ def handle_login(data):
     if not success:
         emit("mqtt_status", {"connected": False, "message": "Cadio Login Failed (Check email/password)"})
         return
+    
+    # 4. Save valid user to DB FIRST (needed for foreign key on sessions table)
+    db.save_user(email, password)
+    db.unblock_user(email)
+    
+    # 5. Create a database-backed session token for global invalidation
+    session_token = db.create_user_session(email, request.headers.get("User-Agent", ""))
+    session["user_session_token"] = session_token
         
-    # 4. Register socket and join user's private room
+    # 6. Register socket and join user's private room
     _user_sessions[request.sid] = email
     sess = session_mgr.create_session(
         email, password,
@@ -726,14 +779,10 @@ def handle_login(data):
     session_mgr.register_socket(request.sid, email)
     join_room(sess.room)
     
-    # 5. Save valid user to DB
-    db.save_user(email, password)
-    db.unblock_user(email)
-    
-    # 5. Load automations into the session
+    # 7. Load automations into the session
     _load_session_automations(sess, email)
     
-    # 6. Connect session's MQTT client (if not already connected)
+    # 8. Connect session's MQTT client (if not already connected)
     if not sess.mqtt_connected:
         sess.start_mqtt(socketio)
     else:
@@ -742,7 +791,7 @@ def handle_login(data):
         for topic, data in sess.device_states.items():
             emit("device_update", {"topic": topic, **data})
     
-    # 7. Send automation state to this client
+    # 9. Send automation state to this client
     for auto_id, auto in sess.automations.items():
         safe = copy.deepcopy(auto)
         logs = sess.automation_logs.get(auto_id, [])[:20]
@@ -754,27 +803,40 @@ def handle_login(data):
 @socketio.on("logout")
 def handle_logout():
     user_email = _get_user_email()
-    session = session_mgr.get_session(user_email)
+    user_session = session_mgr.get_session(user_email)
     
     # Save automations to DB
-    if session:
+    if user_session:
         try:
             import db
-            for auto_id, auto in session.automations.items():
+            for auto_id, auto in user_session.automations.items():
                 db.save_automation(user_email, auto)
             db.clear_last_login(user_email)
-            logging.info(f"[SESSION:{user_email}] Saved {len(session.automations)} automations on logout")
+            logging.info(f"[SESSION:{user_email}] Saved {len(user_session.automations)} automations on logout")
         except Exception as e:
             logging.error(f"[SESSION:{user_email}] Logout save failed: {e}")
     
-    # Unregister socket
-    _user_sessions.pop(request.sid, None)
-    if session:
+    # Global session invalidation: delete ALL DB sessions for this user
+    import db
+    db.delete_all_user_sessions(user_email)
+    session.pop("user_session_token", None)
+    
+    # Broadcast force_logout to ALL sockets of this user (other tabs/devices)
+    sids = [s for s, e in list(_user_sessions.items()) if e and e.lower() == (user_email or "").lower()]
+    for s in sids:
+        if s != request.sid:
+            socketio.emit("force_logout", {
+                "email": user_email,
+                "message": "Your session has been logged out from another device."
+            }, room=s)
+    
+    # Unregister ALL sockets for this user
+    for s in sids:
+        _user_sessions.pop(s, None)
+    if user_session:
         session_mgr.unregister_socket(request.sid)
-        leave_room(session.room)
-        # Only tear down if no other tabs are connected
-        if not session.has_sockets:
-            session_mgr.remove_session(user_email)
+        leave_room(user_session.room)
+        session_mgr.remove_session(user_email)
     
     _emit_admin_stats()
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
@@ -960,6 +1022,17 @@ def evaluate_condition(auto):
 def check_schedule(auto):
     """Check if current day+time falls within the schedule window.
     Returns True if no schedule is defined."""
+    # Check if max cycles per day limit is reached
+    max_cycles = auto.get("maxCyclesPerDay", 0)
+    if max_cycles > 0:
+        rt = auto.get("runtime", {})
+        state = rt.get("state", "IDLE")
+        if state not in ("INIT_SET", "INIT_VERIFY_INDIVIDUAL", "INIT_VERIFY_ALL", "ACTION_SET", "ACTION_RUN", "ACTION_DRIFT_VERIFY", "OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY", "BUFFER", "BUFFER_DRIFT_VERIFY", "ACTION_REVERT", "ACTION_VERIFY_REVERT", "ERROR_SET", "ERROR_VERIFY", "ERROR"):
+            today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
+            cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
+            if cycles_today >= max_cycles:
+                return False
+
     sched = auto.get("schedule")
     if not sched:
         return True
