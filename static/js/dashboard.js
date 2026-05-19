@@ -148,6 +148,8 @@
     }
     if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
       const msg = data.message.toLowerCase();
+      if (msg === "not connected") return; // Ignore initial socket handshake on login screen
+
       if (msg.includes("account blocked")) {
         loginError.textContent = "⚠️ Your CADIO account has been temporarily blocked. Please wait and try again later.";
         loginError.style.color = "#e67e22";
