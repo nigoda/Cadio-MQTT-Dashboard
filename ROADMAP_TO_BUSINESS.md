@@ -29,6 +29,23 @@ This document outlines the technical steps required to transform your private da
 
 ---
 
+## Phase 2.1: Custom AI Thresholds & Guidelines (The Agronomist Customization)
+*Goal: Allow users to customize AI rules and weather thresholds, with AI-generated templates.*
+
+- [ ] **AI Configuration UI**:
+    - [ ] Add an AI Settings Gear icon (`⚙️`) next to the AI Agronomist toggle.
+    - [ ] Expandable panel with numeric inputs for Rain, ET0, Temperature, and Wind speed thresholds.
+    - [ ] Custom rules text area for soil/plant conditions.
+- [ ] **AI Recommendation Generator**:
+    - [ ] "Suggest via AI" button that calls Gemini on the backend.
+    - [ ] Predict optimal numeric thresholds and natural rules based on the zone Name & Description.
+    - [ ] Auto-populate fields on request for user customization.
+- [ ] **Dynamic Backend Prompt Builder**:
+    - [ ] Modify `ai_agent.py` to accept and enforce dynamic parameters in the Gemini system guidelines.
+    - [ ] Store parameters in `config_json` inside the `automations` SQLite table.
+
+---
+
 ## Phase 3: Subscription & Payments (The Revenue)
 *Goal: Start charging for the service.*
 

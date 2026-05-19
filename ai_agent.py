@@ -77,9 +77,29 @@ def is_model_loaded():
     """Returns True if the API key is configured and client is ready."""
     return _genai_client is not None
 
+_weather_cache = {}
+_weather_cache_lock = threading.Lock()
+
 def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=7):
     """Fetches past weather + 7-day forecast from Open-Meteo (No API Key required).
     Returns a dict with 'today', 'past' (last N days), and 'forecast' (next 7 days)."""
+    # Round coordinates to 3 decimal places to group nearby requests (approx 110m precision)
+    try:
+        lat_key = round(float(lat), 3)
+        lon_key = round(float(lon), 3)
+    except (ValueError, TypeError):
+        lat_key = lat
+        lon_key = lon
+        
+    cache_key = (lat_key, lon_key, past_days)
+    
+    with _weather_cache_lock:
+        if cache_key in _weather_cache:
+            entry = _weather_cache[cache_key]
+            if datetime.now() - entry["timestamp"] < timedelta(hours=1):
+                logging.info(f"[WEATHER-CACHE] Cache hit for lat={lat_key}, lon={lon_key}")
+                return entry["data"]
+
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
@@ -151,11 +171,19 @@ def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=7):
             else:
                 forecast[f"{day_name} ({date_str})"] = entry
                 
-        return {
+        result = {
             "today": today_data,
             "past_days": past,
             "forecast": forecast
         }
+        
+        with _weather_cache_lock:
+            _weather_cache[cache_key] = {
+                "timestamp": datetime.now(),
+                "data": result
+            }
+            
+        return result
     except requests.exceptions.Timeout as e:
         logging.error(f"Weather fetch timed out after 20s: {e}")
         return None

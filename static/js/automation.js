@@ -13,6 +13,7 @@
   let _selectedId = null;
   let _editId = null;    // null = create, string = edit
   let _aiLatLonTargetId = null;
+  let _activeAnalyticsId = null; // Tracks which automation analytics is currently open
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   // DOM
@@ -929,15 +930,18 @@
 
   $("#auto-analytics-close")?.addEventListener("click", () => {
     $("#auto-analytics-modal").classList.add("hidden");
+    _activeAnalyticsId = null;
   });
 
   $("#auto-analytics-modal")?.addEventListener("click", (e) => {
     if (e.target === $("#auto-analytics-modal")) {
       $("#auto-analytics-modal").classList.add("hidden");
+      _activeAnalyticsId = null;
     }
   });
 
   function openAnalyticsModal(auto) {
+    _activeAnalyticsId = auto.id;
     $("#auto-analytics-modal").classList.remove("hidden");
     
     // AI Reasoning
@@ -978,6 +982,16 @@
       dates.push(d.toISOString().split('T')[0]);
     }
     
+    // Create localized labels for charts (e.g. "May 12" and "Today")
+    const chartLabels = dates.map(dStr => {
+      const todayStr = new Date().toISOString().split('T')[0];
+      if (dStr === todayStr) return "Today";
+      const parts = dStr.split('-');
+      if (parts.length !== 3) return dStr;
+      const d = new Date(parts[0], parts[1] - 1, parts[2]);
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    });
+    
     // Calculate summaries
     let totalCycles = 0;
     let totalSecs = 0;
@@ -1015,7 +1029,7 @@
     _durationChart = new Chart(ctxDur, {
       type: "line",
       data: {
-        labels: dates,
+        labels: chartLabels,
         datasets: [{
           label: "Minutes",
           data: durData,
@@ -1040,7 +1054,7 @@
     _cyclesChart = new Chart(ctxCyc, {
       type: "bar",
       data: {
-        labels: dates,
+        labels: chartLabels,
         datasets: [{
           label: "Cycles",
           data: cycData,
@@ -1062,6 +1076,9 @@
 
   socket.on("weather_insights_data", (data) => {
     const auto_id = data.auto_id;
+    // Prevent old/delayed background fetch data from overwriting currently open modal
+    if (auto_id !== _activeAnalyticsId) return;
+    
     const weather = data.weather;
     if (!weather) return;
 
@@ -1070,9 +1087,18 @@
     const rainData = [];
     const et0Data = [];
 
+    // Format date string (YYYY-MM-DD) to a readable day format (e.g., "May 12")
+    const formatLabel = (dateStr) => {
+        if (!dateStr) return "";
+        const parts = dateStr.split('-');
+        if (parts.length !== 3) return dateStr;
+        const d = new Date(parts[0], parts[1] - 1, parts[2]);
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    };
+
     // Parse past days
     Object.values(weather.past_days || {}).forEach(day => {
-        labels.push(day.date);
+        labels.push(formatLabel(day.date));
         rainData.push(day.rain_mm || 0);
         et0Data.push(day.et0_mm || 0);
     });
@@ -1100,7 +1126,7 @@
 
     // Parse forecast
     Object.values(weather.forecast || {}).forEach(day => {
-        labels.push(day.date);
+        labels.push(formatLabel(day.date));
         rainData.push(day.rain_mm || 0);
         et0Data.push(day.et0_mm || 0);
     });
@@ -1194,7 +1220,7 @@
             scales: {
                 y: { 
                     beginAtZero: true, 
-                    title: { display: true, text: 'Water (mm)', color: 'rgba(255,255,255,0.7)' },
+                    title: { display: true, text: 'Rain / ET0 (mm)', color: 'rgba(255,255,255,0.7)' },
                     grid: { color: "rgba(255, 255, 255, 0.05)" } 
                 },
                 x: { grid: { display: false } }

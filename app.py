@@ -2063,13 +2063,17 @@ def handle_get_weather_insights(data):
     auto_id = data.get("auto_id")
     if not lat or not lon:
         return
+        
+    client_sid = request.sid
+        
     def _fetch():
         from ai_agent import get_weather_data
         try:
             weather = get_weather_data(lat=lat, lon=lon, past_days=7)
-            socketio.emit("weather_insights_data", {"auto_id": auto_id, "weather": weather}, to=request.sid)
+            socketio.emit("weather_insights_data", {"auto_id": auto_id, "weather": weather}, to=client_sid)
         except Exception as e:
             logging.error(f"Failed to fetch weather insights: {e}")
+            
     socketio.start_background_task(_fetch)
 
 @socketio.on("get_automations")
