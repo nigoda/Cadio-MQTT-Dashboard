@@ -917,6 +917,7 @@
   // ─── Analytics Modal ───
   let _durationChart = null;
   let _cyclesChart = null;
+  let _weatherChart = null;
 
   document.addEventListener("click", (e) => {
     const btn = e.target.closest("#irr-btn-analytics");
@@ -939,6 +940,31 @@
   function openAnalyticsModal(auto) {
     $("#auto-analytics-modal").classList.remove("hidden");
     
+    // AI Reasoning
+    const aiContainer = $("#ai-agronomist-report-container");
+    const aiText = $("#ai-agronomist-report-text");
+    const sched = auto.schedule || {};
+    if (sched.ai_enabled && auto.ai_last_reasoning) {
+        aiContainer.classList.remove("hidden");
+        aiText.textContent = auto.ai_last_reasoning;
+    } else {
+        aiContainer.classList.add("hidden");
+    }
+
+    // Fetch Weather Insights
+    const et0El = document.getElementById("auto-analytics-et0-snapshot");
+    const windEl = document.getElementById("auto-analytics-wind-snapshot");
+    
+    if (et0El) et0El.textContent = "...";
+    if (windEl) windEl.textContent = "...";
+    
+    if (sched.lat && sched.lon) {
+        socket.emit("get_weather_insights", { auto_id: auto.id, lat: sched.lat, lon: sched.lon });
+    } else {
+        if (et0El) et0El.textContent = "-";
+        if (windEl) windEl.textContent = "-";
+    }
+
     // Parse data
     const runtime = auto.runtime || {};
     const cycHist = runtime.cycles_history || {};
@@ -1033,6 +1059,149 @@
       }
     });
   }
+
+  socket.on("weather_insights_data", (data) => {
+    const auto_id = data.auto_id;
+    const weather = data.weather;
+    if (!weather) return;
+
+    // Build 14-day labels and data arrays
+    const labels = [];
+    const rainData = [];
+    const et0Data = [];
+
+    // Parse past days
+    Object.values(weather.past_days || {}).forEach(day => {
+        labels.push(day.date);
+        rainData.push(day.rain_mm || 0);
+        et0Data.push(day.et0_mm || 0);
+    });
+
+    // Parse today
+    if (weather.today) {
+        labels.push("Today");
+        rainData.push(weather.today.rain_mm || 0);
+        et0Data.push(weather.today.et0_mm || 0);
+        
+        // Update Snapshot
+        const et = weather.today.et0_mm || 0;
+        const wind = weather.today.max_wind_kmh || 0;
+        
+        const et0El = document.getElementById("auto-analytics-et0-snapshot");
+        const windEl = document.getElementById("auto-analytics-wind-snapshot");
+        
+        if (et0El) {
+            et0El.innerHTML = `${et} <span style="font-size:12px;color:var(--ha-text-secondary);">mm</span>`;
+        }
+        if (windEl) {
+            windEl.innerHTML = `${wind} <span style="font-size:12px;color:var(--ha-text-secondary);">km/h</span>`;
+        }
+    }
+
+    // Parse forecast
+    Object.values(weather.forecast || {}).forEach(day => {
+        labels.push(day.date);
+        rainData.push(day.rain_mm || 0);
+        et0Data.push(day.et0_mm || 0);
+    });
+
+    // Render Timeline Overlay
+    const timelineEl = document.getElementById("auto-analytics-timeline");
+    if (timelineEl) {
+        let timelineHTML = "";
+        const auto = _autos[auto_id] || {};
+        const schedDays = (auto.schedule && auto.schedule.days) || [];
+        const cycHist = (auto.runtime && auto.runtime.cycles_history) || {};
+        const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+        const allDays = [];
+        Object.values(weather.past_days || {}).forEach(d => allDays.push({...d, is_past: true}));
+        if (weather.today) allDays.push({...weather.today, is_today: true});
+        Object.values(weather.forecast || {}).forEach(d => allDays.push({...d, is_future: true}));
+
+        allDays.forEach(day => {
+            const dateObj = new Date(day.date);
+            const dayNum = dateObj.getDate();
+            const dayStr = dayNames[dateObj.getDay()];
+            
+            let isWaterDay = false;
+            if (day.is_past || day.is_today) {
+                if (cycHist[day.date] && cycHist[day.date] > 0) isWaterDay = true;
+            }
+            if (day.is_future || day.is_today) {
+                if (schedDays.includes(dayStr)) isWaterDay = true;
+            }
+
+            let iconHTML = "";
+            if (isWaterDay) {
+                iconHTML = `
+                <div style="background: rgba(3, 169, 244, 0.1); border: 1px solid rgba(3,169,244,0.3); border-radius: 8px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 10px rgba(3,169,244,0.2);">
+                    <span class="material-symbols-outlined" style="color: #03a9f4; font-size: 20px;">water_drop</span>
+                </div>`;
+            } else if (day.rain_mm > 0.5) {
+                iconHTML = `<span class="material-symbols-outlined" style="color: #e1e1e1; font-size: 24px;">rainy</span>`;
+            } else {
+                iconHTML = `<span class="material-symbols-outlined" style="color: #ff9800; font-size: 24px;">sunny</span>`;
+            }
+
+            let colorStyle = "color: var(--ha-text-secondary);";
+            let containerStyle = "display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 32px;";
+            
+            if (day.is_today) {
+                colorStyle = "color: #4CAF50; font-weight: bold;";
+                containerStyle = "display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 40px; padding: 8px 4px; border-radius: 20px; background: rgba(76, 175, 80, 0.15); border: 1px solid rgba(76, 175, 80, 0.3);";
+            }
+
+            timelineHTML += `
+            <div style="${containerStyle}">
+                <div style="font-size: 13px; ${colorStyle}">${dayNum}</div>
+                ${iconHTML}
+            </div>`;
+        });
+        timelineEl.innerHTML = timelineHTML;
+    }
+
+    const ctxWeather = document.getElementById("analytics-chart-weather").getContext("2d");
+    if (_weatherChart) _weatherChart.destroy();
+
+    _weatherChart = new Chart(ctxWeather, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [
+                {
+                    label: 'Rainfall (mm)',
+                    data: rainData,
+                    backgroundColor: '#03a9f4',
+                    borderRadius: 4,
+                    order: 2
+                },
+                {
+                    label: 'Evaporation (ET0 mm)',
+                    data: et0Data,
+                    backgroundColor: '#e67e22',
+                    borderRadius: 4,
+                    order: 3
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { position: 'top', labels: { color: 'rgba(255,255,255,0.7)' } }
+            },
+            scales: {
+                y: { 
+                    beginAtZero: true, 
+                    title: { display: true, text: 'Water (mm)', color: 'rgba(255,255,255,0.7)' },
+                    grid: { color: "rgba(255, 255, 255, 0.05)" } 
+                },
+                x: { grid: { display: false } }
+            }
+        }
+    });
+  });
 
   // Start live timer loop
   setInterval(updateLiveTimers, 1000);

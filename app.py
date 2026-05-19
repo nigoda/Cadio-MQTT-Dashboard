@@ -1981,6 +1981,7 @@ def _run_ai_for_automation(auto_id):
         if "schedule" not in auto:
             auto["schedule"] = {}
         auto["schedule"]["days"] = new_days
+        auto["ai_last_reasoning"] = reasoning
         
         # Clear any previous failure flags on success
         auto.pop("ai_last_fail", None)
@@ -2053,6 +2054,23 @@ def handle_run_ai_now(data):
     auto_id = data.get("id")
     if _find_automation(auto_id):
         socketio.start_background_task(_run_ai_for_automation, auto_id)
+
+@socketio.on("get_weather_insights")
+def handle_get_weather_insights(data):
+    """Fetch 14-day weather array for UI charts."""
+    lat = data.get("lat")
+    lon = data.get("lon")
+    auto_id = data.get("auto_id")
+    if not lat or not lon:
+        return
+    def _fetch():
+        from ai_agent import get_weather_data
+        try:
+            weather = get_weather_data(lat=lat, lon=lon, past_days=7)
+            socketio.emit("weather_insights_data", {"auto_id": auto_id, "weather": weather}, to=request.sid)
+        except Exception as e:
+            logging.error(f"Failed to fetch weather insights: {e}")
+    socketio.start_background_task(_fetch)
 
 @socketio.on("get_automations")
 def handle_get_automations():

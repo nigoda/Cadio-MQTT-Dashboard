@@ -77,14 +77,21 @@ def is_model_loaded():
     """Returns True if the API key is configured and client is ready."""
     return _genai_client is not None
 
-def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
+def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=7):
     """Fetches past weather + 7-day forecast from Open-Meteo (No API Key required).
     Returns a dict with 'today', 'past' (last N days), and 'forecast' (next 7 days)."""
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
         "latitude": lat,
         "longitude": lon,
-        "daily": ["temperature_2m_max", "precipitation_sum", "precipitation_probability_max"],
+        "daily": [
+            "temperature_2m_max", 
+            "temperature_2m_min",
+            "precipitation_sum", 
+            "precipitation_probability_max",
+            "et0_fao_evapotranspiration",
+            "windspeed_10m_max"
+        ],
         "timezone": "auto",
         "past_days": past_days
     }
@@ -108,9 +115,12 @@ def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
         
         daily = data.get("daily", {})
         times = daily.get("time", [])
-        temps = daily.get("temperature_2m_max", [])
+        temps_max = daily.get("temperature_2m_max", [])
+        temps_min = daily.get("temperature_2m_min", [])
         precip = daily.get("precipitation_sum", [])
         prob = daily.get("precipitation_probability_max", [])
+        et0 = daily.get("et0_fao_evapotranspiration", [])
+        wind = daily.get("windspeed_10m_max", [])
         
         today_str = datetime.now().strftime("%Y-%m-%d")
         
@@ -125,9 +135,12 @@ def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=3):
             
             entry = {
                 "date": date_str,
-                "max_temp_c": temps[i],
-                "rain_mm": precip[i],
-                "rain_prob_pct": prob[i]
+                "max_temp_c": temps_max[i] if i < len(temps_max) else None,
+                "min_temp_c": temps_min[i] if i < len(temps_min) else None,
+                "rain_mm": precip[i] if i < len(precip) else None,
+                "rain_prob_pct": prob[i] if i < len(prob) else None,
+                "et0_mm": et0[i] if i < len(et0) else None,
+                "max_wind_kmh": wind[i] if i < len(wind) else None
             }
             
             if date_str == today_str:
@@ -235,20 +248,20 @@ def get_ai_schedule_decision(weather_data, auto_context, timeout=60):
 Decide the optimal days to run irrigation for the UPCOMING 7 days based on ALL the data below.
 
 RULES:
-1. Do NOT schedule irrigation on days with heavy rain (> 5mm precipitation).
-2. Prioritize irrigation before or during hot days (> 30°C) — plants lose moisture fast in heat.
-3. Consider PAST weather: if it rained heavily in the last 3 days, the soil is still moist — you can skip early days.
-4. Check "last_irrigated" in the Automation Details — this is when the system LAST watered. If within 1 day, you may skip today.
-5. Check "irrigation_history" — this shows how many watering cycles ran on each past day. If many cycles ran recently, soil has plenty of water.
-6. Check "cycles_completed_today" — if already > 0, the system has watered today.
-7. If "irrigation_history" is empty AND past 3 days had NO rain, prioritize watering TODAY or TOMORROW urgently.
-8. Check "max_cycles_per_day" — if this is 0, it means the system will run INFINITE cycles as long as the time is within the scheduled range.
-9. Select between 1 and 4 days from the upcoming forecast.
+1. Do NOT schedule irrigation on days with heavy rain (> 5mm precipitation) or high probability of rain.
+2. Prioritize irrigation on or before days with high Evapotranspiration (ET0 > 4.0mm) and high temperatures (> 30°C) as plants lose moisture rapidly.
+3. Consider PAST 7 DAYS weather: If recent rain exceeded recent ET0 (water deficit is negative), the soil is still moist — skip early days.
+4. Consider Windspeed: High wind (> 20km/h) accelerates ET0 and drying.
+5. Check "last_irrigated" in the Automation Details. If within 1 day, you may skip today.
+6. Check "irrigation_history" — this shows how many watering cycles ran on each past day.
+7. Check "cycles_completed_today" — if already > 0, the system has watered today.
+8. Check "max_cycles_per_day" — if this is 0, it means the system will run INFINITE cycles.
+9. Select between 1 and 4 days from the upcoming forecast to maintain a healthy soil moisture balance.
 10. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {{
     "selected_dates": ["YYYY-MM-DD", "YYYY-MM-DD"],
-    "reasoning": "Your analysis."
+    "reasoning": "Your analysis comparing ET0 against precipitation and irrigation history."
 }}
 
 IMPORTANT: In selected_dates, replace YYYY-MM-DD with ONLY full ISO dates chosen from the forecast.
@@ -256,7 +269,7 @@ IMPORTANT: In selected_dates, replace YYYY-MM-DD with ONLY full ISO dates chosen
 AUTOMATION DETAILS:
 {json.dumps(auto_context, indent=2)}
 
-PAST 3 DAYS (actual weather that already happened):
+PAST 7 DAYS (actual weather that already happened):
 {json.dumps(past, indent=2)}
 
 TODAY ({today_day}, {today_str}):
