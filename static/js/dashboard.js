@@ -31,6 +31,16 @@
   const loginError   = $("#login-error");
   const appEl        = $("#app");
 
+  // Parse redirect messages (e.g. from global logout redirect)
+  const urlParams = new URLSearchParams(window.location.search);
+  const msg = urlParams.get("msg");
+  if (msg && loginError) {
+    loginError.textContent = msg;
+    loginError.classList.remove("hidden");
+    // Clean up url parameters
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
   const sidebar       = $("#ha-sidebar");
   const sidebarToggle = $("#sidebar-toggle");
   const navItems      = $$(".ha-nav-item");
@@ -108,10 +118,20 @@
   });
 
   socket.on("force_logout", (data) => {
-    alert(data.message || "You have been logged out globally.");
+    // 1. Instantly hide app dashboard and show login overlay
+    if (appEl) appEl.classList.add("hidden");
+    if (loginOverlay) loginOverlay.classList.remove("hidden");
+
+    // 2. Clear credentials from localStorage
     localStorage.removeItem("cadio_email");
     localStorage.removeItem("cadio_pass");
-    location.reload();
+
+    // 3. Clear pre-filled input values to prevent Flask auto-login
+    if (loginEmail) loginEmail.value = "";
+    if (loginPass) loginPass.value = "";
+
+    // 4. Redirect to /logout to clear Flask session and show the message
+    window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Logged out globally.");
   });
   socket.on("mqtt_status", (data) => {
     const connected = data.connected;
@@ -1103,8 +1123,10 @@
         confirmModal.classList.remove("active");
         confirmModal.style.display = "none";
         
-        // 5. Final Reset
-        location.reload(); 
+        // 5. Final Reset (Redirect to clear Flask session and show confirmation)
+        setTimeout(() => {
+          window.location.href = "/logout?msg=" + encodeURIComponent("You have logged out successfully.");
+        }, 150);
       };
     }
   }

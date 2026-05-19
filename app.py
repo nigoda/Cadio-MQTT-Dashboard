@@ -482,6 +482,18 @@ def admin_logout():
     session.pop("admin_password", None)
     return redirect("/")
 
+@app.route("/logout")
+def web_logout():
+    """Clear all user session data (including impersonation) and redirect to login."""
+    session.pop("email", None)
+    session.pop("password", None)
+    session.pop("user_session_token", None)
+    msg = request.args.get("msg", "")
+    if msg:
+        import urllib.parse
+        return redirect(f"/?msg={urllib.parse.quote(msg)}")
+    return redirect("/")
+
 def _admin_telemetry_loop():
     """Background task to send system health and user stats to admin dashboard."""
     while True:
@@ -547,13 +559,15 @@ def handle_admin_user_block(data):
         db.block_user(email)
         # 1. Kill MQTT Session
         session_mgr.remove_session(email)
-        # 2. Kick from Sockets
+        # 2. Nuclear Kick from all devices/browsers
         sids_to_kick = [sid for sid, e in list(_user_sessions.items()) if e.lower() == email.lower()]
         for sid in sids_to_kick:
-            emit("mqtt_status", {"connected": False, "message": "Account blocked by admin."}, room=sid)
+            socketio.emit("force_logout", {
+                "email": email,
+                "message": "Account blocked by admin. Security policy enforced."
+            }, room=sid)
             _user_sessions.pop(sid, None)
-            disconnect(sid=sid)
-        logging.info(f"[ADMIN] User {email} BLOCKED and session terminated.")
+        logging.info(f"[ADMIN] User {email} BLOCKED and global force_logout dispatched.")
     else:
         db.unblock_user(email)
     _emit_admin_stats()
@@ -570,12 +584,14 @@ def handle_admin_user_delete(data):
     import db
     session_mgr.remove_session(email)
     
-    # 2. Kick any active sockets
+    # 2. Kick any active sockets (Force Logout)
     sids_to_kick = [sid for sid, e in list(_user_sessions.items()) if e.lower() == email.lower()]
     for sid in sids_to_kick:
-        emit("mqtt_status", {"connected": False, "message": "Account deleted by admin."}, room=sid)
+        socketio.emit("force_logout", {
+            "email": email,
+            "message": "Account deleted by admin."
+        }, room=sid)
         _user_sessions.pop(sid, None)
-        disconnect(sid=sid)
         
     # 3. Wipe from DB
     db.delete_user(email)
