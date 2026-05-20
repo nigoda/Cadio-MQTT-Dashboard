@@ -573,13 +573,16 @@
       <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px; ${aiEnabled ? 'pointer-events:none; border: 1px dashed var(--ha-primary); padding: 4px; border-radius: 8px;' : ''}">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d) ? 'active' : ''}">${d}</span>`).join("")}</div></div>
       <div><span class="irr-label">Time Range</span><div class="irr-time-display" style="margin-top:6px">${timeStr}</div></div>
       <div style="margin-left: auto; display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 14px; font-weight: bold; color: var(--ha-primary, #03a9f4); letter-spacing: 0.5px;">🤖 AI</span>
-        <label class="ha-toggle irr-custom-toggle" style="cursor: pointer; margin: 0;" title="Enable AI Dynamic Scheduling">
-            <input type="checkbox" id="irr-main-ai-toggle" ${aiEnabled ? 'checked' : ''}>
-            <span class="ha-toggle-track"></span>
+        <span style="font-size: 14px; font-weight: bold; color: var(--ha-primary, #03a9f4); letter-spacing: 0.5px; display: flex; align-items: center;">
+          🤖 AI
+          ${auto.ai_running ? '<span class="irr-ai-calculating" style="font-size: 11px; font-weight: normal; color: var(--ha-yellow); margin-left: 6px;">(Calculating...)</span>' : ''}
+        </span>
+        <label class="ha-toggle irr-custom-toggle" style="cursor: ${auto.ai_running ? 'not-allowed' : 'pointer'}; margin: 0;" title="${auto.ai_running ? 'AI is currently busy calculating...' : 'Enable AI Dynamic Scheduling'}">
+            <input type="checkbox" id="irr-main-ai-toggle" ${aiEnabled ? 'checked' : ''} ${auto.ai_running ? 'disabled' : ''}>
+            <span class="ha-toggle-track" style="${auto.ai_running ? 'opacity: 0.6;' : ''}"></span>
             <span class="ha-toggle-thumb"></span>
         </label>
-        <button id="irr-btn-ai-settings" class="ha-icon-btn material-symbols-outlined" style="color: var(--ha-primary); cursor: pointer; font-size: 20px; padding: 4px;" title="AI Agronomist Settings">settings</button>
+        <button id="irr-btn-ai-settings" class="ha-icon-btn material-symbols-outlined" style="color: var(--ha-primary); cursor: ${auto.ai_running ? 'not-allowed' : 'pointer'}; font-size: 20px; padding: 4px;" title="AI Agronomist Settings" ${auto.ai_running ? 'disabled' : ''}>settings</button>
       </div>
     </div>`;
 
@@ -597,6 +600,12 @@
     schedBody.onclick = (e) => {
       const settingsBtn = e.target.closest("#irr-btn-ai-settings");
       if (settingsBtn) {
+        if (auto.ai_running) {
+          if (window.showToastNotification) {
+            window.showToastNotification("AI Agent Busy", "Please wait until the AI finishes updating your schedule.", "warning");
+          }
+          return;
+        }
         openAiRulesModal(auto.id);
         return;
       }
@@ -604,6 +613,17 @@
       const toggleWrap = e.target.closest(".ha-toggle");
       if (toggleWrap && toggleWrap.querySelector("#irr-main-ai-toggle")) {
         const toggleInput = toggleWrap.querySelector("#irr-main-ai-toggle");
+        
+        if (auto.ai_running) {
+          e.preventDefault();
+          // Force visual state to match actual state
+          toggleInput.checked = aiEnabled;
+          if (window.showToastNotification) {
+            window.showToastNotification("AI Agent Busy", "Please wait until the AI finishes updating your schedule.", "warning");
+          }
+          return;
+        }
+
         setTimeout(() => {
           try {
             const isChecked = toggleInput.checked;

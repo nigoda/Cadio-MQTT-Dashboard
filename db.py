@@ -122,6 +122,17 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_auto_user ON automations(user_email);
         CREATE INDEX IF NOT EXISTS idx_logs_auto ON automation_logs(automation_id);
         CREATE INDEX IF NOT EXISTS idx_logs_ts ON automation_logs(timestamp);
+
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_email    TEXT NOT NULL COLLATE NOCASE,
+            endpoint      TEXT NOT NULL UNIQUE,
+            p256dh        TEXT NOT NULL,
+            auth          TEXT NOT NULL,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_email);
     """)
     conn.commit()
 
@@ -714,4 +725,47 @@ def delete_admin_session(session_token):
         return
     conn = _get_conn()
     conn.execute("DELETE FROM admin_sessions WHERE session_token = ?", (session_token,))
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Web Push Notifications Subscriptions
+# ---------------------------------------------------------------------------
+
+def save_push_subscription(user_email, endpoint, p256dh, auth):
+    """Save or update a Web Push subscription for a user."""
+    user_email = user_email.lower()
+    conn = _get_conn()
+    conn.execute(
+        """INSERT INTO push_subscriptions (user_email, endpoint, p256dh, auth)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(endpoint) DO UPDATE SET
+               user_email = excluded.user_email,
+               p256dh = excluded.p256dh,
+               auth = excluded.auth""",
+        (user_email, endpoint, p256dh, auth)
+    )
+    conn.commit()
+
+
+def get_push_subscriptions(user_email=None):
+    """Get all active Web Push subscriptions for a user (or all if None)."""
+    conn = _get_conn()
+    if user_email:
+        user_email = user_email.lower()
+        rows = conn.execute(
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_email = ?",
+            (user_email,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT endpoint, p256dh, auth FROM push_subscriptions"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_push_subscription(endpoint):
+    """Remove a bad/expired Web Push subscription."""
+    conn = _get_conn()
+    conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
     conn.commit()

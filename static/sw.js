@@ -73,3 +73,53 @@ self.addEventListener('fetch', (event) => {
       })
   );
 });
+
+// Push notification listener
+self.addEventListener('push', (event) => {
+  let data = { title: 'Nivixsa Update', body: 'System automation event triggered' };
+
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (e) {
+      data = { title: 'Nivixsa Update', body: event.data.text() };
+    }
+  }
+
+  const options = {
+    body: data.body || data.message,
+    icon: data.icon || '/static/icons/icon-192x192.png',
+    badge: data.badge || '/static/icons/icon-72x72.png',
+    tag: data.tag || 'nivixsa-notification',
+    renotify: true,
+    data: data.url || '/',
+    vibrate: [200, 100, 200]
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title, options)
+  );
+});
+
+// Notification click handler (opens the PWA app or focuses it)
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+
+  const targetUrl = event.notification.data || '/';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      // Check if there is already a window open with this app
+      for (let i = 0; i < windowClients.length; i++) {
+        const client = windowClients[i];
+        if (client.url.includes(targetUrl) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // If no window is open, open a new one
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+    })
+  );
+});

@@ -25,7 +25,7 @@ import requests
 import psutil
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
-from flask import Flask, render_template, request, session, redirect, send_from_directory
+from flask import Flask, render_template, request, session, redirect, send_from_directory, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
 # ---------------------------------------------------------------------------
@@ -690,25 +690,6 @@ def handle_admin_verify_otp(data):
     else:
         emit("admin_otp_error", {"message": "Invalid security code."})
 
-def _emit_auto_update(auto):
-    """Broadcast automation state update to the owning user's room."""
-    safe = copy.deepcopy(auto)
-    auto_id = safe.get("id", "")
-    owner_email = auto.get("_owner_email", MQTT_USERNAME)
-    
-    sess = session_mgr.get_session(owner_email)
-    if sess and auto_id in sess.automation_logs:
-        logs = sess.automation_logs.get(auto_id, [])[:20]
-    else:
-        logs = automation_logs.get(auto_id, [])[:20]
-        
-    data = {"automation": safe, "logs": logs}
-    
-    if sess:
-        socketio.emit("automation_update", data, room=sess.room)
-    else:
-        socketio.emit("automation_update", data)
-
 
 # ---------------------------------------------------------------------------
 # Flask routes
@@ -731,6 +712,51 @@ def service_worker():
     response.headers["Content-Type"] = "application/javascript"
     response.headers["Service-Worker-Allowed"] = "/"
     return response
+
+
+@app.route("/api/push/public-key", methods=["GET"])
+def get_push_public_key():
+    pub_key = os.environ.get("VAPID_PUBLIC_KEY")
+    return jsonify({"publicKey": pub_key})
+
+
+@app.route("/api/push/subscribe", methods=["POST"])
+def subscribe_push():
+    email = None
+    token = session.get("user_session_token")
+    if token:
+        import db
+        email = db.validate_user_session(token)
+    if not email:
+        email = session.get("email")
+
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json() or {}
+    endpoint = data.get("endpoint")
+    keys = data.get("keys", {})
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+
+    if not endpoint or not p256dh or not auth:
+        return jsonify({"error": "Invalid subscription data"}), 400
+
+    import db
+    db.save_push_subscription(email, endpoint, p256dh, auth)
+    return jsonify({"success": True})
+
+
+@app.route("/api/push/unsubscribe", methods=["POST"])
+def unsubscribe_push():
+    data = request.get_json() or {}
+    endpoint = data.get("endpoint")
+    if not endpoint:
+        return jsonify({"error": "Missing endpoint"}), 400
+
+    import db
+    db.delete_push_subscription(endpoint)
+    return jsonify({"success": True})
 
 
 # ---------------------------------------------------------------------------
@@ -921,27 +947,90 @@ def _get_auto_now(auto):
     return datetime.now()
 
 
+def _send_web_push_async(owner_email, data):
+    """Sends Web Push notifications via pywebpush asynchronously in a background thread."""
+    def run():
+        try:
+            import db
+            # Get active subscriptions
+            subscriptions = db.get_push_subscriptions(owner_email)
+            if not subscriptions:
+                return
+
+            private_key = os.environ.get("VAPID_PRIVATE_KEY")
+            claims_email = os.environ.get("VAPID_CLAIMS_EMAIL", "mailto:admin@nivixsa.com")
+            
+            if not private_key:
+                logging.warning("[WebPush] VAPID_PRIVATE_KEY is missing, skipping push notification.")
+                return
+
+            vapid_claims = {"sub": claims_email}
+            
+            # Prepare payload JSON
+            import json
+            payload = json.dumps({
+                "title": data["title"],
+                "body": data["message"],
+                "message": data["message"],
+                "type": data["type"],
+                "timestamp": data["timestamp"]
+            })
+
+            for sub in subscriptions:
+                try:
+                    subscription_info = {
+                        "endpoint": sub["endpoint"],
+                        "keys": {
+                            "p256dh": sub["p256dh"],
+                            "auth": sub["auth"]
+                        }
+                    }
+                    from pywebpush import webpush, WebPushException
+                    webpush(
+                        subscription_info=subscription_info,
+                        data=payload,
+                        vapid_private_key=private_key,
+                        vapid_claims=vapid_claims
+                    )
+                    logging.info(f"[WebPush] Successfully sent push to {sub['endpoint'][:30]}...")
+                except Exception as ex:
+                    # Catch WebPushException specifically to prune expired subscriptions
+                    from pywebpush import WebPushException
+                    if isinstance(ex, WebPushException):
+                        logging.warning(f"[WebPush] Failed for endpoint {sub['endpoint'][:30]}: {ex}")
+                        if ex.response is not None and ex.response.status_code in (410, 404):
+                            logging.info(f"[WebPush] Removing expired subscription for endpoint")
+                            db.delete_push_subscription(sub["endpoint"])
+                    else:
+                        logging.error(f"[WebPush] Error sending push: {ex}")
+        except Exception as e:
+            logging.error(f"[WebPush] Thread runtime error: {e}")
+
+    import threading
+    threading.Thread(target=run, daemon=True).start()
+
+
 def send_sys_notification(owner_email, title, message, type="info"):
     """Send a system/PWA notification to all connected browser sessions of the owner."""
-    if not owner_email:
-        # Broadcast globally if no owner
-        socketio.emit("sys_notification", {
-            "title": title,
-            "message": message,
-            "type": type,
-            "timestamp": time.time()
-        })
-        return
-
-    room = f"user_{owner_email.replace('@', '_').replace('.', '_')}"
     data = {
         "title": title,
         "message": message,
         "type": type,
         "timestamp": time.time()
     }
+    
+    if not owner_email:
+        # Broadcast globally if no owner
+        socketio.emit("sys_notification", data)
+        _send_web_push_async(None, data)
+        return
+
+    room = f"user_{owner_email.replace('@', '_').replace('.', '_')}"
     logging.info(f"[NOTIFY:{owner_email}] {title}: {message} ({type})")
     socketio.emit("sys_notification", data, room=room)
+    
+    # Push Web Push notification natively to mobile/desktop lock screens
+    _send_web_push_async(owner_email, data)
 
 
 def _auto_log(auto_id, message, level="info"):
@@ -1194,6 +1283,10 @@ def _emit_auto_update(auto):
     safe = copy.deepcopy(auto)
     auto_id = safe.get("id", "")
     owner_email = auto.get("_owner_email", "")
+    
+    # Inject current AI running status
+    safe["ai_running"] = (auto_id in _ai_running_set)
+    
     # Try sess logs first, fallback to global
     sess = session_mgr.get_session(owner_email) if owner_email else None
     if sess and auto_id in sess.automation_logs:
@@ -1979,10 +2072,10 @@ def _run_ai_for_automation(auto_id):
     except ImportError as e:
         logging.error(f"[AI-SCHEDULER] Could not import ai_agent module: {e}")
         session, auto = _find_automation(auto_id)
+        _ai_running_set.discard(auto_id)
         if auto:
             _auto_log(auto_id, f"AI error: module import failed - {e}", level="error")
             _emit_auto_update(auto)
-        _ai_running_set.discard(auto_id)
         return
 
     session, auto = _find_automation(auto_id)
@@ -2001,16 +2094,16 @@ def _run_ai_for_automation(auto_id):
     
     if not is_model_loaded():
         _auto_log(auto_id, "AI skipped: AI Model not loaded or API key invalid.", level="error")
-        _emit_auto_update(auto)
         _ai_running_set.discard(auto_id)
+        _emit_auto_update(auto)
         return
 
     lat = sched.get("lat")
     lon = sched.get("lon")
     if not lat or not lon:
         _auto_log(auto_id, "AI skipped: no Lat/Lon configured", level="warn")
-        _emit_auto_update(auto)
         _ai_running_set.discard(auto_id)
+        _emit_auto_update(auto)
         return
 
     logging.info(f"[AI-SCHEDULER] Running AI for '{auto.get('name', auto_id)}'")
@@ -2028,8 +2121,8 @@ def _run_ai_for_automation(auto_id):
         if not weather_data:
             _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
             auto["ai_last_fail"] = datetime.now().timestamp()
-            _emit_auto_update(auto)
             _ai_running_set.discard(auto_id)
+            _emit_auto_update(auto)
             return
 
         ctx = build_automation_context(auto_id, auto)
@@ -2037,8 +2130,8 @@ def _run_ai_for_automation(auto_id):
         if not decision:
             _auto_log(auto_id, "AI failed: model returned no decision", level="error")
             auto["ai_last_fail"] = datetime.now().timestamp()
-            _emit_auto_update(auto)
             _ai_running_set.discard(auto_id)
+            _emit_auto_update(auto)
             return
 
         new_days = decision.get("selected_days", [])
@@ -2120,8 +2213,8 @@ def _run_ai_for_automation(auto_id):
         auto["ai_last_fail"] = time.time()
         auto["ai_retry_delay"] = retry_delay
     finally:
-        _emit_auto_update(auto)
         _ai_running_set.discard(auto_id)
+        _emit_auto_update(auto)
 
 
 def _run_ai_for_all_automations():

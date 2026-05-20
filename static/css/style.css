@@ -1466,3 +1466,12 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     }
 }
 
+.irr-ai-calculating {
+    animation: irrPulse 1.5s infinite ease-in-out;
+}
+@keyframes irrPulse {
+    0% { opacity: 0.45; }
+    50% { opacity: 1.0; }
+    100% { opacity: 0.45; }
+}
+

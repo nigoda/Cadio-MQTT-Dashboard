@@ -76,6 +76,27 @@
   const socket = io();
   window.socket = socket; // Expose for other JS files (automation.js, settings.js)
 
+  // Re-login automatically on connection or re-connection
+  socket.on("connect", () => {
+    console.log("[SOCKET] Connected/Reconnected. Sending login authentication...");
+    const savedEmail = localStorage.getItem("cadio_email") || loginEmail.value;
+    const savedPass = localStorage.getItem("cadio_pass") || loginPass.value;
+    if (savedEmail && savedPass) {
+      socket.emit("login", { email: savedEmail, password: savedPass });
+    }
+  });
+
+  // Force reconnection when app returns to foreground from iOS background freeze
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      console.log("[PWA] Visibility changed to visible. Checking connection status...");
+      if (!socket.connected) {
+        console.log("[PWA] Socket was disconnected. Forcing reconnect...");
+        socket.connect();
+      }
+    }
+  });
+
   // -------------------------------------------------------
   // Login
   // -------------------------------------------------------
@@ -1107,6 +1128,23 @@
 
     if (confirmBtnLogout) {
       confirmBtnLogout.onclick = () => {
+        // Unsubscribe Web Push notifications if active on this device
+        if (navigator.serviceWorker) {
+          navigator.serviceWorker.ready.then(reg => {
+            reg.pushManager.getSubscription().then(sub => {
+              if (sub) {
+                fetch("/api/push/unsubscribe", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ endpoint: sub.endpoint })
+                }).then(() => {
+                  sub.unsubscribe().catch(e => console.error("Error unsubscribing push:", e));
+                }).catch(e => console.error("Error notifying server of unsubscription:", e));
+              }
+            }).catch(e => console.error("Error getting push subscription on logout:", e));
+          });
+        }
+
         // 1. Tell the server to kill all sessions
         if (socket) socket.emit("logout");
 
@@ -1801,20 +1839,77 @@ func main() {
   // -------------------------------------------------------
   const toastContainer = document.getElementById("toast-container");
 
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/\-/g, '+')
+      .replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  function subscribeUserToPush() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      console.warn("[PWA] Push messaging is not supported in this browser.");
+      return;
+    }
+    navigator.serviceWorker.ready.then((registration) => {
+      fetch('/api/push/public-key')
+        .then(r => r.json())
+        .then(data => {
+          const publicKey = data.publicKey;
+          if (!publicKey) {
+            console.error("[PWA] No public VAPID key returned from server.");
+            return;
+          }
+          const subscribeOptions = {
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey)
+          };
+          return registration.pushManager.subscribe(subscribeOptions);
+        })
+        .then((pushSubscription) => {
+          if (!pushSubscription) return;
+          console.log("[PWA] User is subscribed to Web Push.");
+          return fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pushSubscription)
+          });
+        })
+        .then(response => {
+          if (response && response.ok) {
+            console.log("[PWA] Push subscription saved on server successfully.");
+          }
+        })
+        .catch((error) => {
+          console.error("[PWA] Failed to subscribe user to Web Push:", error);
+        });
+    });
+  }
+
   function requestNotificationPermission() {
     if ("Notification" in window) {
       Notification.requestPermission().then((permission) => {
         if (permission === "granted") {
           console.log("[PWA] Notification permission granted.");
+          subscribeUserToPush();
         }
       });
     }
   }
 
-  // Request permission on load
-  if ("Notification" in window && Notification.permission === "default") {
-    // Request permission after a brief delay so it's not jarring
-    setTimeout(requestNotificationPermission, 3000);
+  // Request permission or register on load
+  if ("Notification" in window) {
+    if (Notification.permission === "default") {
+      setTimeout(requestNotificationPermission, 3000);
+    } else if (Notification.permission === "granted") {
+      setTimeout(subscribeUserToPush, 2000);
+    }
   }
 
   function showToastNotification(title, message, type = "info") {
