@@ -1337,3 +1337,132 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     .irr-state-bar { grid-template-columns: 1fr 1fr; }
     .irr-sched-grid { padding: 0 14px 12px; }
 }
+
+/* ==========================================
+   Toast Notifications System
+   ========================================== */
+#toast-container {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 9999;
+    max-width: 380px;
+    width: calc(100vw - 48px);
+    pointer-events: none;
+}
+
+.ha-toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    border-radius: var(--ha-radius);
+    background: rgba(30, 30, 30, 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: var(--ha-text);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    pointer-events: auto;
+    transform: translateX(120%);
+    opacity: 0;
+    transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+}
+
+.ha-toast.show {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.ha-toast-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.ha-toast-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ha-toast-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: #fff;
+    line-height: 1.2;
+}
+
+.ha-toast-message {
+    font-size: 13px;
+    color: var(--ha-text-secondary);
+    line-height: 1.4;
+}
+
+.ha-toast-close {
+    background: none;
+    border: none;
+    color: var(--ha-text-secondary);
+    cursor: pointer;
+    padding: 2px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: background 0.2s;
+}
+
+.ha-toast-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+/* Toast types with custom glows */
+.ha-toast-info {
+    border-left: 4px solid var(--ha-blue);
+}
+.ha-toast-info .ha-toast-icon {
+    color: var(--ha-blue);
+}
+
+.ha-toast-success {
+    border-left: 4px solid var(--ha-green);
+}
+.ha-toast-success .ha-toast-icon {
+    color: var(--ha-green);
+}
+
+.ha-toast-warning {
+    border-left: 4px solid var(--ha-yellow);
+}
+.ha-toast-warning .ha-toast-icon {
+    color: var(--ha-yellow);
+}
+
+.ha-toast-error {
+    border-left: 4px solid var(--ha-red);
+}
+.ha-toast-error .ha-toast-icon {
+    color: var(--ha-red);
+}
+
+@media (max-width: 600px) {
+    #toast-container {
+        top: 16px;
+        right: 16px;
+        left: 16px;
+        width: auto;
+    }
+    .ha-toast {
+        transform: translateY(-50px);
+    }
+    .ha-toast.show {
+        transform: translateY(0);
+    }
+}
+

@@ -13,6 +13,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
     <link rel="icon" type="image/png" href="/static/Logo.png">
+    <!-- PWA -->
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#03a9f4">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Nivixsa">
+    <link rel="apple-touch-icon" href="/static/icons/icon-192x192.png">
+    <meta name="description" content="AI-powered smart irrigation automation dashboard">
     <style>
         .ha-plan-card {
             background: var(--ha-card);
@@ -80,6 +88,9 @@
 </head>
 
 <body>
+    <!-- Toast container for PWA/system notifications -->
+    <div id="toast-container"></div>
+
     <!-- Custom Confirmation Modal -->
     <div id="ha-confirm-modal" class="ha-modal-overlay" style="display:none">
         <div class="ha-modal-content">
@@ -1053,6 +1064,16 @@ NO     → Device is offline (Last Will message from broker)</pre>
             transform: translateY(-2px);
         }
     </style>
+    <!-- PWA Service Worker Registration -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('[PWA] Service Worker registered, scope:', reg.scope))
+            .catch(err => console.warn('[PWA] SW registration failed:', err));
+        });
+      }
+    </script>
 </body>
 
 </html>

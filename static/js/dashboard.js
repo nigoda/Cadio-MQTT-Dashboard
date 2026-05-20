@@ -1796,5 +1796,102 @@ func main() {
   const _origRenderOverview = renderOverviewByDevice;
   const _origRenderTypeTab = renderTypeTabByDevice;
 
+  // -------------------------------------------------------
+  // PWA & Toast Notifications
+  // -------------------------------------------------------
+  const toastContainer = document.getElementById("toast-container");
+
+  function requestNotificationPermission() {
+    if ("Notification" in window) {
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") {
+          console.log("[PWA] Notification permission granted.");
+        }
+      });
+    }
+  }
+
+  // Request permission on load
+  if ("Notification" in window && Notification.permission === "default") {
+    // Request permission after a brief delay so it's not jarring
+    setTimeout(requestNotificationPermission, 3000);
+  }
+
+  function showToastNotification(title, message, type = "info") {
+    if (!toastContainer) return;
+
+    // Create toast element
+    const toast = document.createElement("div");
+    toast.className = `ha-toast ha-toast-${type}`;
+
+    // Select icon
+    let iconName = "info";
+    if (type === "success") iconName = "check_circle";
+    if (type === "warning") iconName = "warning";
+    if (type === "error") iconName = "error";
+
+    toast.innerHTML = `
+      <span class="material-symbols-outlined ha-toast-icon">${iconName}</span>
+      <div class="ha-toast-content">
+        <div class="ha-toast-title">${escHtml(title)}</div>
+        <div class="ha-toast-message">${escHtml(message)}</div>
+      </div>
+      <button class="ha-toast-close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    `;
+
+    // Bind close button
+    const closeBtn = toast.querySelector(".ha-toast-close");
+    closeBtn.addEventListener("click", () => {
+      toast.classList.remove("show");
+      setTimeout(() => toast.remove(), 300);
+    });
+
+    toastContainer.appendChild(toast);
+
+    // Trigger animation
+    setTimeout(() => {
+      toast.classList.add("show");
+    }, 50);
+
+    // Auto-remove after 6 seconds
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.classList.remove("show");
+        setTimeout(() => toast.remove(), 300);
+      }
+    }, 6000);
+
+    // Also trigger native browser/system notification if app is in background
+    if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.ready.then((registration) => {
+          registration.showNotification(title, {
+            body: message,
+            icon: "/static/icons/icon-192x192.png",
+            badge: "/static/icons/icon-72x72.png",
+            tag: "nivixsa-notification",
+            renotify: true,
+            vibrate: [200, 100, 200]
+          });
+        });
+      } else {
+        new Notification(title, {
+          body: message,
+          icon: "/static/icons/icon-192x192.png"
+        });
+      }
+    }
+  }
+
+  // Socket listener for system notifications from backend
+  socket.on("sys_notification", (data) => {
+    showToastNotification(data.title, data.message, data.type || "info");
+  });
+
+  // Expose function globally for other JS files
+  window.showToastNotification = showToastNotification;
+
   });
 })();

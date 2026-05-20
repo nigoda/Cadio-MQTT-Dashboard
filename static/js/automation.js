@@ -113,6 +113,8 @@
   }
 
   // ─── Render List ───
+  const _lastProgress = {}; // Track high-water-mark per automation to prevent bar dips
+  
   function calculateAutoProgress(auto) {
     if (!auto || !auto.actions || auto.actions.length === 0) return { pct: 0, text: "0s / 0s" };
     const rt = auto.runtime || {};
@@ -154,11 +156,31 @@
       elapsedCurSec = dur;
     } else if (rt.state && rt.state.includes("REVERT")) {
       elapsedCurSec = idx < actions.length - 1 || rt.loopingToFirst ? dur + bufTime : dur;
+    } else if (rt.state && (rt.state.includes("INIT") || rt.state.includes("VERIFY") || rt.state === "ACTION_SET")) {
+      // During initialization/verification between cycles, hold bar at 100% (previous cycle done)
+      // to prevent the visual dip when idx resets to 0
+      if (rt.loopingToFirst || idx === 0) {
+        elapsedPreviousSec = totalAutoSec;
+        elapsedCurSec = 0;
+      }
     }
 
     const totalElapsedSec = elapsedPreviousSec + elapsedCurSec;
     let pct = totalAutoSec > 0 ? Math.min(100, Math.round((totalElapsedSec / totalAutoSec) * 100)) : 0;
     if (rt.state === "COMPLETED") pct = 100;
+    
+    // Enforce monotonic increase: never let bar go backwards during a running cycle
+    const autoId = auto.id;
+    if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state) {
+      // Reset high-water-mark when cycle ends or automation is idle
+      delete _lastProgress[autoId];
+    } else {
+      const lastPct = _lastProgress[autoId] || 0;
+      if (pct < lastPct) {
+        pct = lastPct; // Hold at previous high
+      }
+      _lastProgress[autoId] = pct;
+    }
 
     const formatTimeShort = (sec) => {
       if (sec < 60) return Math.round(sec) + "s";

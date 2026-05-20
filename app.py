@@ -25,7 +25,7 @@ import requests
 import psutil
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
-from flask import Flask, render_template, request, session, redirect
+from flask import Flask, render_template, request, session, redirect, send_from_directory
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
 # ---------------------------------------------------------------------------
@@ -332,10 +332,12 @@ def on_connect(client, userdata, flags, rc):
                 client.subscribe(t, qos)
             logging.info(f"[MQTT:{owner_email}] Subscribing to {len(topics)} topics (prefix={prefix})")
             socketio.emit("mqtt_status", {"connected": True, "message": "Connected"}, room=sess.room)
+            send_sys_notification(owner_email, "Broker Connected", "Connection established with CADIO MQTT Broker.", type="success")
     else:
         logging.error(f"[MQTT:{owner_email}] Connection failed with code {rc}")
         if sess:
             socketio.emit("mqtt_status", {"connected": False, "message": f"Connection Failed ({rc})"}, room=sess.room)
+            send_sys_notification(owner_email, "Broker Connection Failed", f"Could not connect to broker (Code {rc}).", type="error")
 
 def on_disconnect(client, userdata, rc):
     owner_email = userdata.get("owner_email")
@@ -343,6 +345,7 @@ def on_disconnect(client, userdata, rc):
     if sess:
         sess.mqtt_connected = False
         socketio.emit("mqtt_status", {"connected": False, "message": "Disconnected"}, room=sess.room)
+        send_sys_notification(owner_email, "Broker Disconnected", "Dashboard disconnected from the MQTT broker. Checking connection...", type="error")
     logging.warning(f"[MQTT:{owner_email}] Disconnected")
 
 def _auto_subscribe_from_config(client, owner_email, config):
@@ -721,6 +724,14 @@ def index():
                           mqtt_pass=mqtt_pass,
                           cache_bust=str(int(time.time())))
 
+@app.route("/sw.js")
+def service_worker():
+    """Serve the PWA service worker from root scope."""
+    response = send_from_directory("static", "sw.js")
+    response.headers["Content-Type"] = "application/javascript"
+    response.headers["Service-Worker-Allowed"] = "/"
+    return response
+
 
 # ---------------------------------------------------------------------------
 # SocketIO events
@@ -910,6 +921,29 @@ def _get_auto_now(auto):
     return datetime.now()
 
 
+def send_sys_notification(owner_email, title, message, type="info"):
+    """Send a system/PWA notification to all connected browser sessions of the owner."""
+    if not owner_email:
+        # Broadcast globally if no owner
+        socketio.emit("sys_notification", {
+            "title": title,
+            "message": message,
+            "type": type,
+            "timestamp": time.time()
+        })
+        return
+
+    room = f"user_{owner_email.replace('@', '_').replace('.', '_')}"
+    data = {
+        "title": title,
+        "message": message,
+        "type": type,
+        "timestamp": time.time()
+    }
+    logging.info(f"[NOTIFY:{owner_email}] {title}: {message} ({type})")
+    socketio.emit("sys_notification", data, room=room)
+
+
 def _auto_log(auto_id, message, level="info"):
     """Append a timestamped log entry for an automation (timezone-aware).
     Routes to sess logs if the automation belongs to a sess user."""
@@ -942,6 +976,42 @@ def _auto_log(auto_id, message, level="info"):
         if len(automation_logs[auto_id]) > MAX_AUTO_LOG:
             automation_logs[auto_id] = automation_logs[auto_id][:MAX_AUTO_LOG]
     logging.info(f"[AUTO {auto_id}] {message}")
+
+    # --- PWA & Dashboard Alerts Routing ---
+    if auto and sess:
+        email = sess.email
+        notify_title = None
+        notify_type = "info"
+        auto_name = auto.get("name", "Smart Sprinkler")
+
+        if level == "error":
+            notify_title = f"🚨 {auto_name} - Error"
+            notify_type = "error"
+        elif level == "warning":
+            notify_title = f"⚠️ {auto_name} - Warning"
+            notify_type = "warning"
+        elif "ACTION_RUN" in message:
+            notify_title = f"💧 Irrigation Cycle Started"
+            notify_type = "success"
+        elif "COMPLETED" in message:
+            notify_title = f"✅ Irrigation Cycle Completed"
+            notify_type = "success"
+        elif "AI updated days" in message:
+            notify_title = f"🤖 AI Agronomist Schedule Update"
+            notify_type = "success"
+        elif "User paused" in message:
+            notify_title = f"⏸️ Automation Paused"
+            notify_type = "info"
+        elif "User resumed" in message:
+            notify_title = f"▶️ Automation Resumed"
+            notify_type = "info"
+        elif "drift detected" in message:
+            notify_title = f"⚠️ Controller Drift Warning"
+            notify_type = "warning"
+
+        if notify_title:
+            send_sys_notification(email, notify_title, message, type=notify_type)
+
 
 
 def _new_runtime(old_rt=None):
@@ -2006,6 +2076,14 @@ def _run_ai_for_automation(auto_id):
             socketio.emit("log_message", {"entity": auto.get("name"), "state": "AI Schedule Updated"}, room=owner_session.room)
         else:
             socketio.emit("log_message", {"entity": auto.get("name"), "state": "AI Schedule Updated"})
+        
+        # Send a premium detailed system notification
+        send_sys_notification(
+            owner_email,
+            "🤖 AI Agronomist Schedule Update",
+            f"'{auto.get('name', 'Sprinkler')}' schedule updated: {old_days} → {new_days}.\nReasoning: {reasoning}",
+            type="success"
+        )
         _emit_auto_update(auto) 
 
     except Exception as e:
