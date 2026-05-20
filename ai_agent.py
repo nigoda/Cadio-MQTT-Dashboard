@@ -254,7 +254,9 @@ def build_automation_context(auto_id, auto_data):
         "max_cycles_per_day": auto_data.get("maxCyclesPerDay", 0),
         "irrigation_history": cycles_history,
         "lat": sched.get("lat"),
-        "lon": sched.get("lon")
+        "lon": sched.get("lon"),
+        "ai_thresholds": sched.get("ai_thresholds", {}),
+        "ai_custom_rules": sched.get("ai_custom_rules", "")
     }
 
 def get_ai_schedule_decision(weather_data, auto_context, timeout=60):
@@ -271,15 +273,37 @@ def get_ai_schedule_decision(weather_data, auto_context, timeout=60):
     today_str = today.get("date", datetime.now().strftime("%Y-%m-%d"))
     today_day = today.get("day", datetime.now().strftime("%a"))
 
+    # Retrieve customized thresholds or fall back to defaults
+    thresholds = auto_context.get("ai_thresholds", {})
+    rain_th = thresholds.get("rain_mm", 5.0)
+    et0_th = thresholds.get("et0_mm", 4.0)
+    temp_th = thresholds.get("temp_c", 30.0)
+    wind_th = thresholds.get("wind_kmh", 20.0)
+    custom_rules = auto_context.get("ai_custom_rules", "")
+
+    # Normalize inputs
+    try: rain_th = float(rain_th) if rain_th not in (None, "") else 5.0
+    except: rain_th = 5.0
+    try: et0_th = float(et0_th) if et0_th not in (None, "") else 4.0
+    except: et0_th = 4.0
+    try: temp_th = float(temp_th) if temp_th not in (None, "") else 30.0
+    except: temp_th = 30.0
+    try: wind_th = float(wind_th) if wind_th not in (None, "") else 20.0
+    except: wind_th = 20.0
+
+    custom_rules_section = ""
+    if custom_rules:
+        custom_rules_section = f"\n11. USER CUSTOM GUIDELINES (Strictly prioritize these custom instructions and override default rules if they conflict):\n{custom_rules}\n"
+
     system_prompt = "You are an expert Agronomist AI that decides optimal irrigation schedules. Analyze weather data and output ONLY valid raw JSON."
     user_prompt = f"""TODAY is {today_day}, {today_str}.
 Decide the optimal days to run irrigation for the UPCOMING 7 days based on ALL the data below.
 
 RULES:
-1. Do NOT schedule irrigation on days with heavy rain (> 5mm precipitation) or high probability of rain.
-2. Prioritize irrigation on or before days with high Evapotranspiration (ET0 > 4.0mm) and high temperatures (> 30°C) as plants lose moisture rapidly.
+1. Do NOT schedule irrigation on days with heavy rain (> {rain_th}mm precipitation) or high probability of rain.
+2. Prioritize irrigation on or before days with high Evapotranspiration (ET0 > {et0_th}mm) and high temperatures (> {temp_th}°C) as plants lose moisture rapidly.
 3. Consider PAST 7 DAYS weather: If recent rain exceeded recent ET0 (water deficit is negative), the soil is still moist — skip early days.
-4. Consider Windspeed: High wind (> 20km/h) accelerates ET0 and drying.
+4. Consider Windspeed: High wind (> {wind_th}km/h) accelerates ET0 and drying.
 5. Check "last_irrigated" in the Automation Details. If within 1 day, you may skip today.
 6. Check "irrigation_history" — this shows how many watering cycles ran on each past day.
 7. Check "cycles_completed_today" — if already > 0, the system has watered today.
@@ -293,7 +317,7 @@ RULES:
 }}
 
 IMPORTANT: In selected_dates, replace YYYY-MM-DD with ONLY full ISO dates chosen from the forecast.
-
+{custom_rules_section}
 AUTOMATION DETAILS:
 {json.dumps(auto_context, indent=2)}
 
@@ -355,6 +379,70 @@ UPCOMING 7-DAY FORECAST:
     except Exception as e:
         logging.error(f"Gemini API failed for automation {auto_context.get('automation_id')}: {e}")
         raise e
+
+def generate_ai_settings_suggestion(name, description):
+    """Generates suggested rules and thresholds based on the zone name and description using Gemini."""
+    if not name and not description:
+        return {
+            "suggested_rules": "Maintain a balanced watering cycle based on general local weather conditions.",
+            "rain_mm": 5.0,
+            "et0_mm": 4.0,
+            "temp_c": 30.0,
+            "wind_kmh": 20.0
+        }
+
+    prompt = f"""You are an expert agronomist AI.
+Analyze this irrigation zone:
+- Zone Name: "{name}"
+- Description: "{description}"
+
+Based on the plants, crop type, and soil properties (if mentioned), predict the optimal climate thresholds.
+Output ONLY a raw, valid JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
+{{
+    "suggested_rules": "A short, 1-sentence watering guideline.",
+    "rain_mm": 5.0,     # Rain threshold to skip watering (lower for succulents/desert plants, higher for clay soil)
+    "et0_mm": 4.0,      # Evapotranspiration threshold above which watering is prioritized
+    "temp_c": 30.0,     # Temperature threshold (°C) above which plants dry rapidly
+    "wind_kmh": 20.0    # Wind speed threshold (km/h) above which ET0 accelerates
+}}
+"""
+    if not _genai_client:
+        refresh_client()
+    if not _genai_client:
+        logging.error("Cannot suggest AI settings: Gemini Client is not initialized.")
+        return None
+
+    try:
+        response = _genai_client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=prompt,
+            config={
+                "response_mime_type": "application/json",
+                "temperature": 0.2
+            }
+        )
+        raw = response.text.strip()
+        # Clean any markdown fences if model returned them
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("\n", 1)[0]
+        raw = raw.strip()
+        if raw.startswith("json"):
+            raw = raw[4:].strip()
+            
+        data = json.loads(raw)
+        # Ensure all keys exist
+        return {
+            "suggested_rules": data.get("suggested_rules", "Custom zone watering."),
+            "rain_mm": float(data.get("rain_mm", 5.0)),
+            "et0_mm": float(data.get("et0_mm", 4.0)),
+            "temp_c": float(data.get("temp_c", 30.0)),
+            "wind_kmh": float(data.get("wind_kmh", 20.0))
+        }
+    except Exception as e:
+        logging.error(f"Failed to generate suggested AI thresholds: {e}")
+        return None
 
 # --- FOR TESTING PURPOSES ---
 if __name__ == "__main__":

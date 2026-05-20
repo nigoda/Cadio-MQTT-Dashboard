@@ -16,6 +16,7 @@ cadio.db-shm
 cadio.db-wal
 .encryption_key
 settings.json
+exports/
 
 # IDEs and OS
 .vscode/

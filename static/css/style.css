@@ -1198,10 +1198,11 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     padding: 0;
 }
 .irr-detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--ha-text-disabled); }
-.irr-header { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px 20px 12px; border-bottom: 1px solid var(--ha-divider); flex-wrap: wrap; gap: 12px; }
-.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; }
+.irr-header { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px 20px 12px; border-bottom: 1px solid var(--ha-divider); flex-wrap: nowrap; gap: 12px; }
+.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.irr-header-left { min-width: 0; flex: 1; }
 .irr-desc { font-size: 13px; color: var(--ha-text-secondary); }
-.irr-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.irr-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: nowrap; }
 .irr-status-badge { padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
 .irr-status-badge.running { background: rgba(76,175,80,.2); color: #4caf50; }
 .irr-status-badge.paused { background: rgba(255,152,0,.2); color: #ff9800; }

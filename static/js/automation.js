@@ -557,6 +557,7 @@
             <span class="ha-toggle-track"></span>
             <span class="ha-toggle-thumb"></span>
         </label>
+        <button id="irr-btn-ai-settings" class="ha-icon-btn material-symbols-outlined" style="color: var(--ha-primary); cursor: pointer; font-size: 20px; padding: 4px;" title="AI Agronomist Settings">settings</button>
       </div>
     </div>`;
 
@@ -572,6 +573,12 @@
 
     // Use event delegation on the parent body to guarantee the click is captured regardless of CSS
     schedBody.onclick = (e) => {
+      const settingsBtn = e.target.closest("#irr-btn-ai-settings");
+      if (settingsBtn) {
+        openAiRulesModal(auto.id);
+        return;
+      }
+
       const toggleWrap = e.target.closest(".ha-toggle");
       if (toggleWrap && toggleWrap.querySelector("#irr-main-ai-toggle")) {
         const toggleInput = toggleWrap.querySelector("#irr-main-ai-toggle");
@@ -635,6 +642,7 @@
 
     $("#auto-f-lat").value = auto?.schedule?.lat || "";
     $("#auto-f-lon").value = auto?.schedule?.lon || "";
+
 
     const cb24 = $("#auto-f-24hr");
     if (cb24) {
@@ -749,6 +757,85 @@
   $("#auto-f-actions-add")?.addEventListener("click", () => addFormRow($("#auto-f-actions"), "action", {}));
   $("#auto-f-time-add")?.addEventListener("click", () => addFormRow($("#auto-f-times-list"), "timeRange", {}));
 
+  let _aiRulesId = null;
+
+  function openAiRulesModal(id) {
+    const auto = _autos[id];
+    if (!auto) return;
+    _aiRulesId = id;
+    
+    const th = auto.schedule?.ai_thresholds || {};
+    $("#auto-f-th-rain").value = th.rain_mm !== undefined ? th.rain_mm : "";
+    $("#auto-f-th-et0").value = th.et0_mm !== undefined ? th.et0_mm : "";
+    $("#auto-f-th-temp").value = th.temp_c !== undefined ? th.temp_c : "";
+    $("#auto-f-th-wind").value = th.wind_kmh !== undefined ? th.wind_kmh : "";
+    $("#auto-f-ai-rules").value = auto.schedule?.ai_custom_rules || "";
+    
+    $("#ai-rules-modal").classList.remove("hidden");
+  }
+
+  function closeAiRulesModal() {
+    _aiRulesId = null;
+    $("#ai-rules-modal").classList.add("hidden");
+  }
+
+  $("#ai-rules-modal-close")?.addEventListener("click", closeAiRulesModal);
+  $("#ai-rules-modal-cancel")?.addEventListener("click", closeAiRulesModal);
+
+  $("#ai-rules-modal-save")?.addEventListener("click", () => {
+    const auto = _autos[_aiRulesId];
+    if (!auto) return;
+    
+    const lat = auto.schedule?.lat;
+    const lon = auto.schedule?.lon;
+    const isMissing = !lat || !lon || isNaN(parseFloat(lat)) || isNaN(parseFloat(lon));
+    if (isMissing) {
+      alert("Location is missing!\n\nPlease click the 'Edit' button and configure your Latitude and Longitude first so the AI can fetch weather data to run predictions.");
+      return;
+    }
+    
+    auto.schedule = auto.schedule || {};
+    auto.schedule.ai_enabled = true;
+    auto.schedule.ai_thresholds = {
+      rain_mm: $("#auto-f-th-rain").value !== "" ? parseFloat($("#auto-f-th-rain").value) : 5.0,
+      et0_mm: $("#auto-f-th-et0").value !== "" ? parseFloat($("#auto-f-th-et0").value) : 4.0,
+      temp_c: $("#auto-f-th-temp").value !== "" ? parseFloat($("#auto-f-th-temp").value) : 30.0,
+      wind_kmh: $("#auto-f-th-wind").value !== "" ? parseFloat($("#auto-f-th-wind").value) : 20.0
+    };
+    auto.schedule.ai_custom_rules = $("#auto-f-ai-rules").value.trim();
+    
+    socket.emit("update_automation", auto);
+    closeAiRulesModal();
+  });
+
+  // Suggest settings via AI
+  $("#btn-suggest-ai-settings")?.addEventListener("click", (e) => {
+    e.preventDefault();
+    const auto = _autos[_aiRulesId];
+    if (!auto) return;
+    const name = auto.name || "";
+    const desc = auto.description || "";
+    
+    if (!name) {
+      alert("Please enter a Name for the automation first so the AI knows what crop or garden area it is!");
+      return;
+    }
+    // Show temporary loading indicator
+    const btn = $("#btn-suggest-ai-settings");
+    const originalText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="material-symbols-outlined" style="font-size: 16px;">autorenew</span> Loading...`;
+    $("#auto-f-ai-rules").value = "Asking AI Agronomist to analyze crop/soil parameters... ✨";
+
+    socket.emit("suggest_ai_settings", { name, description: desc });
+
+    // Save original button state reference to restore later
+    btn._restore = () => {
+      btn.disabled = false;
+      btn.innerHTML = originalText;
+    };
+  });
+
   function collectFormData() {
     const name = $("#auto-f-name").value.trim();
     if (!name) { alert("Name is required"); return null; }
@@ -798,6 +885,8 @@
       is24hr,
       utcOffset: parseInt($("#auto-f-tz").value, 10) || 0,
       ai_enabled: editAuto?.schedule?.ai_enabled || false,
+      ai_thresholds: editAuto?.schedule?.ai_thresholds || {},
+      ai_custom_rules: editAuto?.schedule?.ai_custom_rules || "",
       setIfTrue: collectSwitchRows("auto-f-set-true"),
       setIfFalse: collectSwitchRows("auto-f-set-false")
     };
@@ -865,6 +954,25 @@
     if (_selectedId === data.id) { _selectedId = null; }
     renderList();
     renderDetail();
+  });
+
+  socket.on("suggested_ai_settings_response", (res) => {
+    const btn = $("#btn-suggest-ai-settings");
+    if (btn && typeof btn._restore === "function") {
+      btn._restore();
+    }
+    
+    if (res.status === "success") {
+      const d = res.data;
+      $("#auto-f-ai-rules").value = d.suggested_rules || "";
+      $("#auto-f-th-rain").value = d.rain_mm ?? 5.0;
+      $("#auto-f-th-et0").value = d.et0_mm ?? 4.0;
+      $("#auto-f-th-temp").value = d.temp_c ?? 30.0;
+      $("#auto-f-th-wind").value = d.wind_kmh ?? 20.0;
+    } else {
+      $("#auto-f-ai-rules").value = "";
+      alert("AI settings suggestion failed: " + (res.message || "Unknown error"));
+    }
   });
 
   // Request automations when tab is shown
@@ -1014,64 +1122,91 @@
     $("#auto-analytics-total-cycles").textContent = totalCycles;
     
     const lastRun = runtime.last_irrigated || "Never";
-    $("#auto-analytics-last-run").textContent = lastRun;
+    const lastRunEl = $("#auto-analytics-last-run");
+    if (lastRunEl) lastRunEl.textContent = lastRun;
     
-    // Render Charts
-    if (_durationChart) _durationChart.destroy();
-    if (_cyclesChart) _cyclesChart.destroy();
-    
-    const ctxDur = document.getElementById("analytics-chart-duration").getContext("2d");
-    const ctxCyc = document.getElementById("analytics-chart-cycles").getContext("2d");
-    
-    Chart.defaults.color = "rgba(255, 255, 255, 0.7)";
-    Chart.defaults.font.family = "'Roboto', sans-serif";
-    
-    _durationChart = new Chart(ctxDur, {
-      type: "line",
-      data: {
-        labels: chartLabels,
-        datasets: [{
-          label: "Minutes",
-          data: durData,
-          borderColor: "#03a9f4",
-          backgroundColor: "rgba(3, 169, 244, 0.1)",
-          borderWidth: 2,
-          fill: true,
-          tension: 0.3
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { beginAtZero: true, grid: { color: "rgba(255, 255, 255, 0.05)" } },
-          x: { grid: { display: false } }
+    // Render Charts after DOM layout finishes rendering the modal container
+    setTimeout(() => {
+      if (_durationChart) _durationChart.destroy();
+      if (_cyclesChart) _cyclesChart.destroy();
+      
+      const durCanvas = document.getElementById("analytics-chart-duration");
+      const cycCanvas = document.getElementById("analytics-chart-cycles");
+      
+      if (!durCanvas || !cycCanvas) return;
+      
+      // Force parent to compute layout before chart init
+      const durParent = durCanvas.parentElement;
+      const cycParent = cycCanvas.parentElement;
+      
+      // Explicitly set canvas pixel dimensions from parent
+      durCanvas.width = durParent.clientWidth;
+      durCanvas.height = durParent.clientHeight;
+      cycCanvas.width = cycParent.clientWidth;
+      cycCanvas.height = cycParent.clientHeight;
+      
+      console.log("[CHART DEBUG] durCanvas:", durCanvas.width, "x", durCanvas.height, "data:", durData);
+      console.log("[CHART DEBUG] cycCanvas:", cycCanvas.width, "x", cycCanvas.height, "data:", cycData);
+      console.log("[CHART DEBUG] cycHist raw:", JSON.stringify(cycHist));
+      console.log("[CHART DEBUG] durHist raw:", JSON.stringify(durHist));
+      
+      const ctxDur = durCanvas.getContext("2d");
+      const ctxCyc = cycCanvas.getContext("2d");
+      
+      Chart.defaults.color = "rgba(255, 255, 255, 0.7)";
+      Chart.defaults.font.family = "'Roboto', sans-serif";
+      
+      _durationChart = new Chart(ctxDur, {
+        type: "line",
+        data: {
+          labels: chartLabels,
+          datasets: [{
+            label: "Minutes",
+            data: durData,
+            borderColor: "#03a9f4",
+            backgroundColor: "rgba(3, 169, 244, 0.1)",
+            borderWidth: 2,
+            fill: true,
+            tension: 0.3
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: "rgba(255, 255, 255, 0.05)" } },
+            x: { grid: { display: false } }
+          }
         }
-      }
-    });
-    
-    _cyclesChart = new Chart(ctxCyc, {
-      type: "bar",
-      data: {
-        labels: chartLabels,
-        datasets: [{
-          label: "Cycles",
-          data: cycData,
-          backgroundColor: "#4caf50",
-          borderRadius: 4
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: "rgba(255, 255, 255, 0.05)" } },
-          x: { grid: { display: false } }
+      });
+      
+      _cyclesChart = new Chart(ctxCyc, {
+        type: "bar",
+        data: {
+          labels: chartLabels,
+          datasets: [{
+            label: "Cycles",
+            data: cycData,
+            backgroundColor: "#4caf50",
+            borderRadius: 4
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: "rgba(255, 255, 255, 0.05)" } },
+            x: { grid: { display: false } }
+          }
         }
-      }
-    });
+      });
+      
+      // Force Chart.js to recalculate
+      _durationChart.resize();
+      _cyclesChart.resize();
+    }, 300);
   }
 
   socket.on("weather_insights_data", (data) => {

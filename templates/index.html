@@ -461,6 +461,7 @@
 
 
 
+
                     </div>
                     <div class="irr-modal-footer">
                         <button id="auto-modal-cancel" class="ha-btn-secondary"
@@ -517,20 +518,66 @@
                         </div>
 
                         <h3 class="irr-form-heading" style="margin-top: 0;">14-Day Water Balance (Rain vs ET0)</h3>
-                        <div style="width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider); margin-bottom: 24px;">
-                            <canvas id="analytics-chart-weather"></canvas>
+                        <div style="position: relative; width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider); margin-bottom: 24px;">
+                            <canvas id="analytics-chart-weather" style="display:block; width:100% !important; height:100% !important;"></canvas>
                         </div>
 
 
                         <h3 class="irr-form-heading" style="margin-top: 0;">Irrigation Duration (Minutes per Day)</h3>
-                        <div style="width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider);">
-                            <canvas id="analytics-chart-duration"></canvas>
+                        <div style="position: relative; width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider);">
+                            <canvas id="analytics-chart-duration" style="display:block; width:100% !important; height:100% !important;"></canvas>
                         </div>
                         
                         <h3 class="irr-form-heading" style="margin-top: 24px;">Cycles Run per Day</h3>
-                        <div style="width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider);">
-                            <canvas id="analytics-chart-cycles"></canvas>
+                        <div style="position: relative; width: 100%; height: 250px; background: var(--ha-surface); border-radius: 8px; padding: 12px; box-sizing: border-box; border: 1px solid var(--ha-divider);">
+                            <canvas id="analytics-chart-cycles" style="display:block; width:100% !important; height:100% !important;"></canvas>
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== AI Agronomist Settings Modal ===== -->
+            <div id="ai-rules-modal" class="ha-detail-overlay hidden">
+                <div class="irr-modal" style="max-width: 500px;">
+                    <div class="irr-modal-header">
+                        <h2>AI Agronomist Settings</h2>
+                        <button id="ai-rules-modal-close" class="ha-icon-btn"><span class="material-symbols-outlined">close</span></button>
+                    </div>
+                    <div class="irr-modal-body" style="padding-top: 10px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+                            <h4 style="margin: 0; font-size: 13px; color: var(--ha-text-secondary); text-transform: uppercase; letter-spacing: 0.5px;">Custom Climate Thresholds</h4>
+                            <button type="button" id="btn-suggest-ai-settings" class="ha-btn-text" style="padding: 4px 8px; font-size: 12px; display: flex; align-items: center; gap: 4px;">
+                                <span class="material-symbols-outlined" style="font-size: 16px; color: var(--ha-primary);">psychology</span> ✨ Suggest via AI
+                            </button>
+                        </div>
+                        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px;">
+                            <div class="ha-field" style="flex: 1; min-width: 100px;">
+                                <input type="number" step="0.1" id="auto-f-th-rain" placeholder=" ">
+                                <label>Rain Skip (mm)</label>
+                            </div>
+                            <div class="ha-field" style="flex: 1; min-width: 100px;">
+                                <input type="number" step="0.1" id="auto-f-th-et0" placeholder=" ">
+                                <label>Min ET0 (mm)</label>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px;">
+                            <div class="ha-field" style="flex: 1; min-width: 100px;">
+                                <input type="number" step="1" id="auto-f-th-temp" placeholder=" ">
+                                <label>Min Temp (°C)</label>
+                            </div>
+                            <div class="ha-field" style="flex: 1; min-width: 100px;">
+                                <input type="number" step="1" id="auto-f-th-wind" placeholder=" ">
+                                <label>Max Wind (km/h)</label>
+                            </div>
+                        </div>
+                        <div class="ha-field" style="margin-top: 16px;">
+                            <textarea id="auto-f-ai-rules" rows="3" placeholder="e.g. Bermuda grass: water deeply, allow dry days. Clay soil: drains slowly." style="width: 100%; box-sizing: border-box; background: transparent; border: none; color: white; outline: none; font-family: inherit; font-size: 14px; padding-top: 8px; resize: vertical;"></textarea>
+                            <label style="top: -8px; font-size: 12px; color: var(--ha-primary);">Custom Instructions / Guidelines</label>
+                        </div>
+                    </div>
+                    <div class="irr-modal-footer">
+                        <button id="ai-rules-modal-cancel" class="ha-btn-secondary" style="width:auto;padding:10px 24px">Cancel</button>
+                        <button id="ai-rules-modal-save" class="ha-btn-primary" style="width:auto;padding:10px 24px">Save Settings</button>
                     </div>
                 </div>
             </div>

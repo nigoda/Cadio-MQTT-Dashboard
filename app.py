@@ -1495,6 +1495,14 @@ def engine_tick(auto):
                     rt["state"] = "ACTION_REVERT"
                     rt["retryCount"] = 0
                     _auto_log(auto_id, f"Cycle #{cycles_today_val} done → ACTION_REVERT")
+            # Persist cycle history to DB so it survives restarts
+            try:
+                import db as _db
+                owner = auto.get("_owner_email", "")
+                if owner:
+                    _db.save_automation(owner, auto)
+            except Exception as e:
+                logging.error(f"[DB] Failed to persist cycle history: {e}")
             _emit_auto_update(auto)
             return
         # State enforcement: ensure switch is still in expected state
@@ -2351,6 +2359,32 @@ def handle_delete_automation(data):
             db.delete_automation(auto_id)
         except Exception as e:
             logging.error(f"[DB] Failed to delete automation: {e}")
+
+
+@socketio.on("suggest_ai_settings")
+def handle_suggest_ai_settings(data):
+    """Generate suggested AI guidelines and thresholds based on name & description."""
+    name = data.get("name", "")
+    desc = data.get("description", "")
+    client_sid = request.sid
+
+    def _run():
+        try:
+            from ai_agent import generate_ai_settings_suggestion, refresh_client
+            sess = session_mgr.get_session_by_sid(client_sid)
+            owner_email = sess.email if sess else MQTT_USERNAME
+            refresh_client(owner_email)
+            
+            suggestion = generate_ai_settings_suggestion(name, desc)
+            if suggestion:
+                socketio.emit("suggested_ai_settings_response", {"status": "success", "data": suggestion}, to=client_sid)
+            else:
+                socketio.emit("suggested_ai_settings_response", {"status": "error", "message": "AI failed to generate suggestion. Please try again."}, to=client_sid)
+        except Exception as e:
+            logging.error(f"[AI-SUGGESTION] Failed to generate AI rules: {e}")
+            socketio.emit("suggested_ai_settings_response", {"status": "error", "message": str(e)}, to=client_sid)
+
+    socketio.start_background_task(_run)
 
 
 @socketio.on("get_automation_logs")
