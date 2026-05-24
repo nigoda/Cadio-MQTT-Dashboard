@@ -2,7 +2,7 @@ import os
 from PIL import Image
 
 os.makedirs("static/icons", exist_ok=True)
-logo_path = "static/Logo.png"
+logo_path = "static/logo_new.png"
 
 if not os.path.exists(logo_path):
     print(f"Error: {logo_path} does not exist.")
@@ -11,13 +11,13 @@ if not os.path.exists(logo_path):
 img = Image.open(logo_path)
 print(f"Opened Logo.png: size={img.size}, mode={img.mode}")
 
-# We will create solid dark-themed maskable icons with the logo taking up to 58% of the size
+# We will create transparent icons with the logo taking up to 88% of the size
 for s in [72, 96, 128, 144, 192, 384, 512]:
-    # 1. Create solid background canvas of size s x s with color #0d1117 (rgb: 13, 17, 23)
-    canvas = Image.new("RGBA", (s, s), (13, 17, 23, 255))
+    # 1. Create transparent background canvas of size s x s
+    canvas = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     
-    # 2. Resize the logo preserving aspect ratio (max dimension = 58% of icon size)
-    max_logo_size = int(s * 0.58)
+    # 2. Resize the logo preserving aspect ratio (max dimension = 88% of icon size)
+    max_logo_size = int(s * 0.88)
     w, h = img.size
     if w > h:
         new_w = max_logo_size
