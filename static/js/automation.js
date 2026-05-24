@@ -157,9 +157,10 @@
     } else if (rt.state && rt.state.includes("REVERT")) {
       elapsedCurSec = idx < actions.length - 1 || rt.loopingToFirst ? dur + bufTime : dur;
     } else if (rt.state && (rt.state.includes("INIT") || rt.state.includes("VERIFY") || rt.state === "ACTION_SET")) {
-      // During initialization/verification between cycles, hold bar at 100% (previous cycle done)
-      // to prevent the visual dip when idx resets to 0
-      if (rt.loopingToFirst || idx === 0) {
+      // During re-initialization between cycles (looping), hold bar at 100%
+      // to prevent the visual dip when idx resets to 0.
+      // On first startup (no loopingToFirst), keep at 0%.
+      if (rt.loopingToFirst) {
         elapsedPreviousSec = totalAutoSec;
         elapsedCurSec = 0;
       }
@@ -171,8 +172,8 @@
     
     // Enforce monotonic increase: never let bar go backwards during a running cycle
     const autoId = auto.id;
-    if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state) {
-      // Reset high-water-mark when cycle ends or automation is idle
+    if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state || (rt.state === "INIT_SET" && !rt.loopingToFirst)) {
+      // Reset high-water-mark when cycle ends, automation is idle, or fresh startup/reset
       delete _lastProgress[autoId];
     } else {
       const lastPct = _lastProgress[autoId] || 0;
@@ -450,6 +451,27 @@
       });
     }
 
+    // Also update scheduler condition live state text if visible
+    const schedBody = $("#irr-sched-body");
+    if (schedBody) {
+      const schedCondLive = schedBody.querySelectorAll(".irr-sched-cond-live");
+      const schedConds = auto.schedule?.conditions || [];
+      schedCondLive.forEach((span, i) => {
+        if (schedConds[i]) {
+          const topic = schedConds[i].sensorStateTopic || "";
+          let lState = "Unknown";
+          if (window._dashboardEntities) {
+            for (const eid in window._dashboardEntities) {
+              const e = window._dashboardEntities[eid];
+              if (e.stateTopic === topic || e.cmdTopic === topic) { lState = (e.state || "Unknown").toUpperCase(); break; }
+            }
+          }
+          const lColor = lState === "ON" ? "color:var(--ha-state-on)" : (lState === "OFF" ? "color:var(--ha-state-off)" : "");
+          span.innerHTML = `(Live: <span style="font-weight:600; ${lColor}">${lState}</span>)`;
+        }
+      });
+    }
+
     // Also update initialization live state text if visible
     const initBody = $("#irr-init-body");
     if (initBody) {
@@ -529,7 +551,7 @@
     const cyclesToday = rt.cycles_today || 0;
     const cyclesBadge = maxCycles > 0 ? `<span style="margin-left:8px;font-size:11px;padding:2px 8px;border-radius:10px;background:var(--ha-surface-alt, #1e293b);color:var(--ha-primary, #03a9f4);">🔄 ${cyclesToday}/${maxCycles} cycles today</span>` : '';
     const actionsHeading = $("#main-actions-heading");
-    if (actionsHeading) actionsHeading.innerHTML = `Actions (Sequential)${cyclesBadge}`;
+    if (actionsHeading) actionsHeading.innerHTML = `▶️ Actions (Sequential)${cyclesBadge}`;
     const actBody = $("#irr-actions-body");
     actBody.innerHTML = actions.length > 0 ? `<table class="irr-actions-table"><thead><tr><th>#</th><th>Switch</th><th>State</th><th>Duration</th><th>Status</th></tr></thead><tbody>${actions.map((a, i) => {
       const isActive = i === idx && (rt.state || "").startsWith("ACTION");
@@ -553,7 +575,7 @@
     const aiEnabled = sched.ai_enabled || false;
 
     const schedHeading = $("#main-sched-heading");
-    if (schedHeading) schedHeading.textContent = aiEnabled ? "🤖 AI Scheduler" : "Scheduler";
+    if (schedHeading) schedHeading.textContent = aiEnabled ? "🤖 AI Scheduler" : "📅 Scheduler";
 
     let timeStr = "";
     if (is24hr) {
@@ -568,6 +590,13 @@
         timeStr = "No time range";
       }
     }
+
+    // Build scheduler conditions display
+    const schedConds = sched.conditions || [];
+    const schedCondHTML = schedConds.length > 0 ? `<div style="margin-top:12px;"><span class="irr-label">Conditions</span><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${schedConds.map((c, i) => {
+      const logicBadge = c.logic && i < schedConds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
+      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">=</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
+    }).join("")}</div></div>` : '';
 
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
       <div><span class="irr-label">Active Days</span><div class="irr-day-chips" style="margin-top:6px; ${aiEnabled ? 'pointer-events:none; border: 1px dashed var(--ha-primary); padding: 4px; border-radius: 8px;' : ''}">${DAY_NAMES.map(d => `<span class="irr-day-chip ${days.includes(d) ? 'active' : ''}">${d}</span>`).join("")}</div></div>
@@ -584,7 +613,7 @@
         </label>
         <button id="irr-btn-ai-settings" class="ha-icon-btn material-symbols-outlined" style="color: var(--ha-primary); cursor: ${auto.ai_running ? 'not-allowed' : 'pointer'}; font-size: 20px; padding: 4px;" title="AI Agronomist Settings" ${auto.ai_running ? 'disabled' : ''}>settings</button>
       </div>
-    </div>`;
+    </div>${schedCondHTML}`;
 
     const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
     const setFalseHTML = (sched.setIfFalse || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
@@ -661,7 +690,10 @@
     }).join("")}</div>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No activity yet</span>';
 
     // Button handlers
-    $("#irr-btn-reset").onclick = () => socket.emit("reset_automation", { id: auto.id });
+    $("#irr-btn-reset").onclick = () => {
+      delete _lastProgress[auto.id];
+      socket.emit("reset_automation", { id: auto.id });
+    };
     $("#irr-btn-delete").onclick = () => { if (confirm("Delete " + auto.name + "?")) socket.emit("delete_automation", { id: auto.id }); };
     $("#irr-btn-edit").onclick = () => openModal(auto.id);
   }
@@ -734,6 +766,8 @@
     // Set if True / Set if False rows
     renderFormRows("auto-f-set-true", auto?.schedule?.setIfTrue || [], "switch");
     renderFormRows("auto-f-set-false", auto?.schedule?.setIfFalse || [], "switch");
+    // Scheduler condition rows
+    renderFormRows("auto-f-sched-cond", auto?.schedule?.conditions || [], "condition");
     // Condition rows
     renderFormRows("auto-f-cond", auto?.condition || [], "condition");
     // Action rows
@@ -796,6 +830,7 @@
     $(`#${id}`)?.addEventListener("click", () => addFormRow($(`#${id.replace("-add", "")}`), "switch", {}));
   });
   $("#auto-f-cond-add")?.addEventListener("click", () => addFormRow($("#auto-f-cond"), "condition", {}));
+  $("#auto-f-sched-cond-add")?.addEventListener("click", () => addFormRow($("#auto-f-sched-cond"), "condition", {}));
   $("#auto-f-actions-add")?.addEventListener("click", () => addFormRow($("#auto-f-actions"), "action", {}));
   $("#auto-f-time-add")?.addEventListener("click", () => addFormRow($("#auto-f-times-list"), "timeRange", {}));
 
@@ -930,7 +965,12 @@
       ai_thresholds: editAuto?.schedule?.ai_thresholds || {},
       ai_custom_rules: editAuto?.schedule?.ai_custom_rules || "",
       setIfTrue: collectSwitchRows("auto-f-set-true"),
-      setIfFalse: collectSwitchRows("auto-f-set-false")
+      setIfFalse: collectSwitchRows("auto-f-set-false"),
+      conditions: [...$("#auto-f-sched-cond").querySelectorAll(".irr-form-row")].map(r => {
+        const sel = r.querySelector(".f-sensor");
+        const opt = sel?.selectedOptions[0];
+        return { sensorStateTopic: sel?.value || "", sensorName: opt?.dataset.name || "", value: r.querySelector(".f-state")?.value || "OFF", logic: r.querySelector(".f-logic")?.value || "AND" };
+      })
     };
     const latStr = $("#auto-f-lat").value;
     const lonStr = $("#auto-f-lon").value;

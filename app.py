@@ -1195,7 +1195,7 @@ def evaluate_condition(auto):
 
 
 def check_schedule(auto):
-    """Check if current day+time falls within the schedule window.
+    """Check if current day+time+conditions falls within the schedule window.
     Returns True if no schedule is defined."""
     # Check if max cycles per day limit is reached
     max_cycles = auto.get("maxCyclesPerDay", 0)
@@ -1227,43 +1227,85 @@ def check_schedule(auto):
     if current_day not in days:
         return False
 
+    # --- Check time window ---
+    time_ok = False
+
     if sched.get("is24hr"):
+        time_ok = True
+    else:
+        ranges = sched.get("timeRanges", [])
+        if not ranges:
+            # Fallback for old single range format
+            s_start = sched.get("startTime", "")
+            s_end = sched.get("endTime", "")
+            if not s_start or not s_end:
+                time_ok = True
+            else:
+                ranges = [{"start": s_start, "end": s_end}]
+
+        if not time_ok:
+            now_mins = now.hour * 60 + now.minute
+            for r in ranges:
+                r_start = r.get("start", "")
+                r_end = r.get("end", "")
+                if not r_start or not r_end:
+                    continue
+                try:
+                    start_h, start_m = map(int, r_start.split(":"))
+                    end_h, end_m = map(int, r_end.split(":"))
+                    start_mins = start_h * 60 + start_m
+                    end_mins = end_h * 60 + end_m
+
+                    if start_mins <= end_mins:
+                        if start_mins <= now_mins < end_mins:
+                            time_ok = True
+                            break
+                    else:
+                        if now_mins >= start_mins or now_mins < end_mins:
+                            time_ok = True
+                            break
+                except (ValueError, AttributeError):
+                    continue
+
+    if not time_ok:
+        return False
+
+    # --- Check scheduler sensor conditions ---
+    sched_conditions = sched.get("conditions", [])
+    if sched_conditions:
+        if not _evaluate_sched_conditions(sched_conditions, auto):
+            return False
+
+    return True
+
+
+def _evaluate_sched_conditions(conditions, auto):
+    """Evaluate scheduler sensor conditions with AND/OR logic.
+    Same logic as evaluate_condition() but reads from schedule.conditions."""
+    if not conditions:
         return True
 
-    ranges = sched.get("timeRanges", [])
-    if not ranges:
-        # Fallback for old single range format
-        s_start = sched.get("startTime", "")
-        s_end = sched.get("endTime", "")
-        if not s_start or not s_end:
-            return True
-        ranges = [{"start": s_start, "end": s_end}]
+    results = []
+    for cond in conditions:
+        sensor_topic = cond.get("sensorStateTopic", "")
+        expected = str(cond.get("value", "")).upper()
+        actual = _get_switch_state(sensor_topic, auto)
+        matched = actual == expected if actual is not None else False
+        results.append({"matched": matched, "logic": cond.get("logic")})
 
-    now_mins = now.hour * 60 + now.minute
+    # Evaluate: AND groups first, then OR between groups
+    or_groups = []
+    current_group = [results[0]["matched"]]
+    for i in range(1, len(results)):
+        prev_logic = results[i - 1].get("logic", "AND")
+        if prev_logic == "OR":
+            or_groups.append(current_group)
+            current_group = [results[i]["matched"]]
+        else:
+            current_group.append(results[i]["matched"])
+    or_groups.append(current_group)
 
-    for r in ranges:
-        start_str = r.get("start", "")
-        end_str = r.get("end", "")
-        if not start_str or not end_str:
-            continue
-        try:
-            start_h, start_m = map(int, start_str.split(":"))
-            end_h, end_m = map(int, end_str.split(":"))
-            start_mins = start_h * 60 + start_m
-            end_mins = end_h * 60 + end_m
-
-            if start_mins <= end_mins:
-                # Normal range
-                if start_mins <= now_mins < end_mins:
-                    return True
-            else:
-                # Overnight range
-                if now_mins >= start_mins or now_mins < end_mins:
-                    return True
-        except (ValueError, AttributeError):
-            continue
-
-    return False
+    return any(all(g) for g in or_groups)
 
 
 def _verify_switches(switch_list, auto):

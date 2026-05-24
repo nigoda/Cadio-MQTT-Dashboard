@@ -1198,11 +1198,12 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     padding: 0;
 }
 .irr-detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--ha-text-disabled); }
-.irr-header { display: flex; align-items: flex-start; justify-content: space-between; padding: 20px 20px 12px; border-bottom: 1px solid var(--ha-divider); flex-wrap: nowrap; gap: 12px; }
-.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.irr-header-left { min-width: 0; flex: 1; }
+.irr-header { display: flex; flex-wrap: wrap; padding: 20px 20px 12px; border-bottom: 1px solid var(--ha-divider); gap: 12px; }
+.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; }
+.irr-header-left { width: 100%; }
 .irr-desc { font-size: 13px; color: var(--ha-text-secondary); }
-.irr-header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: nowrap; }
+.irr-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; padding-top: 10px; border-top: 1px solid var(--ha-divider); }
+.irr-header-right .irr-status-badge { margin-right: auto; }
 .irr-status-badge { padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
 .irr-status-badge.running { background: rgba(76,175,80,.2); color: #4caf50; }
 .irr-status-badge.paused { background: rgba(255,152,0,.2); color: #ff9800; }
@@ -1219,6 +1220,17 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-state-cell.flex-col { flex-direction: column; align-items: flex-start; justify-content: center; }
 .irr-cell-content { display: flex; flex-direction: column; gap: 4px; }
 .irr-label { font-size: 12px; color: var(--ha-text-primary); font-weight: 500; }
+#irr-sched-body .irr-label {
+  display: inline-block;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ha-primary, #03a9f4);
+  background: rgba(3, 169, 244, 0.1);
+  padding: 3px 10px;
+  border-radius: 20px;
+}
 .irr-state-value { font-size: 15px; font-weight: 600; color: var(--ha-text-primary); }
 .irr-cell-sub { font-size: 12px; color: var(--ha-text-secondary); }
 .irr-cell-icon { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -1241,9 +1253,9 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 
 /* Sections */
 .irr-sections-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; padding: 16px 20px; }
-.irr-section { background: var(--ha-surface); border-radius: var(--ha-radius-sm); padding: 14px; border: 1px solid var(--ha-divider); }
-.irr-section h3 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .6px; color: var(--ha-text-secondary); margin-bottom: 10px; }
-.irr-section h3 small { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.irr-section { background: var(--ha-surface); border-radius: 12px; padding: 20px; border: 1px solid var(--ha-divider); }
+.irr-section h3 { font-size: 14px; font-weight: 700; letter-spacing: .3px; color: var(--ha-primary, #03a9f4); margin-bottom: 12px; }
+.irr-section h3 small { font-weight: 400; font-size: 12px; color: var(--ha-text-secondary); letter-spacing: 0; }
 .irr-section-wide { grid-column: span 2; }
 .irr-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 20px 20px; }
 
@@ -1305,6 +1317,40 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-modal-header h2 { font-size: 18px; font-weight: 500; }
 .irr-modal-body { flex: 1; overflow-y: auto; padding: 20px; }
 .irr-modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--ha-divider); }
+/* Modal Card Layout */
+.irr-modal-card {
+  background: var(--ha-surface, #1c2333);
+  border: 1px solid var(--ha-divider, #2a3345);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.irr-modal-card-heading {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ha-primary, #03a9f4);
+  margin: 0 0 4px 0;
+  letter-spacing: 0.3px;
+}
+.irr-modal-card-desc {
+  font-size: 12px;
+  color: var(--ha-text-secondary, #8b95a5);
+  margin: 0 0 16px 0;
+  line-height: 1.4;
+}
+.irr-modal-card-subheading {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ha-text-secondary, #8b95a5);
+  margin: 0 0 10px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.irr-modal-card-divider {
+  height: 1px;
+  background: var(--ha-divider, #2a3345);
+  margin: 16px 0;
+}
 .irr-form-heading { font-size: 13px; font-weight: 600; color: var(--ha-primary); margin: 20px 0 10px; text-transform: uppercase; letter-spacing: .5px; }
 .irr-form-list { display: flex; flex-direction: column; gap: 8px; }
 .irr-form-row { display: flex; align-items: center; gap: 8px; }
@@ -1332,10 +1378,100 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 @media (max-width: 768px) {
     .irr-workspace { gap: 8px; }
     .irr-header { padding: 14px; }
+    .irr-header h2 { font-size: 18px; }
+    .irr-header-right .ha-btn-text,
+    .irr-header-right .irr-status-badge,
+    .irr-detail-footer .irr-btn-danger {
+        font-size: 12px;
+        padding: 5px 10px;
+    }
+    .irr-header-right .material-symbols-outlined { font-size: 16px !important; }
     .irr-sections-grid { padding: 8px 14px; gap: 8px; }
     .irr-bottom-grid { padding: 0 14px 14px; gap: 8px; }
     .irr-state-bar { grid-template-columns: 1fr 1fr; }
     .irr-sched-grid { padding: 0 14px 12px; }
+}
+
+/* Insights Page */
+.insights-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.insights-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 250px;
+    background: var(--ha-surface);
+    border-radius: 8px;
+    padding: 12px;
+    box-sizing: border-box;
+    border: 1px solid var(--ha-divider);
+}
+
+@media (max-width: 768px) {
+    /* Insights modal goes full-screen */
+    #auto-analytics-modal .irr-modal {
+        max-width: 100vw !important;
+        max-height: 100vh !important;
+        width: 100vw;
+        height: 100vh;
+        border-radius: 0;
+    }
+    #auto-analytics-modal .irr-modal-body {
+        padding: 12px;
+    }
+    /* Stats: 2x2 grid */
+    .insights-stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+    .insights-stats-grid .ha-plan-card {
+        padding: 12px !important;
+    }
+    .insights-stats-grid .ha-plan-card h3 {
+        font-size: 12px !important;
+    }
+    .insights-stats-grid .ha-plan-card div[id] {
+        font-size: 18px !important;
+    }
+    .insights-stats-grid .material-symbols-outlined {
+        font-size: 22px !important;
+        margin-bottom: 4px !important;
+    }
+    /* Timeline scroll */
+    #auto-analytics-timeline {
+        padding: 12px !important;
+        gap: 4px !important;
+        -webkit-overflow-scrolling: touch;
+    }
+    /* Charts: shorter on mobile */
+    .insights-chart-wrap,
+    #auto-analytics-modal .irr-modal-body > div[style*="height: 250px"] {
+        height: 180px !important;
+    }
+    /* AI report */
+    #ai-agronomist-report-container {
+        padding: 12px !important;
+    }
+    #ai-agronomist-report-container h3 {
+        font-size: 14px !important;
+    }
+    #ai-agronomist-report-text {
+        font-size: 13px !important;
+    }
+}
+
+@media (max-width: 400px) {
+    .insights-stats-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+    .insights-stats-grid .ha-plan-card div[id] {
+        font-size: 16px !important;
+    }
 }
 
 /* ==========================================
@@ -1473,5 +1609,13 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     0% { opacity: 0.45; }
     50% { opacity: 1.0; }
     100% { opacity: 0.45; }
+}
+
+.irr-detail-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 16px 20px;
+    border-top: 1px solid var(--ha-divider);
+    background: var(--ha-card);
 }
 

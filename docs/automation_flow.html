@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CADIO Automation Engine — Complete Flow Diagram</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Inter', sans-serif; background: #0f172a; color: #e2e8f0; padding: 40px; line-height: 1.6; }
+  
+  @media print {
+    body { background: #fff; color: #1e293b; padding: 20px; }
+    .section { border-color: #cbd5e1 !important; background: #fff !important; break-inside: avoid; }
+    .section h2 { color: #0369a1 !important; }
+    .state-table th { background: #f1f5f9 !important; color: #1e293b !important; }
+    .state-table td { color: #1e293b !important; border-color: #e2e8f0 !important; }
+    h1 { color: #0369a1 !important; }
+    h1 small { color: #64748b !important; }
+    .subtitle { color: #64748b !important; }
+  }
+
+  h1 { font-size: 28px; font-weight: 800; color: #38bdf8; margin-bottom: 4px; }
+  h1 small { font-size: 14px; font-weight: 400; color: #94a3b8; display: block; margin-top: 4px; }
+  .subtitle { font-size: 14px; color: #64748b; margin-bottom: 32px; }
+
+  .section { 
+    background: #1e293b; 
+    border: 1px solid #334155; 
+    border-radius: 16px; 
+    padding: 28px; 
+    margin-bottom: 24px; 
+  }
+  .section h2 { 
+    font-size: 18px; 
+    font-weight: 700; 
+    color: #38bdf8; 
+    margin-bottom: 16px; 
+    display: flex; 
+    align-items: center; 
+    gap: 8px; 
+  }
+  .section p { font-size: 13px; color: #94a3b8; margin-bottom: 16px; }
+
+  .mermaid { 
+    display: flex; 
+    justify-content: center; 
+    margin: 16px 0; 
+    overflow-x: auto;
+  }
+
+  .state-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .state-table th { 
+    text-align: left; 
+    padding: 10px 14px; 
+    background: #0f172a; 
+    color: #38bdf8; 
+    font-weight: 600; 
+    font-size: 11px; 
+    text-transform: uppercase; 
+    letter-spacing: 0.5px; 
+  }
+  .state-table td { 
+    padding: 8px 14px; 
+    border-top: 1px solid #1e293b; 
+    color: #cbd5e1; 
+  }
+  .state-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .state-table code { 
+    background: rgba(56, 189, 248, 0.1); 
+    color: #38bdf8; 
+    padding: 2px 8px; 
+    border-radius: 4px; 
+    font-size: 12px; 
+    font-weight: 600; 
+  }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 768px) { .two-col { grid-template-columns: 1fr; } }
+  @media print { .two-col { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'dark', themeVariables: { fontSize: '13px' } });</script>
+
+<h1>🔄 CADIO Automation Engine <small>Complete Flow Diagram</small></h1>
+<p class="subtitle">How the automation dashboard feature works — from power on to cycle completion</p>
+
+<!-- 1. High-Level Overview -->
+<div class="section">
+  <h2>📋 High-Level State Machine</h2>
+  <p>The complete lifecycle of an automation from OFF → Initialization → Wait → Actions → Loop/Complete</p>
+  <div class="mermaid">
+flowchart TD
+    OFF["🔴 OFF"] -->|User turns ON| IDLE["IDLE"]
+    IDLE --> INIT["🔧 INIT_SET\nSet switches to safe state"]
+    INIT --> INIT_V["INIT_VERIFY\nVerify each switch responded"]
+    INIT_V -->|All verified| WAIT["⏳ WAIT_CONDITION\nWaiting for gates to pass"]
+    INIT_V -->|Timeout| RETRY{"Retry?\n&lt; 3 attempts"}
+    RETRY -->|Yes| INIT
+    RETRY -->|No| ERR["🛑 ERROR"]
+
+    WAIT --> GATE{"📅 Scheduler ✅?\n🔀 Action Condition ✅?\n🔄 Max Cycles OK?"}
+    GATE -->|All pass| ACTION_SET["▶️ ACTION_SET\nSend switch command"]
+    GATE -->|Any fails| WAIT
+
+    ACTION_SET --> ACTION_V["ACTION_VERIFY\nVerify switch responded"]
+    ACTION_V -->|Verified| ACTION_RUN["⏱️ ACTION_RUN\nTimer counting down"]
+    ACTION_V -->|Timeout| RETRY2{"Retry?"}
+    RETRY2 -->|Yes| ACTION_SET
+    RETRY2 -->|No| ERR
+
+    ACTION_RUN --> PAUSE_CHECK{"Still OK?"}
+    PAUSE_CHECK -->|Condition FALSE| PAUSED_C["⏸️ PAUSED_CONDITION"]
+    PAUSE_CHECK -->|Schedule FALSE| PAUSED_S["⏸️ PAUSED_SCHEDULE"]
+    PAUSE_CHECK -->|Switch drifted| DRIFT["⚠️ DRIFT_VERIFY\nCorrect & re-verify"]
+    PAUSE_CHECK -->|Timer done| NEXT{"More actions?"}
+
+    PAUSED_C -->|Condition TRUE| ACTION_RUN
+    PAUSED_S -->|Schedule TRUE| ACTION_RUN
+    DRIFT -->|Corrected| ACTION_RUN
+    DRIFT -->|Failed| ERR
+
+    NEXT -->|Yes| OVERLAP["OVERLAP_NEXT\nStart next action"]
+    OVERLAP --> BUFFER["⏳ BUFFER\nWait between actions"]
+    BUFFER --> REVERT["ACTION_REVERT\nTurn off previous"]
+    REVERT --> ACTION_SET
+
+    NEXT -->|No, can loop| LOOP["🔄 Re-initialize\nthen loop to Action 1"]
+    LOOP --> INIT
+    NEXT -->|No, done| REVERT_FINAL["REVERT → WAIT"]
+    REVERT_FINAL --> WAIT
+
+    ERR -->|User resets| IDLE
+
+    style OFF fill:#ef4444,color:#fff
+    style IDLE fill:#64748b,color:#fff
+    style INIT fill:#f59e0b,color:#000
+    style INIT_V fill:#f59e0b,color:#000
+    style WAIT fill:#6366f1,color:#fff
+    style ACTION_SET fill:#22c55e,color:#000
+    style ACTION_V fill:#22c55e,color:#000
+    style ACTION_RUN fill:#10b981,color:#fff
+    style PAUSED_C fill:#f97316,color:#fff
+    style PAUSED_S fill:#f97316,color:#fff
+    style DRIFT fill:#eab308,color:#000
+    style BUFFER fill:#8b5cf6,color:#fff
+    style REVERT fill:#8b5cf6,color:#fff
+    style REVERT_FINAL fill:#8b5cf6,color:#fff
+    style ERR fill:#dc2626,color:#fff
+    style LOOP fill:#06b6d4,color:#000
+    style OVERLAP fill:#8b5cf6,color:#fff
+  </div>
+</div>
+
+<!-- 2. Scheduler Gate -->
+<div class="two-col">
+  <div class="section">
+    <h2>📅 Scheduler Gate</h2>
+    <p>Three sub-checks run in order. All must pass for the scheduler to return TRUE.</p>
+    <div class="mermaid">
+flowchart TD
+    S["📅 check_schedule"] --> D{"Day OK?\nMon/Tue/etc"}
+    D -->|No| FALSE["❌ FALSE"]
+    D -->|Yes| T{"Time OK?\n06:00 - 08:00"}
+    T -->|No| FALSE
+    T -->|Yes| C{"Conditions OK?\nSensor = value\nAND/OR logic"}
+    C -->|No| FALSE
+    C -->|Yes| TRUE["✅ TRUE"]
+    style TRUE fill:#22c55e,color:#000
+    style FALSE fill:#ef4444,color:#fff
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>🔀 Action Condition Pause</h2>
+    <p>While an action is running, if the condition becomes false the timer freezes.</p>
+    <div class="mermaid">
+flowchart TD
+    RUN["⏱️ ACTION_RUN"] --> CHK{"Action Condition\nstill TRUE?"}
+    CHK -->|Yes| RUN
+    CHK -->|No| PAUSE["⏸️ PAUSED\nTimer frozen"]
+    PAUSE --> CHK2{"Condition\nback TRUE?"}
+    CHK2 -->|Yes| RESUME["▶️ RESUME\nTimer continues"]
+    CHK2 -->|No| PAUSE
+    style RUN fill:#10b981,color:#fff
+    style PAUSE fill:#f97316,color:#fff
+    style RESUME fill:#10b981,color:#fff
+    </div>
+  </div>
+</div>
+
+<!-- 3. Schedule Enforcement -->
+<div class="two-col">
+  <div class="section">
+    <h2>⚡ Schedule Enforcement</h2>
+    <p>Runs on every engine tick, independent of automation state.</p>
+    <div class="mermaid">
+flowchart TD
+    TICK["Engine Tick"] --> CHECK{"check_schedule?"}
+    CHECK -->|TRUE| DURING["✅ During Schedule\nEnforce switches"]
+    CHECK -->|FALSE| OUTSIDE["🚫 Outside Schedule\nEnforce switches"]
+    DURING --> V{"Correct?"}
+    OUTSIDE --> V
+    V -->|Yes| OK["✔️ OK"]
+    V -->|No| SEND["Send MQTT\nRetry up to 3x"]
+    SEND -->|OK| OK
+    SEND -->|Failed| ERR["🛑 ERROR"]
+    style DURING fill:#22c55e,color:#000
+    style OUTSIDE fill:#ef4444,color:#fff
+    style ERR fill:#dc2626,color:#fff
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>🔁 Cycle Looping</h2>
+    <p>After the last action finishes, the engine decides what to do next.</p>
+    <div class="mermaid">
+flowchart TD
+    DONE["Last action done"] --> CYC{"Max cycles\nreached?"}
+    CYC -->|Yes| STOP["Init → Revert\n→ WAIT\nPaused until tomorrow"]
+    CYC -->|No| SC{"Schedule\nstill active?"}
+    SC -->|Yes| LOOP["🔄 Re-init\n→ Loop Action 1\nCycle +1"]
+    SC -->|No| REV["Revert\n→ WAIT_CONDITION"]
+    style LOOP fill:#06b6d4,color:#000
+    style STOP fill:#ef4444,color:#fff
+    style REV fill:#8b5cf6,color:#fff
+    </div>
+  </div>
+</div>
+
+<!-- 4. WAIT_CONDITION Gate Detail -->
+<div class="section">
+  <h2>⏳ WAIT_CONDITION — Decision Matrix</h2>
+  <p>Both the Scheduler and Action Condition must pass simultaneously. Max cycle limit is also checked.</p>
+  <table class="state-table">
+    <thead>
+      <tr><th>📅 Scheduler</th><th>🔀 Action Condition</th><th>🔄 Cycles OK</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>✅ True</td><td>✅ True</td><td>✅ Under limit</td><td><strong style="color:#22c55e">▶️ Actions start</strong></td></tr>
+      <tr><td>✅ True</td><td>✅ True</td><td>❌ Limit reached</td><td>⏳ Waiting until tomorrow</td></tr>
+      <tr><td>✅ True</td><td>❌ False</td><td>—</td><td>⏳ Waiting (condition not met)</td></tr>
+      <tr><td>❌ False</td><td>✅ True</td><td>—</td><td>⏳ Waiting (outside schedule)</td></tr>
+      <tr><td>❌ False</td><td>❌ False</td><td>—</td><td>⏳ Waiting (both fail)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- 5. Complete State List -->
+<div class="section">
+  <h2>📊 Complete State List</h2>
+  <table class="state-table">
+    <thead>
+      <tr><th>State</th><th>Description</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>IDLE</code></td><td>Off, waiting to be turned on</td></tr>
+      <tr><td><code>INIT_SET</code></td><td>Sending initialization switch commands</td></tr>
+      <tr><td><code>INIT_VERIFY_INDIVIDUAL</code></td><td>Verifying each init switch one by one</td></tr>
+      <tr><td><code>INIT_VERIFY_ALL</code></td><td>Final bulk verification of all init switches</td></tr>
+      <tr><td><code>WAIT_CONDITION</code></td><td>Waiting for Scheduler ✅ AND Action Condition ✅</td></tr>
+      <tr><td><code>ACTION_SET</code></td><td>Sending action switch command</td></tr>
+      <tr><td><code>ACTION_VERIFY</code></td><td>Verifying action switch responded</td></tr>
+      <tr><td><code>ACTION_RUN</code></td><td>⏱️ Timer running for current action</td></tr>
+      <tr><td><code>ACTION_DRIFT_VERIFY</code></td><td>Switch drifted during run, correcting</td></tr>
+      <tr><td><code>OVERLAP_NEXT_SET</code></td><td>Setting next action while current still active</td></tr>
+      <tr><td><code>OVERLAP_NEXT_VERIFY</code></td><td>Verifying next action switch</td></tr>
+      <tr><td><code>BUFFER</code></td><td>Wait period between actions</td></tr>
+      <tr><td><code>BUFFER_DRIFT_VERIFY</code></td><td>Switch drifted during buffer, correcting</td></tr>
+      <tr><td><code>ACTION_REVERT</code></td><td>Reverting (turning off) previous action</td></tr>
+      <tr><td><code>ACTION_VERIFY_REVERT</code></td><td>Verifying revert succeeded</td></tr>
+      <tr><td><code>PAUSED_CONDITION</code></td><td>⏸️ Paused — action condition went false</td></tr>
+      <tr><td><code>PAUSED_SCHEDULE</code></td><td>⏸️ Paused — outside schedule window</td></tr>
+      <tr><td><code>PAUSED_USER</code></td><td>⏸️ Paused by user manually</td></tr>
+      <tr><td><code>PAUSED_ENFORCE</code></td><td>⏸️ Pausing to enforce schedule switch</td></tr>
+      <tr><td><code>ERROR_SET</code></td><td>Setting error-state switches</td></tr>
+      <tr><td><code>ERROR_VERIFY</code></td><td>Verifying error-state switches</td></tr>
+      <tr><td><code>ERROR</code></td><td>🛑 Stuck in error — needs manual reset</td></tr>
+      <tr><td><code>COMPLETED</code></td><td>Cycle completed, transitioning back</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<p style="text-align:center; color:#475569; font-size:12px; margin-top:32px;">CADIO Automation Engine v2.0 — Generated by Antigravity</p>
+
+</body>
+</html>
