@@ -711,6 +711,7 @@ def service_worker():
     response = send_from_directory("static", "sw.js")
     response.headers["Content-Type"] = "application/javascript"
     response.headers["Service-Worker-Allowed"] = "/"
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     return response
 
 

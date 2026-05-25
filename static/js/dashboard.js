@@ -1868,15 +1868,52 @@ func main() {
             console.error("[PWA] No public VAPID key returned from server.");
             return;
           }
-          const subscribeOptions = {
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(publicKey)
-          };
-          return registration.pushManager.subscribe(subscribeOptions);
+          const newKeyArray = urlBase64ToUint8Array(publicKey);
+          
+          return registration.pushManager.getSubscription().then((existingSubscription) => {
+            if (existingSubscription) {
+              // Check for VAPID key mismatch
+              let keyMismatch = false;
+              if (existingSubscription.options && existingSubscription.options.applicationServerKey) {
+                const existingKey = new Uint8Array(existingSubscription.options.applicationServerKey);
+                if (existingKey.length !== newKeyArray.length) {
+                  keyMismatch = true;
+                } else {
+                  for (let i = 0; i < existingKey.length; i++) {
+                    if (existingKey[i] !== newKeyArray[i]) {
+                      keyMismatch = true;
+                      break;
+                    }
+                  }
+                }
+              } else {
+                keyMismatch = true;
+              }
+
+              if (keyMismatch) {
+                console.log("[PWA] VAPID key mismatch detected. Unsubscribing old subscription...");
+                return existingSubscription.unsubscribe().then(() => {
+                  return registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: newKeyArray
+                  });
+                });
+              } else {
+                console.log("[PWA] Existing subscription is valid.");
+                return existingSubscription;
+              }
+            } else {
+              console.log("[PWA] No existing subscription found. Subscribing...");
+              return registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: newKeyArray
+              });
+            }
+          });
         })
         .then((pushSubscription) => {
           if (!pushSubscription) return;
-          console.log("[PWA] User is subscribed to Web Push.");
+          console.log("[PWA] User is subscribed to Web Push:", pushSubscription);
           
           // Emit socket event for reliable authenticated subscription saving
           socket.emit("save_push_subscription", pushSubscription);
@@ -1972,8 +2009,8 @@ func main() {
         navigator.serviceWorker.ready.then((registration) => {
           registration.showNotification(title, {
             body: message,
-            icon: "/static/icons/icon-192x192.png",
-            badge: "/static/icons/icon-72x72.png",
+            icon: window.location.origin + "/static/icons/icon-192x192.png",
+            badge: window.location.origin + "/static/icons/icon-72x72.png",
             tag: "nivixsa-notification",
             renotify: true,
             vibrate: [200, 100, 200]
@@ -1985,7 +2022,7 @@ func main() {
         try {
           new Notification(title, {
             body: message,
-            icon: "/static/icons/icon-192x192.png"
+            icon: window.location.origin + "/static/icons/icon-192x192.png"
           });
         } catch (e) {
           console.error("[PWA] new Notification failed:", e);

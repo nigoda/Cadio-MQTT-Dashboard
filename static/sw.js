@@ -1,5 +1,5 @@
 // Nivixsa PWA Service Worker
-const CACHE_NAME = 'nivixsa-v2';
+const CACHE_NAME = 'nivixsa-v3';
 
 // Assets to cache for offline shell
 const PRECACHE_ASSETS = [
@@ -88,8 +88,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: data.body || data.message,
-    icon: data.icon || '/static/icons/icon-192x192.png',
-    badge: data.badge || '/static/icons/icon-72x72.png',
+    icon: data.icon || (self.location.origin + '/static/icons/icon-192x192.png'),
+    badge: data.badge || (self.location.origin + '/static/icons/icon-72x72.png'),
     tag: data.tag || 'nivixsa-notification',
     renotify: true,
     data: data.url || '/',
