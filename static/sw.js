@@ -1,11 +1,11 @@
 // Nivixsa PWA Service Worker
-const CACHE_NAME = 'nivixsa-v1';
+const CACHE_NAME = 'nivixsa-v2';
 
 // Assets to cache for offline shell
 const PRECACHE_ASSETS = [
   '/',
   '/static/css/style.css',
-  '/static/Logo.png',
+  '/static/logo_new.png',
   '/static/icons/icon-192x192.png',
   '/static/icons/icon-512x512.png'
 ];

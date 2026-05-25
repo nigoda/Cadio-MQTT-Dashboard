@@ -853,6 +853,37 @@ def handle_login(data):
     _emit_admin_stats()
 
 
+@socketio.on("save_push_subscription")
+def handle_save_push_subscription(data):
+    """Save a Web Push subscription via Socket.IO."""
+    email = _user_sessions.get(request.sid)
+    if not email:
+        return
+    
+    endpoint = data.get("endpoint")
+    keys = data.get("keys", {})
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+
+    if not endpoint or not p256dh or not auth:
+        return
+
+    import db
+    db.save_push_subscription(email, endpoint, p256dh, auth)
+    logging.info(f"[WebPush:{email}] Saved push subscription via Socket.IO")
+
+
+@socketio.on("unsubscribe_push")
+def handle_unsubscribe_push(data):
+    """Remove a Web Push subscription via Socket.IO."""
+    endpoint = data.get("endpoint")
+    if not endpoint:
+        return
+    import db
+    db.delete_push_subscription(endpoint)
+    logging.info("[WebPush] Removed push subscription via Socket.IO")
+
+
 @socketio.on("logout")
 def handle_logout():
     user_email = _get_user_email()
@@ -998,8 +1029,8 @@ def _send_web_push_async(owner_email, data):
                     from pywebpush import WebPushException
                     if isinstance(ex, WebPushException):
                         logging.warning(f"[WebPush] Failed for endpoint {sub['endpoint'][:30]}: {ex}")
-                        if ex.response is not None and ex.response.status_code in (410, 404):
-                            logging.info(f"[WebPush] Removing expired subscription for endpoint")
+                        if ex.response is not None and ex.response.status_code in (400, 410, 404):
+                            logging.info(f"[WebPush] Removing bad/expired subscription for endpoint")
                             db.delete_push_subscription(sub["endpoint"])
                     else:
                         logging.error(f"[WebPush] Error sending push: {ex}")

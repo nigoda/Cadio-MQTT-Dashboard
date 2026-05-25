@@ -166,6 +166,8 @@
       appEl.classList.remove("hidden");
       // Fetch settings once logged in to sync UI state
       socket.emit("get_api_settings");
+      // Auto-subscribe/sync Web Push notifications now that the user is authenticated
+      setTimeout(subscribeUserToPush, 2000);
     }
     if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
       const msg = data.message.toLowerCase();
@@ -1875,6 +1877,10 @@ func main() {
         .then((pushSubscription) => {
           if (!pushSubscription) return;
           console.log("[PWA] User is subscribed to Web Push.");
+          
+          // Emit socket event for reliable authenticated subscription saving
+          socket.emit("save_push_subscription", pushSubscription);
+          
           return fetch('/api/push/subscribe', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1958,9 +1964,11 @@ func main() {
       }
     }, 6000);
 
-    // Also trigger native browser/system notification if app is in background
-    if (document.hidden && "Notification" in window && Notification.permission === "granted") {
+    // Also trigger native browser/system notification
+    if ("Notification" in window && Notification.permission === "granted") {
+      console.log("[PWA] Attempting to show system notification...", title);
       if ("serviceWorker" in navigator) {
+        console.log("[PWA] Using service worker to show notification");
         navigator.serviceWorker.ready.then((registration) => {
           registration.showNotification(title, {
             body: message,
@@ -1969,14 +1977,22 @@ func main() {
             tag: "nivixsa-notification",
             renotify: true,
             vibrate: [200, 100, 200]
-          });
+          }).then(() => console.log("[PWA] System notification displayed successfully via SW"))
+            .catch(err => console.error("[PWA] SW showNotification failed:", err));
         });
       } else {
-        new Notification(title, {
-          body: message,
-          icon: "/static/icons/icon-192x192.png"
-        });
+        console.log("[PWA] Using new Notification fallback");
+        try {
+          new Notification(title, {
+            body: message,
+            icon: "/static/icons/icon-192x192.png"
+          });
+        } catch (e) {
+          console.error("[PWA] new Notification failed:", e);
+        }
       }
+    } else {
+      console.log("[PWA] Cannot show system notification. Notification in window:", "Notification" in window, "Permission:", Notification.permission);
     }
   }
 
@@ -1984,7 +2000,6 @@ func main() {
   socket.on("sys_notification", (data) => {
     showToastNotification(data.title, data.message, data.type || "info");
   });
-
   // Expose function globally for other JS files
   window.showToastNotification = showToastNotification;
 
