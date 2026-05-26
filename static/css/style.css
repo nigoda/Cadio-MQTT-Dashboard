@@ -140,7 +140,8 @@ body {
     cursor: pointer;
     transition: background var(--ha-transition);
 }
-.ha-btn-primary:hover { background: var(--ha-primary-dark); }
+.ha-btn-primary:hover:not(:disabled) { background: var(--ha-primary-dark); }
+.ha-btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 .ha-btn-secondary {
     width: 100%;
     padding: 12px;

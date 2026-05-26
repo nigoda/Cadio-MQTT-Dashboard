@@ -100,11 +100,19 @@
   // -------------------------------------------------------
   // Login
   // -------------------------------------------------------
+  const loginSubmitBtn = document.getElementById("login-submit-btn");
+
   loginForm.addEventListener("submit", (e) => {
     e.preventDefault();
     loginError.classList.add("hidden");
     const email = loginEmail.value;
     const pass = loginPass.value;
+    
+    if (loginSubmitBtn) {
+      loginSubmitBtn.disabled = true;
+      loginSubmitBtn.textContent = "Logging In...";
+    }
+    
     // Store credentials for auto-reconnect on page refresh
     localStorage.setItem("cadio_email", email);
     localStorage.setItem("cadio_pass", pass);
@@ -116,6 +124,10 @@
     // Priority 1: pre-filled fields (impersonation)
     if (loginEmail.value && loginPass.value) {
       console.log("[DASHBOARD] Auto-logging in via impersonation...");
+      if (loginSubmitBtn) {
+        loginSubmitBtn.disabled = true;
+        loginSubmitBtn.textContent = "Logging In...";
+      }
       socket.emit("login", { email: loginEmail.value, password: loginPass.value });
       return;
     }
@@ -125,6 +137,10 @@
     if (savedEmail && savedPass) {
       console.log("[DASHBOARD] Auto-logging in from saved session...");
       loginEmail.value = savedEmail;
+      if (loginSubmitBtn) {
+        loginSubmitBtn.disabled = true;
+        loginSubmitBtn.textContent = "Logging In...";
+      }
       socket.emit("login", { email: savedEmail, password: savedPass });
     }
   })();
@@ -164,6 +180,13 @@
     if (connected && data.message === "Connected") {
       loginOverlay.classList.add("hidden");
       appEl.classList.remove("hidden");
+      
+      const loginBtn = document.getElementById("login-submit-btn");
+      if (loginBtn) {
+        loginBtn.disabled = false;
+        loginBtn.textContent = "Log In";
+      }
+
       // Fetch settings once logged in to sync UI state
       socket.emit("get_api_settings");
       // Auto-subscribe/sync Web Push notifications now that the user is authenticated
@@ -172,6 +195,12 @@
     if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
       const msg = data.message.toLowerCase();
       if (msg === "not connected") return; // Ignore initial socket handshake on login screen
+
+      const loginBtn = document.getElementById("login-submit-btn");
+      if (loginBtn) {
+        loginBtn.disabled = false;
+        loginBtn.textContent = "Log In";
+      }
 
       if (msg.includes("account blocked")) {
         loginError.textContent = "⚠️ Your CADIO account has been temporarily blocked. Please wait and try again later.";
