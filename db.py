@@ -31,7 +31,7 @@ def _get_fernet():
     global _fernet
     if _fernet is not None:
         return _fernet
-    if os.path.exists(KEY_PATH):
+    if os.path.exists(KEY_PATH) and os.path.getsize(KEY_PATH) > 0:
         with open(KEY_PATH, "rb") as f:
             key = f.read().strip()
     else:
