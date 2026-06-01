@@ -11,7 +11,7 @@ The `Dockerfile` and `docker-compose.yml` already in your repository work identi
 1. Go to the [Google Cloud Console](https://console.cloud.google.com/) and create a new project.
 2. Ensure billing is enabled (you must add a credit card to prove you aren't a bot, but as long as you stay within the free limits, you won't be charged).
 3. Navigate to **Compute Engine** -> **VM instances** -> **Create Instance**.
-4. **Name:** `cadio-dashboard`
+4. **Name:** `nivixsa-smart-agriculture`
 5. **Region and Zone:** **CRITICAL:** To qualify for the Always Free tier, you MUST choose one of these three US regions:
    * `us-west1` (Oregon)
    * `us-central1` (Iowa)
@@ -48,7 +48,7 @@ By default, Google opens port 80 and 443 if you checked the boxes above, but you
 
 The easiest way to connect is directly through your browser.
 1. Go back to **Compute Engine** -> **VM instances**.
-2. Click the **SSH** button next to your `cadio-dashboard` instance. This will open a terminal window in your browser.
+2. Click the **SSH** button next to your `nivixsa-smart-agriculture` instance. This will open a terminal window in your browser.
 
 ---
 

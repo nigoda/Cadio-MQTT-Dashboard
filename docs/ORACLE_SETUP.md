@@ -12,7 +12,7 @@ Follow these steps to get your dashboard live on the internet!
 
 1. Go to [Oracle Cloud](https://cloud.oracle.com/) and sign up for a Free Tier account.
 2. In the Oracle Cloud Console, go to **Compute** -> **Instances** -> **Create Instance**.
-3. **Name:** `cadio-dashboard`
+3. **Name:** `nivixsa-smart-agriculture`
 4. **Image and Shape:**
    * **Image:** Change to **Ubuntu 22.04** (or 24.04).
    * **Shape:** Choose **Ampere (ARM)**. You can slide the slider up to **2-4 OCPUs** and **12-24 GB RAM** (this is all completely free in the Always Free tier).

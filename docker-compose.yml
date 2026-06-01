@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  cadio-dashboard:
+  nivixsa-smart-agriculture:
     build: .
-    container_name: cadio-dashboard
+    container_name: nivixsa-smart-agriculture
     restart: always
     ports:
       - "5000:5000"
