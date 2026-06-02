@@ -93,7 +93,7 @@ nano .env
 With everything prepared, launch your application in the background:
 
 ```bash
-docker-compose up -d --build
+DOCKER_BUILDKIT=0 docker-compose up -d --build
 ```
 
 Docker will now download Python, install all dependencies, and spin up your dashboard. 
@@ -105,11 +105,12 @@ Docker will now download Python, install all dependencies, and spin up your dash
 ### Useful Commands
 
 * **To see live logs (useful for debugging automations or AI):**
-  `docker-compose logs -f`
+  `docker logs -f nivixsa-smart-agriculture`
 * **To restart the server (e.g., if you edit `.env`):**
   `docker-compose restart`
 * **To update your code in the future:**
   ```bash
   git pull
-  docker-compose up -d --build
+  docker-compose down
+  DOCKER_BUILDKIT=0 docker-compose up -d --build
   ```

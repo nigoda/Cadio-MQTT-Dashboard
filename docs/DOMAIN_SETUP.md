@@ -115,7 +115,7 @@ Save and exit (`Ctrl+X`, then `Y`, then `Enter`).
 Apply the changes by running:
 
 ```bash
-docker-compose up -d --build
+DOCKER_BUILDKIT=0 docker-compose up -d --build
 ```
 
 ### 🎉 You are done!
