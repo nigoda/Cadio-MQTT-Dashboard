@@ -81,6 +81,10 @@ class UserSession:
         self.sensor_history = {}
         self.automations = {}
         self.automation_logs = {}
+        # Availability tracking (device offline/online detection)
+        self.avail_map = {}        # control topic (cmd/state) -> set of availability topics
+        self.avail_payloads = {}   # availability topic -> {"pl_avail": str, "pl_not_avail": str}
+        self.known_control_topics = set()  # all cmd/state topics seen in discovery configs
         self._sockets = set() # Track active browser tabs
         self.otp = None # Secure code for admin access
 
@@ -229,6 +233,8 @@ def _find_automation(auto_id):
 MAX_AUTO_LOG = 200
 VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
 DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — device was already responding)
+NETWORK_RETRY_DELAY = 300       # seconds (5 min) to wait before retrying a device that won't obey
+DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is judged "missing"
 
 # MQTT Watchdog globals
 _mqtt_last_connected_time = time.time()
@@ -371,6 +377,62 @@ def _auto_subscribe_from_config(client, owner_email, config):
         logging.info(f"[MQTT:{owner_email}] Auto-subscribed to: {t}")
     _subscribed_topics[owner_email] = already
 
+
+def _index_availability_from_config(sess, config):
+    """Build maps of control topics -> availability topics from a discovery config,
+    so the automation engine can detect when a device goes offline."""
+    if not sess or not isinstance(config, dict):
+        return
+
+    # Record this entity's control topics so the engine can tell whether a device
+    # referenced by an automation still exists in discovery (renamed/removed → ERROR).
+    for key in ("state_topic", "stat_t", "command_topic", "cmd_t"):
+        val = config.get(key)
+        if isinstance(val, str) and val:
+            sess.known_control_topics.add(val)
+
+    # Collect this entity's availability topics + their payloads
+    avail_topics = []
+
+    def _register_avail(topic, pl_avail, pl_not_avail):
+        if not topic:
+            return
+        avail_topics.append(topic)
+        sess.avail_payloads[topic] = {
+            "pl_avail": str(pl_avail) if pl_avail is not None else "online",
+            "pl_not_avail": str(pl_not_avail) if pl_not_avail is not None else "offline",
+        }
+
+    default_avail = config.get("payload_available") or config.get("pl_avail")
+    default_not_avail = config.get("payload_not_available") or config.get("pl_not_avail")
+
+    single_avail = config.get("availability_topic") or config.get("avty_t")
+    if single_avail:
+        _register_avail(single_avail, default_avail, default_not_avail)
+
+    if isinstance(config.get("availability"), list):
+        for a in config["availability"]:
+            if isinstance(a, dict) and a.get("topic"):
+                _register_avail(
+                    a["topic"],
+                    a.get("payload_available") or a.get("pl_avail") or default_avail,
+                    a.get("payload_not_available") or a.get("pl_not_avail") or default_not_avail,
+                )
+
+    if not avail_topics:
+        return
+
+    # Map this entity's control topics to its availability topics
+    control_topics = [
+        config.get("state_topic") or config.get("stat_t"),
+        config.get("command_topic") or config.get("cmd_t"),
+    ]
+    for ct in control_topics:
+        if not ct:
+            continue
+        existing = sess.avail_map.setdefault(ct, set())
+        existing.update(avail_topics)
+
 def on_message(client, userdata, msg):
     owner_email = userdata.get("owner_email")
     sess = session_mgr.get_session(owner_email)
@@ -396,6 +458,7 @@ def on_message(client, userdata, msg):
         # 2. If discovery config, auto-subscribe to state/availability topics
         if isinstance(payload, dict) and topic.endswith("/config"):
             _auto_subscribe_from_config(client, owner_email, payload)
+            _index_availability_from_config(sess, payload)
 
         # 3. Handle Sensor History (if payload is numeric)
         if isinstance(payload, (int, float)):
@@ -1147,6 +1210,7 @@ def _new_runtime(old_rt=None):
         "verifyStart": None,
         "bufferStart": None,
         "currentInitIndex": 0,
+        "errorReason": None,
     }
     if old_rt:
         for k in ["cycles_today", "cycles_date", "cycles_history", "duration_history", "last_irrigated"]:
@@ -1171,6 +1235,115 @@ def _get_switch_state(switch_topic, auto=None):
     if isinstance(payload, dict):
         return payload.get("state", "").upper()
     return str(payload).upper() if payload else None
+
+
+def _topic_is_available(sess, ctrl_topic):
+    """Check whether the device behind a control topic (cmd/state) is online.
+    Returns True if available or unknown (no availability info), False if offline."""
+    if not sess or not ctrl_topic:
+        return True
+    avail_topics = sess.avail_map.get(ctrl_topic)
+    if not avail_topics:
+        return True  # No availability topic known → assume available
+    for avail_topic in avail_topics:
+        data = sess.device_states.get(avail_topic)
+        if not data:
+            continue  # No availability message received yet → assume available
+        payload = data.get("payload")
+        raw = payload if isinstance(payload, str) else data.get("raw", str(payload))
+        cfg = sess.avail_payloads.get(avail_topic, {})
+        pl_avail = cfg.get("pl_avail", "online")
+        pl_not_avail = cfg.get("pl_not_avail", "offline")
+        if str(raw) == str(pl_not_avail):
+            return False
+        # If it explicitly matches available payload, or Nivixsa YES fallback, it's online
+        if str(raw) == str(pl_avail) or str(raw).upper() in ("YES", "ONLINE"):
+            continue
+        # Unrecognized payload → treat "OFFLINE"/"NO"/"UNAVAILABLE" as offline
+        if str(raw).upper() in ("NO", "OFFLINE", "UNAVAILABLE"):
+            return False
+    return True
+
+
+def _automation_device_health(auto):
+    """Classify the devices used by an automation.
+    Returns {"missing": [names], "offline": [names]}.
+      - missing: control topic is no longer present in discovery (device removed/renamed) → ERROR
+      - offline: device is known but its availability reports offline → network pause
+    """
+    result = {"missing": [], "offline": []}
+    owner = auto.get("_owner_email", "")
+    sess = session_mgr.get_session(owner)
+    if not sess:
+        return result
+
+    # Only judge a device "missing" once discovery has had time to populate,
+    # to avoid false positives right after (re)connecting to the broker.
+    discovery_ready = (
+        bool(sess.known_control_topics)
+        and (time.time() - getattr(sess, "_mqtt_last_connected_time", 0) > DISCOVERY_GRACE)
+    )
+
+    seen = set()
+
+    def _check(item):
+        ctrl = item.get("switchCmdTopic") or item.get("switchStateTopic") or item.get("sensorStateTopic")
+        if not ctrl or ctrl in seen:
+            return
+        seen.add(ctrl)
+        name = item.get("switchName") or item.get("sensorName") or ctrl
+        if discovery_ready and ctrl not in sess.known_control_topics:
+            result["missing"].append(name)
+            return
+        if not _topic_is_available(sess, ctrl):
+            result["offline"].append(name)
+
+    sched = auto.get("schedule", {})
+    for group in (
+        auto.get("initialization", []),
+        auto.get("actions", []),
+        auto.get("errorState", []),
+        auto.get("condition", []),
+        sched.get("setIfTrue", []),
+        sched.get("setIfFalse", []),
+    ):
+        for item in group or []:
+            _check(item)
+
+    return result
+
+
+def _enter_network_pause(auto, rt, now, resume_state, reason="not_obeying", retry=True):
+    """Freeze the sequence timers and enter PAUSED_NETWORK.
+    Resumes to `resume_state`. If retry=True, resumes automatically after
+    NETWORK_RETRY_DELAY (used when a reachable device won't obey)."""
+    if rt.get("timerStart"):
+        elapsed = now - rt["timerStart"]
+        rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed)
+        rt["timerStart"] = None
+    if rt.get("bufferStart"):
+        elapsed = now - rt["bufferStart"]
+        rt["remainingBuffer"] = max(0, auto.get("bufferTime", BUFFER_SECONDS) - elapsed)
+        rt["bufferStart"] = None
+    rt["verifyStart"] = None
+    rt["prePauseNetwork"] = resume_state
+    rt["errorReason"] = reason
+    rt["retryCount"] = 0
+    rt["pauseUntil"] = (now + NETWORK_RETRY_DELAY) if retry else None
+    rt["state"] = "PAUSED_NETWORK"
+
+
+def _resume_network_pause(auto, rt, now):
+    """Restore frozen timers and resume from the pre-pause state."""
+    rt["state"] = rt.get("prePauseNetwork", "IDLE")
+    if rt.get("remainingTime") is not None:
+        rt["timerStart"] = now
+    if rt.get("remainingBuffer") is not None:
+        rt["bufferStart"] = now - (auto.get("bufferTime", BUFFER_SECONDS) - rt["remainingBuffer"])
+        del rt["remainingBuffer"]
+    rt["errorReason"] = None
+    rt["pauseUntil"] = None
+
 
 
 def _mqtt_set_switch(cmd_topic, state, auto=None):
@@ -1394,6 +1567,53 @@ def engine_tick(auto):
             _emit_auto_update(auto)
         return
 
+    # Priority 1.1: Device health (missing / offline / not-obeying)
+    #   - missing (removed/renamed in discovery) → genuine ERROR (locked)
+    #   - offline / not-obeying → PAUSED_NETWORK (freeze + auto-resume)
+    health = _automation_device_health(auto)
+    missing_devices = health["missing"]
+    offline_devices = health["offline"]
+
+    # A referenced device no longer exists in discovery → real configuration error
+    if missing_devices and state not in ("ERROR", "ERROR_SET", "ERROR_VERIFY"):
+        names = ", ".join(missing_devices)
+        rt["errorReason"] = "missing"
+        rt["state"] = "ERROR_SET"
+        _auto_log(auto_id, f"Device not found (removed/renamed): {names} → ERROR", "error")
+        _emit_auto_update(auto)
+        return
+
+    if state == "PAUSED_NETWORK":
+        # Already network-paused — decide hold / escalate / resume
+        if missing_devices:
+            names = ", ".join(missing_devices)
+            rt["errorReason"] = "missing"
+            rt["state"] = "ERROR_SET"
+            _auto_log(auto_id, f"Device not found (removed/renamed): {names} → ERROR", "error")
+            _emit_auto_update(auto)
+            return
+        if offline_devices:
+            # Still offline → keep waiting
+            if rt.get("errorReason") != "offline":
+                rt["errorReason"] = "offline"
+            rt["pauseUntil"] = None
+            return
+        # Devices reachable. If we paused because a device would not obey,
+        # wait for the retry backoff before trying again.
+        if rt.get("errorReason") == "not_obeying" and now < (rt.get("pauseUntil") or 0):
+            return
+        _resume_network_pause(auto, rt, now)
+        _auto_log(auto_id, f"Device(s) reachable → resuming {rt['state']}", "info")
+        _emit_auto_update(auto)
+        return
+    elif offline_devices:
+        # Enter network pause due to an offline device (resume when it returns)
+        names = ", ".join(offline_devices)
+        _enter_network_pause(auto, rt, now, state, reason="offline", retry=False)
+        _auto_log(auto_id, f"Device offline: {names} → NETWORK ERROR PAUSED", "error")
+        _emit_auto_update(auto)
+        return
+
     bg_unverified = False
     if state not in ("ERROR", "ERROR_SET", "ERROR_VERIFY", "IDLE", "INIT_SET", "INIT_VERIFY_INDIVIDUAL", "INIT_VERIFY_ALL", "OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY") and not auto.get("isPaused"):
         # --- Background Enforce (Set if True / Set if False) ---
@@ -1413,8 +1633,8 @@ def engine_tick(auto):
                 if now - rt.get(last_sent_key, 0) > VERIFY_TIMEOUT:
                     retries = rt.get(retry_key, 0)
                     if retries >= MAX_RETRIES:
-                        rt["state"] = "ERROR_SET"
-                        _auto_log(auto_id, f"Scheduler enforce failed for {item.get('switchName')} after {MAX_RETRIES} retries → ERROR_SET", "error")
+                        _enter_network_pause(auto, rt, now, state, reason="not_obeying")
+                        _auto_log(auto_id, f"Scheduler enforce failed for {item.get('switchName')} (device not responding) → NETWORK ERROR PAUSED", "error")
                         _emit_auto_update(auto)
                         return
 
@@ -1579,8 +1799,8 @@ def engine_tick(auto):
             elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
                 rt["retryCount"] = rt.get("retryCount", 0) + 1
                 if rt["retryCount"] >= MAX_RETRIES:
-                    rt["state"] = "ERROR_SET"
-                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} verification timeout → ERROR_SET", "error")
+                    _enter_network_pause(auto, rt, now, "INIT_SET", reason="not_obeying")
+                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} not responding → NETWORK ERROR PAUSED", "error")
                     _emit_auto_update(auto)
                 else:
                     rt["state"] = "INIT_SET"
@@ -1603,8 +1823,9 @@ def engine_tick(auto):
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
             if rt["retryCount"] >= MAX_RETRIES:
-                rt["state"] = "ERROR_SET"
-                _auto_log(auto_id, "Bulk init verification timeout → ERROR_SET", "error")
+                rt["currentInitIndex"] = 0
+                _enter_network_pause(auto, rt, now, "INIT_SET", reason="not_obeying")
+                _auto_log(auto_id, "Bulk init not responding → NETWORK ERROR PAUSED", "error")
                 _emit_auto_update(auto)
             else:
                 # Restart the sequential flow
@@ -1644,8 +1865,8 @@ def engine_tick(auto):
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
             if rt["retryCount"] >= MAX_RETRIES:
-                rt["state"] = "ERROR_SET"
-                _auto_log(auto_id, f"Action {idx+1} verify timeout → ERROR_SET", "error")
+                _enter_network_pause(auto, rt, now, "ACTION_SET", reason="not_obeying")
+                _auto_log(auto_id, f"Action {idx+1} not responding → NETWORK ERROR PAUSED", "error")
                 _emit_auto_update(auto)
             else:
                 rt["state"] = "ACTION_SET"
@@ -1775,8 +1996,8 @@ def engine_tick(auto):
         elif now - (rt.get("verifyStart") or now) > DRIFT_VERIFY_TIMEOUT:
             rt["driftRetryCount"] = rt.get("driftRetryCount", 0) + 1
             if rt["driftRetryCount"] >= MAX_RETRIES:
-                rt["state"] = "ERROR_SET"
-                _auto_log(auto_id, f"Action {idx+1} drift correction failed after {MAX_RETRIES} retries → ERROR_SET", "error")
+                _enter_network_pause(auto, rt, now, "ACTION_SET", reason="not_obeying")
+                _auto_log(auto_id, f"Action {idx+1} drift — device not responding → NETWORK ERROR PAUSED", "error")
                 _emit_auto_update(auto)
             else:
                 # Re-send and try again
@@ -1823,8 +2044,8 @@ def engine_tick(auto):
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
             if rt["retryCount"] >= MAX_RETRIES:
-                rt["state"] = "ERROR_SET"
-                _auto_log(auto_id, f"Overlap Action {next_idx+1} verify timeout → ERROR_SET", "error")
+                _enter_network_pause(auto, rt, now, "OVERLAP_NEXT_SET", reason="not_obeying")
+                _auto_log(auto_id, f"Overlap Action {next_idx+1} not responding → NETWORK ERROR PAUSED", "error")
                 _emit_auto_update(auto)
             else:
                 rt["state"] = "OVERLAP_NEXT_SET"
@@ -1882,8 +2103,8 @@ def engine_tick(auto):
             rt["driftRetryCount"] = rt.get("driftRetryCount", 0) + 1
             if rt["driftRetryCount"] >= MAX_RETRIES:
                 rt.pop("driftAction", None)
-                rt["state"] = "ERROR_SET"
-                _auto_log(auto_id, f"Buffer drift correction failed after {MAX_RETRIES} retries → ERROR_SET", "error")
+                _enter_network_pause(auto, rt, now, "BUFFER", reason="not_obeying")
+                _auto_log(auto_id, "Buffer drift — device not responding → NETWORK ERROR PAUSED", "error")
                 _emit_auto_update(auto)
             else:
                 _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""), auto)

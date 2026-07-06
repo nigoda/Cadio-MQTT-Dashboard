@@ -51,6 +51,7 @@
     const rs = auto.runtime?.state || "IDLE";
     if (s !== "ON") return "off";
     if (rs === "ERROR") return "error";
+    if (rs === "PAUSED_NETWORK") return "error";
     if (rs.startsWith("PAUSED")) return "paused";
     if (rs === "COMPLETED") return "completed";
     if (rs === "WAIT_CONDITION") return "waiting";
@@ -69,8 +70,15 @@
       OVERLAP_NEXT_VERIFY: auto.runtime?.loopingToFirst ? "Verify Init & Next" : "Verifying Next",
       ACTION_REVERT: "Reverting", ACTION_VERIFY_REVERT: "Verifying Revert", BUFFER: "Buffer",
       PAUSED_CONDITION: "Paused (Condition)", PAUSED_SCHEDULE: "Paused (Schedule)", PAUSED_USER: "Paused (User)", PAUSED_ENFORCE: "Pausing for Schedule",
+      PAUSED_NETWORK: "Network Error Paused",
       COMPLETED: "Completed", ERROR_SET: "Error Recovery", ERROR_VERIFY: "Error Verify", ERROR: "Error"
     };
+    if (rs === "PAUSED_NETWORK") {
+      return "Network Error Paused";
+    }
+    if (rs.startsWith("ERROR") && auto.runtime?.errorReason === "missing") {
+      return "Error (Device Not Found)";
+    }
     return map[rs] || rs;
   }
 
@@ -269,7 +277,9 @@
     }
 
     // State bar
-    $("#irr-cur-state").textContent = (rt.state || "IDLE").replace(/_/g, " ");
+    $("#irr-cur-state").textContent = rt.state === "PAUSED_NETWORK"
+      ? "NETWORK ERROR PAUSED"
+      : (rt.state || "IDLE").replace(/_/g, " ");
 
     let curSub = "—";
     let pct = 0;
