@@ -105,3 +105,26 @@ Docker will now download Python, install all dependencies, and spin up your dash
   docker-compose down
   DOCKER_BUILDKIT=0 docker-compose up -d --build
   ```
+
+---
+
+## Updating an Existing Deployment
+
+When you push new code and want to update a server that is **already running**, just pull and rebuild:
+
+```bash
+cd Cadio-MQTT-Dashboard
+git pull
+docker-compose down
+DOCKER_BUILDKIT=0 docker-compose up -d --build
+docker logs -f nivixsa-smart-agriculture   # verify it started (Ctrl+C to stop tailing)
+```
+
+> [!IMPORTANT]
+> **You do NOT need to recreate your `.env` or database when updating.**
+> `.env`, `cadio.db` (+ `-wal`/`-shm`), and `.encryption_key` are **git-ignored** and **volume-mounted** into the container. This means:
+> * `git pull` never overwrites or deletes them.
+> * `docker-compose down` / `up --build` re-mounts the same files.
+> * **All user accounts, automations, and settings are preserved** across updates.
+>
+> You only need to create `.env` on a **brand-new server** (Step 4), or when you add a **new** environment variable (e.g. adding `SECRET_KEY=...`). After editing `.env`, run `docker-compose down` then `up -d` for it to take effect.

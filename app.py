@@ -1554,6 +1554,16 @@ def engine_tick(auto):
     auto_id = auto["id"]
     now = time.time()
 
+    # Daily rollover: reset today's cycle counter as soon as a new day begins,
+    # so the displayed count returns to 0 at midnight (not only after the next cycle).
+    today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
+    if rt.get("cycles_today", 0) and rt.get("cycles_date") != today_str:
+        rt["cycles_date"] = today_str
+        rt["cycles_today"] = 0
+        rt.pop("_cycle_paused", None)
+        _auto_log(auto_id, "New day → daily cycle counter reset to 0")
+        _emit_auto_update(auto)
+
     # Priority 1: If status is OFF, go IDLE immediately
     if auto.get("status") != "ON":
         if state != "IDLE":
