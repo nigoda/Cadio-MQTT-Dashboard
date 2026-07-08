@@ -4,6 +4,11 @@ Bridges Nivixsa cloud MQTT to the browser via Flask-SocketIO.
 Uses the Nivixsa login API to obtain the real MQTT broker details.
 """
 
+# --- eventlet must be imported and monkey-patched BEFORE everything else ---
+import eventlet
+eventlet.monkey_patch()
+# --------------------------------------------------------------------------
+
 import copy
 import json
 import logging
@@ -42,7 +47,7 @@ DISCOVERY_PREFIX = "homeassistant"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(24)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 # In-memory stores
 device_states: dict = {}        # topic -> last payload
@@ -2999,4 +3004,4 @@ if __name__ == "__main__":
     start_engine()
     # Start Admin Telemetry
     socketio.start_background_task(_admin_telemetry_loop)
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=False)

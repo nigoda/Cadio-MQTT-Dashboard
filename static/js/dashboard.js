@@ -73,6 +73,11 @@
   // -------------------------------------------------------
   // Socket.IO
   // -------------------------------------------------------
+  // Default transports (polling first, then upgrade to WebSocket). Both work under
+  // eventlet: WebSocket-capable networks upgrade; networks that block WebSocket stay
+  // on long-polling, which is fine for real browsers (their engine.io parser has no
+  // per-batch packet cap, unlike python-engineio). Do NOT force websocket-only — that
+  // strands clients on WS-hostile networks with no fallback. See docs/HANDOFF.md.
   const socket = io();
   window.socket = socket; // Expose for other JS files (automation.js, settings.js)
 
