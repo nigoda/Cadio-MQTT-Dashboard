@@ -149,3 +149,97 @@ Then in **Cloudflare → Zero Trust → Networks → Tunnels**, delete the **`ni
 - **`docs/`** (new) — this runbook + HANDOFF.
 
 See HANDOFF.md "✅ RESOLVED" for the full root-cause history.
+
+---
+
+## Full setup guide — deploy from scratch
+
+A clean linear walkthrough to stand up this deployment on a fresh host.
+
+### Prerequisites
+- A Linux host with **Docker + Docker Compose**
+- A **domain managed in Cloudflare** (any domain added to your Cloudflare account)
+- A free **Cloudflare Zero Trust** account
+- Keys/accounts: a **Gemini API key** (AI features), a **VAPID key pair** (web push), and a **Nivixsa/Cadio customer account** to log in with (the app validates against `egycad.com` and gets each user's MQTT details from there)
+
+### Step 1 — Install Docker (if needed)
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER   # then log out/in so `docker` works without sudo
+```
+
+### Step 2 — Clone the repo
+```bash
+mkdir -p ~/project2 && cd ~/project2
+git clone --single-branch --branch Server-cloudflare-deployed \
+  https://github.com/nigoda/Cadio-MQTT-Dashboard.git
+cd Cadio-MQTT-Dashboard
+```
+
+### Step 3 — Create the persistent data files
+`docker-compose.yml` bind-mounts these, so they must exist before the first run:
+```bash
+touch cadio.db cadio.db-wal cadio.db-shm .encryption_key
+```
+
+### Step 4 — Create the Cloudflare Tunnel
+1. **Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel**.
+2. Choose **Cloudflared**, name it (e.g. `nivixsa-demo`), **Save**.
+3. On the "Install connector" screen, **copy the token** — the long string after `--token`. Save it for Step 6.
+4. Open the tunnel's **Public Hostname** tab → **Add a public hostname**:
+   - **Subdomain:** e.g. `nivixsa`  •  **Domain:** your Cloudflare domain
+   - **Type:** `HTTP`  •  **URL:** `nivixsa-smart-agriculture:5000`
+   - Save. Cloudflare auto-creates the matching DNS record — do not add one manually.
+
+### Step 5 — Generate VAPID keys (web push)
+```bash
+pip install pywebpush py-vapid
+vapid --gen                       # writes private_key.pem / public_key.pem
+vapid --applicationServerKey      # prints the public key (the 87-char string)
+```
+(Or `npx web-push generate-vapid-keys` if you prefer Node.) Keep the public + private values for the next step.
+
+### Step 6 — Create `.env`
+Create `.env` in the project root (git-ignored — never commit it):
+```ini
+# Admin panel login (you choose these)
+ADMIN_EMAIL=admin@yourdomain.com
+ADMIN_PASSWORD=change-me-strong
+
+# AI features
+GEMINI_API_KEY=your-gemini-key
+
+# Web push (from Step 5)
+VAPID_PUBLIC_KEY=your-87-char-public-key
+VAPID_PRIVATE_KEY=your-43-char-private-key
+VAPID_CLAIMS_EMAIL=mailto:you@yourdomain.com
+
+# Cloudflare tunnel connector (from Step 4)
+TUNNEL_TOKEN=your-long-tunnel-token
+
+# MQTT — leave default unless you run your own broker
+# MQTT_BROKER=egycad.com
+# MQTT_PORT=1883
+```
+The app pulls each user's real MQTT broker from the Cadio login, so `MQTT_*` normally stays unset.
+
+### Step 7 — Build and run
+```bash
+DOCKER_BUILDKIT=0 docker compose up -d --build
+```
+Starts two containers: `nivixsa-smart-agriculture` (the app, no host port) and `nivixsa-cloudflared` (the tunnel).
+
+### Step 8 — Verify
+```bash
+docker compose ps                                   # both should be "Up"
+docker compose logs --tail 20 cloudflared           # look for "Registered tunnel connection"
+docker compose logs --tail 20 nivixsa-smart-agriculture
+
+# Socket.IO handshake through the tunnel — should return "upgrades":["websocket"]:
+curl -sS "https://nivixsa.yourdomain.com/socket.io/?EIO=4&transport=polling"
+```
+Then open `https://nivixsa.yourdomain.com`:
+- **`/`** → customer dashboard (log in with a Nivixsa/Cadio account)
+- **`/admin/login`** → admin panel (the `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set)
+
+See **Everyday operations** and **Rebuild from scratch** above for update/restart flows.
