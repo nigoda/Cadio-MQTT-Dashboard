@@ -249,7 +249,7 @@ def _find_automation(auto_id):
 MAX_AUTO_LOG = 200
 VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
 DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — device was already responding)
-NETWORK_RETRY_DELAY = 300       # seconds (5 min) to wait before retrying a device that won't obey
+NETWORK_RETRY_DELAY = 120       # seconds (2 min) to wait before retrying a device that won't obey
 DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is judged "missing"
 
 # MQTT Watchdog globals
