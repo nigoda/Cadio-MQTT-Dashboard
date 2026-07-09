@@ -47,9 +47,13 @@ def _get_conn():
     """Get or create a thread-local SQLite connection."""
     global _conn
     if _conn is None:
-        _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        # timeout + busy_timeout make writers wait for a lock (up to 5s) instead
+        # of failing/hanging immediately — important under threading async mode
+        # where the telemetry loop and login handlers share this connection.
+        _conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5.0)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")  # better concurrent read/write
+        _conn.execute("PRAGMA busy_timeout=5000")  # wait up to 5s for locks
         _conn.execute("PRAGMA foreign_keys=ON")
     return _conn
 
@@ -654,25 +658,27 @@ def get_users_with_active_automations():
 # ---------------------------------------------------------------------------
 
 def create_user_session(user_email, user_agent=None):
-    """Create a new database-backed session token for a user."""
+    """Create a new database-backed session token for a user.
+    Sessions never expire (expires_at = NULL); they remain valid until an explicit
+    logout revokes them."""
     conn = _get_conn()
     token = secrets.token_hex(32)
-    expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
     conn.execute(
         "INSERT INTO sessions (session_token, user_email, user_agent, expires_at) VALUES (?, ?, ?, ?)",
-        (token, user_email.lower(), user_agent, expires_at)
+        (token, user_email.lower(), user_agent, None)
     )
     conn.commit()
     return token
 
 
 def validate_user_session(session_token):
-    """Validate a session token. Returns user email if valid, None if expired/invalid."""
+    """Validate a session token. Returns user email if valid, None if revoked/invalid.
+    A NULL expires_at means the session never expires."""
     if not session_token:
         return None
     conn = _get_conn()
     row = conn.execute(
-        "SELECT user_email FROM sessions WHERE session_token = ? AND expires_at > ?",
+        "SELECT user_email FROM sessions WHERE session_token = ? AND (expires_at IS NULL OR expires_at > ?)",
         (session_token, datetime.utcnow().isoformat())
     ).fetchone()
     return row["user_email"] if row else None
@@ -692,6 +698,20 @@ def delete_all_user_sessions(user_email):
     conn = _get_conn()
     conn.execute("DELETE FROM sessions WHERE user_email = ?", (user_email.lower(),))
     conn.commit()
+
+
+def get_user_sessions(user_email):
+    """Return all active (non-expired) login sessions for a user, newest first.
+    Each item: {session_token, created_at, expires_at, user_agent}."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT session_token, created_at, expires_at, user_agent
+           FROM sessions
+           WHERE user_email = ? AND (expires_at IS NULL OR expires_at > ?)
+           ORDER BY created_at DESC""",
+        (user_email.lower(), datetime.utcnow().isoformat())
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def create_admin_session(admin_email, user_agent=None):

@@ -14,6 +14,8 @@
   let _editId = null;    // null = create, string = edit
   let _aiLatLonTargetId = null;
   let _activeAnalyticsId = null; // Tracks which automation analytics is currently open
+  let _searchQuery = "";  // Current automation name filter (lowercased)
+  let _statusFilter = new Set(["all"]);  // Active status/state filters (multi-select, OR)
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   // DOM
@@ -22,6 +24,9 @@
   const detailEmpty = $(".irr-detail-empty");
   const btnAdd = $("#btn-add-automation");
   const modalOverlay = $("#auto-modal-overlay");
+  const searchInput = $("#auto-search");
+  const filterChips = $("#auto-filter-chips");
+  const clearFiltersBtn = $("#auto-clear-filters");
 
   // ─── Helpers ───
   function populateTimezones() {
@@ -57,6 +62,32 @@
     if (rs === "WAIT_CONDITION") return "waiting";
     if (rs === "IDLE") return "off";
     return "running";
+  }
+
+  // True if an automation belongs to a single named filter category.
+  function autoInCategory(auto, filter) {
+    if (!filter || filter === "all") return true;
+    const isOn = auto?.status === "ON";
+    const rs = auto?.runtime?.state || "IDLE";
+    switch (filter) {
+      case "on": return isOn;
+      case "off": return !isOn;
+      case "running": return isOn && stateClass(auto) === "running";
+      case "idle": return isOn && ["IDLE", "WAIT_CONDITION", "COMPLETED"].includes(rs);
+      case "paused": return isOn && rs.startsWith("PAUSED");
+      case "error": return isOn && rs.startsWith("ERROR");
+      default: return true;
+    }
+  }
+
+  // Decide whether an automation matches the active filter set (OR across filters).
+  // An empty set or a set containing "all" means: show everything.
+  function matchesStatusFilter(auto, filters) {
+    if (!filters || filters.size === 0 || filters.has("all")) return true;
+    for (const f of filters) {
+      if (autoInCategory(auto, f)) return true;
+    }
+    return false;
   }
 
   function stateLabel(auto) {
@@ -116,8 +147,42 @@
     return getSensorEntities().map(e => {
       const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
       const dName = `${e.name} (${devName})`;
-      return `<option value="${escHtml(e.stateTopic)}" data-name="${escHtml(dName)}" ${e.stateTopic === selectedTopic ? "selected" : ""}>${escHtml(dName)}</option>`;
+      return `<option value="${escHtml(e.stateTopic)}" data-name="${escHtml(dName)}" data-type="${escHtml(e.type || "")}" ${e.stateTopic === selectedTopic ? "selected" : ""}>${escHtml(dName)}</option>`;
     }).join("");
+  }
+
+  // Numeric comparison operators offered for non-binary (analog) sensors.
+  const COND_NUMERIC_OPS = ["==", "!=", ">", ">=", "<", "<="];
+  // Equality operators offered for binary sensors.
+  const COND_BINARY_OPS = ["==", "!="];
+
+  // Resolve whether a sensor state topic belongs to a binary_sensor or an analog sensor.
+  function sensorTypeForTopic(topic) {
+    const e = getSensorEntities().find(x => x.stateTopic === topic);
+    return e ? (e.type || "binary_sensor") : "binary_sensor";
+  }
+
+  // Build the operator + value portion of a condition row based on the sensor type.
+  // Binary sensors → ==/!= operator with an ON/OFF selector.
+  // Analog sensors → operator dropdown (==, !=, >, >=, <, <=) with a manual numeric input.
+  function condValueHtml(sensorType, data) {
+    if (sensorType === "sensor") {
+      const selOp = COND_NUMERIC_OPS.includes(data?.op) ? data.op : "==";
+      const opOptions = COND_NUMERIC_OPS.map(o => `<option value="${o}" ${o === selOp ? "selected" : ""}>${o}</option>`).join("");
+      const val = (data?.value === undefined || data?.value === null) ? "" : data.value;
+      return `<select class="f-op">${opOptions}</select>
+        <input type="number" class="f-val" step="any" value="${escHtml(String(val))}" placeholder="Value" style="width:90px;">`;
+    }
+    const selBinOp = COND_BINARY_OPS.includes(data?.op) ? data.op : "==";
+    const binOpOptions = COND_BINARY_OPS.map(o => `<option value="${o}" ${o === selBinOp ? "selected" : ""}>${o}</option>`).join("");
+    return `<select class="f-op">${binOpOptions}</select>
+      <select class="f-state"><option value="ON" ${data?.value === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.value !== "ON" ? "selected" : ""}>OFF</option></select>`;
+  }
+
+  // Operator symbol shown in the read-only condition summary.
+  function condOpDisplay(c) {
+    const o = c?.op;
+    return (!o || o === "==" || o === "=") ? "=" : o;
   }
 
   // ─── Render List ───
@@ -180,7 +245,12 @@
     
     // Enforce monotonic increase: never let bar go backwards during a running cycle
     const autoId = auto.id;
-    if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state || (rt.state === "INIT_SET" && !rt.loopingToFirst)) {
+    // A new cycle begins at index 0 with loopingToFirst cleared. This happens both on
+    // a fresh startup (state INIT_SET) and when looping back for another cycle, where the
+    // backend jumps straight to ACTION_SET (skipping INIT_SET). Reset the high-water-mark
+    // in both cases so the bar restarts from 0% instead of sticking at 100%.
+    const isFreshCycleStart = (rt.state === "INIT_SET" || rt.state === "ACTION_SET") && idx === 0 && !rt.loopingToFirst;
+    if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state || isFreshCycleStart) {
       // Reset high-water-mark when cycle ends, automation is idle, or fresh startup/reset
       delete _lastProgress[autoId];
     } else {
@@ -206,7 +276,15 @@
       autoList.innerHTML = '<div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>';
       return;
     }
-    autoList.innerHTML = autos.map(a => {
+    const filtered = autos.filter(a => {
+      if (_searchQuery && !(a.name || "").toLowerCase().includes(_searchQuery)) return false;
+      return matchesStatusFilter(a, _statusFilter);
+    });
+    if (filtered.length === 0) {
+      autoList.innerHTML = `<div class="ha-empty-row">No automations match your filters.</div>`;
+      return;
+    }
+    autoList.innerHTML = filtered.map(a => {
       const cls = stateClass(a);
       const sel = a.id === _selectedId ? " active" : "";
       const isRunning = a.status === "ON" && a.runtime && a.runtime.state !== "IDLE" && a.runtime.state !== "ERROR";
@@ -553,7 +631,7 @@
     const conds = auto.condition || [];
     condBody.innerHTML = conds.map((c, i) => {
       const logicBadge = c.logic && i < conds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">=</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
     }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">No conditions (always true)</span>';
 
     // Actions
@@ -605,7 +683,7 @@
     const schedConds = sched.conditions || [];
     const schedCondHTML = schedConds.length > 0 ? `<div style="margin-top:12px;"><span class="irr-label">Conditions</span><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${schedConds.map((c, i) => {
       const logicBadge = c.logic && i < schedConds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">=</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
     }).join("")}</div></div>` : '';
 
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
@@ -804,19 +882,28 @@
         <select class="f-state"><option value="ON" ${data?.state === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.state !== "ON" ? "selected" : ""}>OFF</option></select>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     } else if (type === "condition") {
-      row.innerHTML = `<select class="f-sensor">${sensorOptions(data?.sensorStateTopic || "")}</select>
-        <span class="irr-cond-op">=</span>
-        <select class="f-state"><option value="ON" ${data?.value === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.value !== "ON" ? "selected" : ""}>OFF</option><option value="HIGH" ${data?.value === "HIGH" ? "selected" : ""}>HIGH</option><option value="LOW" ${data?.value === "LOW" ? "selected" : ""}>LOW</option></select>
+      const initialTopic = data?.sensorStateTopic || "";
+      const sType = sensorTypeForTopic(initialTopic);
+      row.innerHTML = `<select class="f-sensor">${sensorOptions(initialTopic)}</select>
+        <span class="f-cond-value-cell" style="display:flex;gap:6px;align-items:center;">${condValueHtml(sType, data)}</span>
         <select class="f-logic"><option value="AND" ${data?.logic !== "OR" ? "selected" : ""}>AND</option><option value="OR" ${data?.logic === "OR" ? "selected" : ""}>OR</option></select>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
+      // Rebuild the operator/value UI whenever the selected sensor changes so that
+      // binary sensors show ON/OFF and analog sensors show numeric operators + input.
+      const sensorSel = row.querySelector(".f-sensor");
+      sensorSel?.addEventListener("change", () => {
+        const cell = row.querySelector(".f-cond-value-cell");
+        if (cell) cell.innerHTML = condValueHtml(sensorTypeForTopic(sensorSel.value), {});
+      });
     } else if (type === "action") {
       const dur = data?.duration || 0;
       const h = Math.floor(dur / 3600);
       const m = Math.floor((dur % 3600) / 60);
       const s = dur % 60;
+      row.classList.add("irr-form-row-action");
       row.innerHTML = `<select class="f-switch">${switchOptions(data?.switchCmdTopic || "")}</select>
         <select class="f-state"><option value="ON" ${data?.state === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.state !== "ON" ? "selected" : ""}>OFF</option></select>
-        <div style="display:flex;gap:4px;align-items:center;">
+        <div class="f-dur-group" style="display:flex;gap:4px;align-items:center;">
           <input type="number" class="f-dur-h" value="${h}" min="0" max="99" style="width:48px;text-align:center;padding:8px 4px;" oninput="if(this.value.length > 2) this.value = this.value.slice(0,2)">
           <span style="font-size:13px;color:var(--ha-text-secondary);margin-right:4px;">h</span>
           <input type="number" class="f-dur-m" value="${m}" min="0" max="59" style="width:48px;text-align:center;padding:8px 4px;" oninput="if(this.value.length > 2) this.value = this.value.slice(0,2)">
@@ -934,11 +1021,23 @@
       return { switchCmdTopic: sel?.value || "", switchStateTopic: opt?.dataset.state || "", switchName: opt?.dataset.name || "", state: r.querySelector(".f-state")?.value || "OFF" };
     });
 
-    const conds = [...$("#auto-f-cond").querySelectorAll(".irr-form-row")].map(r => {
+    // Collect a single condition row. The operator dropdown (.f-op) is always present.
+    // Analog sensors provide a numeric input (.f-val); binary sensors an ON/OFF selector (.f-state).
+    const collectCondRow = (r) => {
       const sel = r.querySelector(".f-sensor");
       const opt = sel?.selectedOptions[0];
-      return { sensorStateTopic: sel?.value || "", sensorName: opt?.dataset.name || "", value: r.querySelector(".f-state")?.value || "OFF", logic: r.querySelector(".f-logic")?.value || "AND" };
-    });
+      const valInput = r.querySelector(".f-val");
+      const stateSel = r.querySelector(".f-state");
+      return {
+        sensorStateTopic: sel?.value || "",
+        sensorName: opt?.dataset.name || "",
+        op: r.querySelector(".f-op")?.value || "==",
+        value: valInput ? (valInput.value ?? "") : (stateSel?.value || "OFF"),
+        logic: r.querySelector(".f-logic")?.value || "AND"
+      };
+    };
+
+    const conds = [...$("#auto-f-cond").querySelectorAll(".irr-form-row")].map(r => collectCondRow(r));
 
     const actions = [...$("#auto-f-actions").querySelectorAll(".irr-form-row")].map(r => {
       const sel = r.querySelector(".f-switch");
@@ -976,11 +1075,7 @@
       ai_custom_rules: editAuto?.schedule?.ai_custom_rules || "",
       setIfTrue: collectSwitchRows("auto-f-set-true"),
       setIfFalse: collectSwitchRows("auto-f-set-false"),
-      conditions: [...$("#auto-f-sched-cond").querySelectorAll(".irr-form-row")].map(r => {
-        const sel = r.querySelector(".f-sensor");
-        const opt = sel?.selectedOptions[0];
-        return { sensorStateTopic: sel?.value || "", sensorName: opt?.dataset.name || "", value: r.querySelector(".f-state")?.value || "OFF", logic: r.querySelector(".f-logic")?.value || "AND" };
-      })
+      conditions: [...$("#auto-f-sched-cond").querySelectorAll(".irr-form-row")].map(r => collectCondRow(r))
     };
     const latStr = $("#auto-f-lat").value;
     const lonStr = $("#auto-f-lon").value;
@@ -1018,6 +1113,58 @@
   $("#auto-modal-close")?.addEventListener("click", closeModal);
   $("#auto-modal-cancel")?.addEventListener("click", closeModal);
   modalOverlay?.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
+
+  // Automation name search filter
+  searchInput?.addEventListener("input", () => {
+    _searchQuery = (searchInput.value || "").trim().toLowerCase();
+    updateClearFiltersBtn();
+    renderList();
+  });
+
+  // Reflect the current _statusFilter set onto the chip buttons' active state.
+  function syncFilterChips() {
+    if (!filterChips) return;
+    filterChips.querySelectorAll(".irr-filter-chip").forEach((chip) => {
+      chip.classList.toggle("active", _statusFilter.has(chip.dataset.filter));
+    });
+  }
+
+  // Automation status/state filter (multi-select chips, OR logic)
+  filterChips?.addEventListener("click", (e) => {
+    const chip = e.target.closest(".irr-filter-chip");
+    if (!chip) return;
+    const val = chip.dataset.filter;
+    if (val === "all") {
+      _statusFilter = new Set(["all"]);
+    } else {
+      _statusFilter.delete("all");
+      if (_statusFilter.has(val)) _statusFilter.delete(val);
+      else _statusFilter.add(val);
+      // Falling back to "All" when nothing is selected keeps the list populated.
+      if (_statusFilter.size === 0) _statusFilter.add("all");
+    }
+    syncFilterChips();
+    updateClearFiltersBtn();
+    renderList();
+  });
+
+  // Show the clear button only when a search term or non-default filter is active.
+  function updateClearFiltersBtn() {
+    if (!clearFiltersBtn) return;
+    const active = _searchQuery !== "" || !_statusFilter.has("all");
+    clearFiltersBtn.classList.toggle("hidden", !active);
+  }
+
+  // Clear all automation filters (search box + status chips).
+  clearFiltersBtn?.addEventListener("click", () => {
+    _searchQuery = "";
+    _statusFilter = new Set(["all"]);
+    if (searchInput) searchInput.value = "";
+    syncFilterChips();
+    updateClearFiltersBtn();
+    renderList();
+    searchInput?.focus();
+  });
 
   // ─── Socket events ───
   socket.on("automations_list", (list) => {

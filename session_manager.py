@@ -109,20 +109,16 @@ class UserSession:
         if port == 8883:
             self.mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS)
 
-        logging.info(f"[SESSION:{self.email}] Connecting MQTT to {self.broker}:{port}")
+        logging.info(f"[SESSION:{self.email}] Connecting MQTT to {self.broker}:{port} (async)")
         try:
-            self.mqtt_client.connect(self.broker, port, keepalive=60)
+            # Non-blocking connect: the TCP/MQTT handshake happens in the
+            # loop_start() background thread, so the login request returns
+            # immediately instead of blocking 5-30s. The client is told
+            # "Connected" from the on_connect callback once it actually connects.
+            self.mqtt_client.connect_async(self.broker, port, keepalive=60)
         except Exception as exc:
-            logging.error(f"[SESSION:{self.email}] MQTT connect failed: {exc}")
-            if port == 1883:
-                try:
-                    self.mqtt_client.tls_set(cert_reqs=ssl.CERT_REQUIRED, tls_version=ssl.PROTOCOL_TLS)
-                    self.mqtt_client.connect(self.broker, 8883, keepalive=60)
-                except Exception as exc2:
-                    logging.error(f"[SESSION:{self.email}] MQTT TLS also failed: {exc2}")
-                    return False
-            else:
-                return False
+            logging.error(f"[SESSION:{self.email}] MQTT connect_async failed: {exc}")
+            return False
 
         self.mqtt_client.loop_start()
         self.active = True

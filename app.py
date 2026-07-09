@@ -4,15 +4,25 @@ Bridges Nivixsa cloud MQTT to the browser via Flask-SocketIO.
 Uses the Nivixsa login API to obtain the real MQTT broker details.
 """
 
-# --- eventlet must be imported and monkey-patched BEFORE everything else ---
-import eventlet
-eventlet.monkey_patch()
-# --------------------------------------------------------------------------
+# Load environment first so the async mode can be chosen before importing any
+# module that eventlet needs to monkey-patch.
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+# Async mode is configurable. Default "eventlet" (used in Docker/production).
+# On Windows local dev, eventlet's cooperative networking can stall the whole
+# server during blocking I/O (login API calls, MQTT connect, DNS). Set
+# ASYNC_MODE=threading in your .env there to avoid it.
+ASYNC_MODE = os.getenv("ASYNC_MODE", "eventlet").strip().lower()
+if ASYNC_MODE == "eventlet":
+    # eventlet must be monkey-patched BEFORE importing socket/threading users.
+    import eventlet
+    eventlet.monkey_patch()
 
 import copy
 import json
 import logging
-import os
 import ssl
 import threading
 import time
@@ -21,15 +31,15 @@ import re
 import atexit
 import math
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-
-load_dotenv()
 
 import paho.mqtt.client as mqtt
 import requests
 import psutil
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+# Log level is configurable; default INFO. DEBUG floods the console on every MQTT
+# message which, under eventlet, can block the hub and slow the whole server.
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s")
 from flask import Flask, render_template, request, session, redirect, send_from_directory, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
@@ -47,7 +57,7 @@ DISCOVERY_PREFIX = "homeassistant"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(24)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
 
 # In-memory stores
 device_states: dict = {}        # topic -> last payload
@@ -187,6 +197,7 @@ session_mgr = SessionManager()
 
 # Per-socket user session tracking (for multi-user isolation)
 _user_sessions: dict = {}       # socket_sid -> email
+_sid_token: dict = {}           # socket_sid -> DB session_token (for per-device logout)
 _impersonation_tokens: dict = {} # token -> email (Temporary access tokens)
 
 def _get_user_email():
@@ -843,6 +854,7 @@ def handle_ws_disconnect():
     sid = request.sid
     # Standard disconnect (browser close) doesn't necessarily kill the MQTT session 
     # unless it was the last socket.
+    _sid_token.pop(sid, None)
     email = _user_sessions.pop(sid, None)
     if email:
         session_mgr.unregister_socket(sid)
@@ -851,23 +863,67 @@ def handle_ws_disconnect():
     _emit_admin_stats()
 
 
+def _resolve_session_token(email, data):
+    """Return the DB session token to use for this device.
+
+    Reuses the client-provided token (from localStorage) or the cookie token when
+    it is still valid for this user — this keeps a single session row per device
+    across page refreshes/reconnects. Only creates a new token when none is valid.
+    """
+    import db
+    from flask import request as ws_request
+    client_token = data.get("token") or session.get("user_session_token")
+    if client_token and db.validate_user_session(client_token) == email:
+        return client_token
+    ua = ""
+    try:
+        ua = ws_request.headers.get("User-Agent", "")
+    except Exception:
+        pass
+    return db.create_user_session(email, ua)
+
+
 @socketio.on("login")
 def handle_login(data):
     email = data.get("email", "").strip().lower()
     password = data.get("password", "")
-    
     # 1. Check if blocked locally BEFORE hitting external API
     import db
     if db.is_user_blocked(email):
         emit("mqtt_status", {"connected": False, "message": "Account blocked: security strike policy. Contact admin."})
         return
 
+    # 1.5 Token-gated auto-login: if this is a SILENT auto-login (from saved
+    # credentials / reconnect) and this device holds a session token that has
+    # been revoked (e.g. "Log out this device" was used from elsewhere), refuse
+    # the re-login and force the user to sign in manually again. This makes
+    # per-device logout effective even for devices that were offline at the time.
+    # The device's token is provided by the client (localStorage) and/or the cookie.
+    client_token = data.get("token") or session.get("user_session_token")
+    if data.get("auto") and client_token:
+        try:
+            revoked = db.validate_user_session(client_token) != email
+        except Exception:
+            revoked = False  # fail open: never block a login on a DB hiccup
+        if revoked:
+            emit("force_logout", {
+                "email": email,
+                "message": "This device was logged out. Please sign in again."
+            })
+            return
+
     # 2. Fast path: if session already exists and is connected, just re-join the room
     existing_sess = session_mgr.get_session(email)
     if existing_sess and existing_sess.mqtt_connected and existing_sess.password == password:
+        # Reuse this device's existing valid token (avoids creating a duplicate
+        # session row on every refresh); create one only if none is valid yet.
+        tok = _resolve_session_token(email, data)
+        session["user_session_token"] = tok
         _user_sessions[request.sid] = email
+        _sid_token[request.sid] = tok
         session_mgr.register_socket(request.sid, email)
         join_room(existing_sess.room)
+        emit("session_token", {"token": tok})
         emit("mqtt_status", {"connected": True, "message": "Connected"})
         for topic, d in existing_sess.device_states.items():
             emit("device_update", {"topic": topic, **d})
@@ -888,12 +944,14 @@ def handle_login(data):
     db.save_user(email, password)
     db.unblock_user(email)
     
-    # 5. Create a database-backed session token for global invalidation
-    session_token = db.create_user_session(email, request.headers.get("User-Agent", ""))
+    # 5. Reuse this device's existing valid token or create a new one
+    session_token = _resolve_session_token(email, data)
     session["user_session_token"] = session_token
+    emit("session_token", {"token": session_token})
         
     # 6. Register socket and join user's private room
     _user_sessions[request.sid] = email
+    _sid_token[request.sid] = session_token
     sess = session_mgr.create_session(
         email, password,
         broker=MQTT_BROKER, port=MQTT_PORT, discovery_prefix=DISCOVERY_PREFIX
@@ -986,6 +1044,7 @@ def handle_logout():
     # Unregister ALL sockets for this user
     for s in sids:
         _user_sessions.pop(s, None)
+        _sid_token.pop(s, None)
     if user_session:
         session_mgr.unregister_socket(request.sid)
         leave_room(user_session.room)
@@ -993,6 +1052,102 @@ def handle_logout():
     
     _emit_admin_stats()
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
+
+
+def _parse_user_agent(ua):
+    """Produce a short, human-friendly device/browser label from a User-Agent string."""
+    ua = ua or ""
+    ua_l = ua.lower()
+    # Operating system / device
+    if "android" in ua_l:
+        os_name = "Android"
+    elif "iphone" in ua_l or "ipad" in ua_l or "ipod" in ua_l:
+        os_name = "iOS"
+    elif "windows" in ua_l:
+        os_name = "Windows"
+    elif "mac os" in ua_l or "macintosh" in ua_l:
+        os_name = "macOS"
+    elif "linux" in ua_l:
+        os_name = "Linux"
+    else:
+        os_name = "Unknown OS"
+    # Browser
+    if "edg/" in ua_l or "edge" in ua_l:
+        browser = "Edge"
+    elif "chrome" in ua_l and "chromium" not in ua_l:
+        browser = "Chrome"
+    elif "firefox" in ua_l:
+        browser = "Firefox"
+    elif "safari" in ua_l:
+        browser = "Safari"
+    else:
+        browser = "Browser"
+    return f"{browser} on {os_name}"
+
+
+@socketio.on("list_user_sessions")
+def handle_list_user_sessions():
+    """Send the current user their active login sessions (devices)."""
+    email = _user_sessions.get(request.sid)
+    if not email:
+        emit("user_sessions", {"sessions": []})
+        return
+    import db
+    current_token = session.get("user_session_token")
+    online_tokens = set(t for t in _sid_token.values() if t)
+    rows = db.get_user_sessions(email)
+    out = []
+    for r in rows:
+        token = r.get("session_token", "")
+        out.append({
+            "id": token[:12],  # short, non-credential identifier used for revocation
+            "device": _parse_user_agent(r.get("user_agent")),
+            "user_agent": r.get("user_agent") or "",
+            "created_at": r.get("created_at") or "",
+            "expires_at": r.get("expires_at") or "",
+            "current": bool(current_token) and token == current_token,
+            "online": token in online_tokens,
+        })
+    emit("user_sessions", {"sessions": out})
+
+
+@socketio.on("logout_device")
+def handle_logout_device(data):
+    """Revoke a single login session (device) belonging to the current user."""
+    email = _user_sessions.get(request.sid)
+    if not email:
+        return
+    session_id = (data or {}).get("id", "")
+    if not session_id:
+        return
+    import db
+    # Resolve the short id back to the full token, scoped to this user only.
+    match = next((r["session_token"] for r in db.get_user_sessions(email)
+                  if r.get("session_token", "").startswith(session_id)), None)
+    if not match:
+        emit("user_sessions_error", {"message": "Session not found."})
+        return
+
+    # Delete the token from the DB (device is logged out on its next request).
+    db.delete_user_session(match)
+
+    # Immediately force-disconnect any live sockets bound to that token.
+    sids = [s for s, t in list(_sid_token.items()) if t == match]
+    for s in sids:
+        socketio.emit("force_logout", {
+            "email": email,
+            "message": "This device was logged out from another device."
+        }, room=s)
+        _sid_token.pop(s, None)
+        _user_sessions.pop(s, None)
+        try:
+            session_mgr.unregister_socket(s)
+        except Exception:
+            pass
+
+    # Refresh the requester's device list (unless they logged themselves out).
+    if match != session.get("user_session_token"):
+        handle_list_user_sessions()
 
 
 @socketio.on("publish")
@@ -1370,6 +1525,43 @@ def _mqtt_set_switch(cmd_topic, state, auto=None):
         logging.info(f"[ENGINE] Published {payload} to {cmd_topic}")
 
 
+def _match_condition(cond, auto):
+    """Evaluate a single sensor condition against its live value.
+
+    Supports operators: ==, != (equality — numeric when both sides parse as numbers,
+    otherwise case-insensitive string compare) and >, >=, <, <= (numeric only).
+    Missing/legacy conditions (no "op") default to equality. Returns False when the
+    live value is unavailable or a numeric operator gets a non-numeric value."""
+    sensor_topic = cond.get("sensorStateTopic", "")
+    actual = _get_switch_state(sensor_topic, auto)
+    if actual is None:
+        return False
+
+    op = cond.get("op") or "=="
+    expected = cond.get("value", "")
+
+    if op in ("<", "<=", ">", ">="):
+        try:
+            a = float(actual)
+            b = float(expected)
+        except (ValueError, TypeError):
+            return False
+        if op == "<":
+            return a < b
+        if op == "<=":
+            return a <= b
+        if op == ">":
+            return a > b
+        return a >= b
+
+    # Equality / inequality: prefer numeric compare, fall back to string compare.
+    try:
+        eq = float(actual) == float(expected)
+    except (ValueError, TypeError):
+        eq = str(actual).strip().upper() == str(expected).strip().upper()
+    return (not eq) if op == "!=" else eq
+
+
 def evaluate_condition(auto):
     """Evaluate the condition expression using AND/OR logic.
     AND has higher precedence than OR (groups are formed by AND, then OR'd).
@@ -1381,10 +1573,7 @@ def evaluate_condition(auto):
     # Build results list with logic operators
     results = []
     for cond in conditions:
-        sensor_topic = cond.get("sensorStateTopic", "")
-        expected = str(cond.get("value", "")).upper()
-        actual = _get_switch_state(sensor_topic, auto)
-        matched = actual == expected if actual is not None else False
+        matched = _match_condition(cond, auto)
         results.append({"matched": matched, "logic": cond.get("logic")})
 
     # Evaluate: AND groups first, then OR between groups
@@ -1497,10 +1686,7 @@ def _evaluate_sched_conditions(conditions, auto):
 
     results = []
     for cond in conditions:
-        sensor_topic = cond.get("sensorStateTopic", "")
-        expected = str(cond.get("value", "")).upper()
-        actual = _get_switch_state(sensor_topic, auto)
-        matched = actual == expected if actual is not None else False
+        matched = _match_condition(cond, auto)
         results.append({"matched": matched, "logic": cond.get("logic")})
 
     # Evaluate: AND groups first, then OR between groups
@@ -1559,14 +1745,17 @@ def engine_tick(auto):
     auto_id = auto["id"]
     now = time.time()
 
-    # Daily rollover: reset today's cycle counter as soon as a new day begins,
-    # so the displayed count returns to 0 at midnight (not only after the next cycle).
-    today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
-    if rt.get("cycles_today", 0) and rt.get("cycles_date") != today_str:
+    # Daily rollover: reset today's cycle counter shortly after midnight (at 00:01),
+    # so the displayed count returns to 0 at the start of a new day. The 1-minute guard
+    # avoids resetting exactly at 00:00 while a cycle may still be wrapping up.
+    now_local = _get_auto_now(auto)
+    today_str = now_local.strftime("%Y-%m-%d")
+    minute_of_day = now_local.hour * 60 + now_local.minute
+    if rt.get("cycles_today", 0) and rt.get("cycles_date") != today_str and minute_of_day >= 1:
         rt["cycles_date"] = today_str
         rt["cycles_today"] = 0
         rt.pop("_cycle_paused", None)
-        _auto_log(auto_id, "New day → daily cycle counter reset to 0")
+        _auto_log(auto_id, "New day (00:01) → daily cycle counter reset to 0")
         _emit_auto_update(auto)
 
     # Priority 1: If status is OFF, go IDLE immediately

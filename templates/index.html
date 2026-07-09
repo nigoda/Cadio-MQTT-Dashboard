@@ -219,6 +219,9 @@
             <section id="tab-overview" class="ha-view active">
                 <div class="ha-view-header">
                     <h1>Overview</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="overview-search" class="ha-input-sm" placeholder="Search devices…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="status-badges" class="ha-badges-row"></div>
                 <div id="overview-devices" class="ha-masonry">
@@ -240,17 +243,28 @@
                 <div class="irr-workspace">
                     <!-- LEFT: Automation List -->
                     <div class="irr-list-panel">
+                        <div class="irr-auto-search">
+                            <div class="irr-auto-search-box">
+                                <span class="material-symbols-outlined irr-auto-search-icon">search</span>
+                                <input type="text" id="auto-search" class="irr-auto-search-input"
+                                    placeholder="Search automations..." autocomplete="off">
+                            </div>
+                            <button type="button" id="auto-clear-filters" class="irr-auto-clear-btn hidden"
+                                title="Clear search & filters">
+                                <span class="material-symbols-outlined">filter_alt_off</span>
+                            </button>
+                        </div>
+                        <div id="auto-filter-chips" class="irr-auto-filter-chips" title="Filter automations (select one or more)">
+                            <button type="button" class="irr-filter-chip active" data-filter="all">All</button>
+                            <button type="button" class="irr-filter-chip" data-filter="on">On</button>
+                            <button type="button" class="irr-filter-chip" data-filter="off">Off</button>
+                            <button type="button" class="irr-filter-chip" data-filter="running">Running</button>
+                            <button type="button" class="irr-filter-chip" data-filter="idle">Idle</button>
+                            <button type="button" class="irr-filter-chip" data-filter="paused">Paused</button>
+                            <button type="button" class="irr-filter-chip" data-filter="error">Error</button>
+                        </div>
                         <div id="auto-list" class="irr-auto-list">
                             <div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>
-                        </div>
-                        <!-- Controller Status -->
-                        <div class="irr-controller-status">
-                            <h4>Controller Status</h4>
-                            <div class="irr-ctrl-row"><span class="irr-ctrl-dot connected"></span> <span>Online</span>
-                            </div>
-                            <div class="irr-ctrl-info"><span>Uptime</span><span id="irr-uptime">—</span></div>
-                            <div class="irr-ctrl-info"><span>IP Address</span><span id="irr-ip">—</span></div>
-                            <div class="irr-ctrl-info"><span>Firmware</span><span id="irr-fw">—</span></div>
                         </div>
                     </div>
 
@@ -616,6 +630,9 @@
             <section id="tab-lights" class="ha-view">
                 <div class="ha-view-header">
                     <h1>Lights</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="lights-search" class="ha-input-sm" placeholder="Search lights…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="lights-devices" class="ha-masonry">
                     <div class="ha-card">
@@ -628,6 +645,9 @@
             <section id="tab-switches" class="ha-view">
                 <div class="ha-view-header">
                     <h1>Switches</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="switches-search" class="ha-input-sm" placeholder="Search switches…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="switches-devices" class="ha-masonry">
                     <div class="ha-card">
@@ -640,6 +660,9 @@
             <section id="tab-sensors" class="ha-view">
                 <div class="ha-view-header">
                     <h1>Sensors</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="sensors-search" class="ha-input-sm" placeholder="Search sensors…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="sensors-badges" class="ha-badges-row"></div>
                 <div id="sensors-devices" class="ha-masonry">
@@ -668,6 +691,17 @@
                     <div class="ha-view-actions">
                         <input type="text" id="log-filter" class="ha-input-sm" placeholder="Filter…">
                         <button id="btn-clear-log" class="ha-btn-text">Clear</button>
+                    </div>
+                </div>
+                <div class="ha-card ha-sessions-card">
+                    <div class="ha-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+                        <span><span class="material-symbols-outlined" style="vertical-align:middle;margin-right:6px;">devices</span>Logged-in Devices</span>
+                        <button id="btn-refresh-sessions" class="ha-btn-text" title="Refresh device list">
+                            <span class="material-symbols-outlined" style="font-size:18px;">refresh</span>
+                        </button>
+                    </div>
+                    <div id="sessions-list" class="ha-sessions-list">
+                        <div class="ha-empty-row">Loading devices…</div>
                     </div>
                 </div>
                 <div class="ha-card">
