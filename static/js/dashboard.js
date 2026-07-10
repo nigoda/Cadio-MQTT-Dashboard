@@ -49,6 +49,7 @@
   const statusDotMob  = $("#status-indicator-mobile");
   const statusText    = $("#status-text");
   const deviceCount   = $("#device-count");
+  const userEmailEl   = $("#user-email-display");
 
   const statusBadges      = $("#status-badges");
   const overviewDevices   = $("#overview-devices");
@@ -197,6 +198,13 @@
     if (connected && data.message === "Connected") {
       loginOverlay.classList.add("hidden");
       appEl.classList.remove("hidden");
+
+      // Show the logged-in user's email in the sidebar
+      const currentEmail = loginEmail.value || localStorage.getItem("cadio_email") || "";
+      if (userEmailEl && currentEmail) {
+        userEmailEl.textContent = currentEmail;
+        userEmailEl.title = currentEmail;
+      }
       
       const loginBtn = document.getElementById("login-submit-btn");
       if (loginBtn) {
