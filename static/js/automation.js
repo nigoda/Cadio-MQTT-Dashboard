@@ -25,7 +25,11 @@
   const btnAdd = $("#btn-add-automation");
   const modalOverlay = $("#auto-modal-overlay");
   const searchInput = $("#auto-search");
-  const filterChips = $("#auto-filter-chips");
+  const filterDD = $("#auto-filter-dd");
+  const filterDDTrigger = $("#auto-filter-dd-trigger");
+  const filterDDMenu = $("#auto-filter-dd-menu");
+  const filterDDLabel = $("#auto-filter-dd-label");
+  const filterClearBtn = $("#auto-filter-clear");
   const clearFiltersBtn = $("#auto-clear-filters");
 
   // ─── Helpers ───
@@ -1121,29 +1125,84 @@
     renderList();
   });
 
-  // Reflect the current _statusFilter set onto the chip buttons' active state.
-  function syncFilterChips() {
-    if (!filterChips) return;
-    filterChips.querySelectorAll(".irr-filter-chip").forEach((chip) => {
-      chip.classList.toggle("active", _statusFilter.has(chip.dataset.filter));
+  // Reflect the current _statusFilter set onto the dropdown checkboxes + trigger label.
+  function syncFilterDropdown() {
+    if (!filterDDMenu) return;
+    const isAll = _statusFilter.has("all") || _statusFilter.size === 0;
+    filterDDMenu.querySelectorAll(".irr-filter-dd-cb").forEach((cb) => {
+      cb.checked = cb.value === "all" ? isAll : (!isAll && _statusFilter.has(cb.value));
     });
+    if (filterDDLabel) {
+      if (isAll) {
+        filterDDLabel.textContent = "All";
+      } else if (_statusFilter.size === 1) {
+        const v = [..._statusFilter][0];
+        filterDDLabel.textContent = v.charAt(0).toUpperCase() + v.slice(1);
+      } else {
+        filterDDLabel.textContent = `${_statusFilter.size} selected`;
+      }
+    }
   }
 
-  // Automation status/state filter (multi-select chips, OR logic)
-  filterChips?.addEventListener("click", (e) => {
-    const chip = e.target.closest(".irr-filter-chip");
-    if (!chip) return;
-    const val = chip.dataset.filter;
-    if (val === "all") {
+  // Position the (fixed) menu directly under the trigger. Fixed positioning
+  // lets it escape the list panel's overflow:hidden so every option is visible.
+  function positionFilterMenu() {
+    if (!filterDDTrigger || !filterDDMenu) return;
+    const r = filterDDTrigger.getBoundingClientRect();
+    filterDDMenu.style.top = (r.bottom + 4) + "px";
+    filterDDMenu.style.left = r.left + "px";
+    filterDDMenu.style.minWidth = r.width + "px";
+  }
+  function closeFilterMenu() {
+    filterDDMenu?.classList.add("hidden");
+    filterDDTrigger?.setAttribute("aria-expanded", "false");
+  }
+
+  // Open / close the filter dropdown.
+  filterDDTrigger?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const willOpen = filterDDMenu.classList.contains("hidden");
+    if (willOpen) {
+      positionFilterMenu();
+      filterDDMenu.classList.remove("hidden");
+      filterDDTrigger.setAttribute("aria-expanded", "true");
+    } else {
+      closeFilterMenu();
+    }
+  });
+  // Close on outside click.
+  document.addEventListener("click", (e) => {
+    if (filterDD && !filterDD.contains(e.target)) closeFilterMenu();
+  });
+  // A fixed menu doesn't follow scroll — close it instead (capture inner scrolls too).
+  window.addEventListener("scroll", () => {
+    if (!filterDDMenu?.classList.contains("hidden")) closeFilterMenu();
+  }, true);
+  window.addEventListener("resize", closeFilterMenu);
+
+  // Automation status/state filter (multi-select checkboxes, OR logic).
+  // "All" is exclusive: it clears the specific filters and shows everything.
+  filterDDMenu?.addEventListener("change", (e) => {
+    const cb = e.target;
+    if (!cb.classList.contains("irr-filter-dd-cb")) return;
+    if (cb.value === "all") {
       _statusFilter = new Set(["all"]);
     } else {
-      _statusFilter.delete("all");
-      if (_statusFilter.has(val)) _statusFilter.delete(val);
-      else _statusFilter.add(val);
-      // Falling back to "All" when nothing is selected keeps the list populated.
-      if (_statusFilter.size === 0) _statusFilter.add("all");
+      const checked = [...filterDDMenu.querySelectorAll(".irr-filter-dd-cb")]
+        .filter((x) => x.checked && x.value !== "all")
+        .map((x) => x.value);
+      // No specific selection falls back to "All" so the list stays populated.
+      _statusFilter = checked.length ? new Set(checked) : new Set(["all"]);
     }
-    syncFilterChips();
+    syncFilterDropdown();
+    updateClearFiltersBtn();
+    renderList();
+  });
+
+  // Clear button next to the dropdown: reset the filter and select all.
+  filterClearBtn?.addEventListener("click", () => {
+    _statusFilter = new Set(["all"]);
+    syncFilterDropdown();
     updateClearFiltersBtn();
     renderList();
   });
@@ -1155,12 +1214,12 @@
     clearFiltersBtn.classList.toggle("hidden", !active);
   }
 
-  // Clear all automation filters (search box + status chips).
+  // Clear all automation filters (search box + status filter).
   clearFiltersBtn?.addEventListener("click", () => {
     _searchQuery = "";
     _statusFilter = new Set(["all"]);
     if (searchInput) searchInput.value = "";
-    syncFilterChips();
+    syncFilterDropdown();
     updateClearFiltersBtn();
     renderList();
     searchInput?.focus();

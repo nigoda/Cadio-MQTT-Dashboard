@@ -106,7 +106,7 @@
             </div>
             <div class="ha-modal-footer">
                 <button id="confirm-cancel" class="ha-btn-cancel-custom">Cancel</button>
-                <button id="confirm-logout" class="ha-btn-logout-all-custom">Logout Everywhere</button>
+                <button id="confirm-logout" class="ha-btn-cancel-custom">Logout Everywhere</button>
                 <button id="confirm-logout-device" class="ha-btn-logout-custom">Logout</button>
             </div>
         </div>
@@ -255,14 +255,25 @@
                                 <span class="material-symbols-outlined">filter_alt_off</span>
                             </button>
                         </div>
-                        <div id="auto-filter-chips" class="irr-auto-filter-chips" title="Filter automations (select one or more)">
-                            <button type="button" class="irr-filter-chip active" data-filter="all">All</button>
-                            <button type="button" class="irr-filter-chip" data-filter="on">On</button>
-                            <button type="button" class="irr-filter-chip" data-filter="off">Off</button>
-                            <button type="button" class="irr-filter-chip" data-filter="running">Running</button>
-                            <button type="button" class="irr-filter-chip" data-filter="idle">Idle</button>
-                            <button type="button" class="irr-filter-chip" data-filter="paused">Paused</button>
-                            <button type="button" class="irr-filter-chip" data-filter="error">Error</button>
+                        <div class="irr-auto-filter-row">
+                            <div id="auto-filter-dd" class="irr-filter-dd">
+                                <button type="button" id="auto-filter-dd-trigger" class="irr-filter-dd-trigger"
+                                    aria-haspopup="listbox" aria-expanded="false" title="Filter automations (select one or more)">
+                                    <span class="material-symbols-outlined irr-filter-dd-ic">filter_list</span>
+                                    <span id="auto-filter-dd-label">All</span>
+                                    <span class="material-symbols-outlined irr-filter-dd-caret">expand_more</span>
+                                </button>
+                                <div id="auto-filter-dd-menu" class="irr-filter-dd-menu hidden" role="listbox">
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="all" checked><span>All</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="on"><span>On</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="off"><span>Off</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="running"><span>Running</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="idle"><span>Idle</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="paused"><span>Paused</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="error"><span>Error</span></label>
+                                </div>
+                            </div>
+                            <button type="button" id="auto-filter-clear" class="irr-filter-clear-btn" title="Clear filter (select all)">Clear</button>
                         </div>
                         <div id="auto-list" class="irr-auto-list">
                             <div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>
@@ -1083,8 +1094,28 @@ NO     → Device is offline (Last Will message from broker)</pre>
         .ha-modal-footer {
             display: flex;
             justify-content: flex-end;
-            gap: 15px;
+            flex-wrap: nowrap;          /* all three buttons stay on one line */
+            gap: 10px;
             margin-top: 40px;
+        }
+        .ha-modal-footer > button {
+            flex: 0 1 auto;
+            min-width: 0;               /* allow shrink so the row never breaks */
+            padding-left: 18px;
+            padding-right: 18px;
+        }
+        /* Narrow screens: equal-width buttons, tighter padding/font. Long labels
+           wrap inside their own button rather than pushing the row to two lines. */
+        @media (max-width: 520px) {
+            .ha-modal-content { padding: 24px 16px; }
+            .ha-modal-footer { gap: 8px; margin-top: 28px; }
+            .ha-modal-footer > button {
+                flex: 1 1 0;
+                padding: 10px 6px;
+                font-size: 13px;
+                white-space: normal;
+                line-height: 1.2;
+            }
         }
         .ha-btn-logout-custom {
             background: #ff5252;
@@ -1097,22 +1128,6 @@ NO     → Device is offline (Last Will message from broker)</pre>
             cursor: pointer;
             box-shadow: 0 4px 15px rgba(255,82,82,0.3);
             transition: all 0.2s ease;
-        }
-        .ha-btn-logout-all-custom {
-            background: #2196f3;
-            color: #fff;
-            border: none;
-            padding: 14px 28px;
-            border-radius: 14px;
-            font-weight: 700;
-            font-size: 15px;
-            cursor: pointer;
-            box-shadow: 0 4px 15px rgba(33,150,243,0.3);
-            transition: all 0.2s ease;
-        }
-        .ha-btn-logout-all-custom:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(33,150,243,0.5);
         }
         .ha-btn-logout-custom:hover {
             transform: translateY(-2px);

@@ -1238,6 +1238,78 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     color: #fff;
     border-color: var(--ha-primary);
 }
+/* Automations filter dropdown (multi-select) + clear button */
+.irr-auto-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+}
+.irr-filter-dd { position: relative; flex: 1; }
+.irr-filter-dd-trigger {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 12px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color var(--ha-transition);
+}
+.irr-filter-dd-trigger:hover { border-color: var(--ha-text-secondary); }
+.irr-filter-dd-ic { font-size: 18px; color: var(--ha-text-secondary); }
+.irr-filter-dd-caret {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    margin-left: auto;
+    transition: transform var(--ha-transition);
+}
+.irr-filter-dd-trigger[aria-expanded="true"] .irr-filter-dd-caret { transform: rotate(180deg); }
+.irr-filter-dd-menu {
+    position: fixed;      /* fixed + JS-positioned so it escapes the list panel's overflow:hidden */
+    z-index: 3000;
+    min-width: 170px;
+    background: var(--ha-surface);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    padding: 4px;
+}
+.irr-filter-dd-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--ha-text);
+    cursor: pointer;
+}
+.irr-filter-dd-opt:hover { background: rgba(255,255,255,0.06); }
+.irr-filter-dd-cb { accent-color: var(--ha-primary); cursor: pointer; width: 15px; height: 15px; margin: 0; }
+.irr-filter-clear-btn {
+    flex-shrink: 0;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 18px;
+    background: var(--ha-surface);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: color var(--ha-transition), border-color var(--ha-transition);
+}
+.irr-filter-clear-btn:hover { color: var(--ha-text); border-color: var(--ha-text-secondary); }
 .irr-auto-clear-btn {
     flex-shrink: 0;
     display: flex;
