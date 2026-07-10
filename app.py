@@ -517,28 +517,17 @@ def on_subscribe(client, userdata, mid, granted_qos):
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@nivixsa.com")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "nivixsa-admin-2024")
-# Optional support (Level 2) and observer (Level 3) admins, seeded from .env.
-SUPPORT_ADMIN_EMAIL = os.getenv("SUPPORT_ADMIN_EMAIL", "").strip()
-SUPPORT_ADMIN_PASSWORD = os.getenv("SUPPORT_ADMIN_PASSWORD", "")
-OBSERVER_ADMIN_EMAIL = os.getenv("OBSERVER_ADMIN_EMAIL", "").strip()
-OBSERVER_ADMIN_PASSWORD = os.getenv("OBSERVER_ADMIN_PASSWORD", "")
 
 def _sync_master_admin():
-    """Ensure the admins from .env exist in the DB with the correct level:
-    ADMIN_* -> Level 1 (super), SUPPORT_ADMIN_* -> Level 2, OBSERVER_ADMIN_* -> Level 3.
-    Idempotent (save_admin upserts); optional accounts are only seeded when set."""
+    """Ensure the master admin from .env exists in the DB with Level 1 (super).
+    Support (Level 2) and observer (Level 3) admins are created by the super admin
+    from the admin panel (Admin Team → Add Admin), not seeded from .env."""
     try:
         import db
         db.save_admin(ADMIN_EMAIL, ADMIN_PASSWORD, level=1)
         logging.info(f"[AUTH] Master Admin synced: {ADMIN_EMAIL} (Level 1)")
-        if SUPPORT_ADMIN_EMAIL and SUPPORT_ADMIN_PASSWORD:
-            db.save_admin(SUPPORT_ADMIN_EMAIL, SUPPORT_ADMIN_PASSWORD, level=2)
-            logging.info(f"[AUTH] Support Admin synced: {SUPPORT_ADMIN_EMAIL} (Level 2)")
-        if OBSERVER_ADMIN_EMAIL and OBSERVER_ADMIN_PASSWORD:
-            db.save_admin(OBSERVER_ADMIN_EMAIL, OBSERVER_ADMIN_PASSWORD, level=3)
-            logging.info(f"[AUTH] Observer Admin synced: {OBSERVER_ADMIN_EMAIL} (Level 3)")
     except Exception as e:
-        logging.error(f"[AUTH] Admin sync failed: {e}")
+        logging.error(f"[AUTH] Master Admin sync failed: {e}")
 
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
