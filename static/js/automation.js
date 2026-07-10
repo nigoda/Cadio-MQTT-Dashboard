@@ -423,6 +423,13 @@
     $("#irr-next-step").textContent = nextStep;
     $("#irr-next-step-sub").textContent = nextSub;
 
+    // Shrink the state/next-step text as it gets longer so long labels
+    // (e.g. "NETWORK ERROR PAUSED", "Initialization & Switch ON") stay inside the cell.
+    fitStateText($("#irr-cur-state"));
+    fitStateText($("#irr-next-step"));
+    fitStateText($("#irr-cur-state-sub"), true);
+    fitStateText($("#irr-next-step-sub"), true);
+
     // Also update progress bars in the list for ALL running automations
     document.querySelectorAll(".irr-auto-item").forEach(el => {
       const a = _autos[el.dataset.id];
@@ -598,7 +605,10 @@
     const idx = rt.currentActionIndex || 0;
 
     // Header
-    $("#irr-detail-name").textContent = auto.name;
+    const fullName = auto.name || "";
+    const nameEl = $("#irr-detail-name");
+    nameEl.textContent = fullName.length > 35 ? fullName.slice(0, 35).trimEnd() + "…" : fullName;
+    nameEl.title = fullName;
     const btnPlayPause = $("#irr-btn-playpause");
     const iconPlayPause = $("#irr-icon-playpause");
     if (auto.status === "ON") {
@@ -613,6 +623,7 @@
     }
 
     $("#irr-detail-desc").textContent = auto.description || "";
+    setupDetailDesc(auto);
     const badge = $("#irr-detail-badge");
     badge.textContent = stateLabel(auto);
     badge.className = "irr-status-badge " + cls;
@@ -888,9 +899,12 @@
     } else if (type === "condition") {
       const initialTopic = data?.sensorStateTopic || "";
       const sType = sensorTypeForTopic(initialTopic);
+      // Each condition is one line: sensor + operator + value + × (right). The AND/OR is a
+      // separate centered connector inserted BETWEEN rows (see refreshCondLogic). Logic is
+      // stored on the row's data-logic so it survives add/remove re-renders.
+      row.dataset.logic = data?.logic === "OR" ? "OR" : "AND";
       row.innerHTML = `<select class="f-sensor">${sensorOptions(initialTopic)}</select>
         <span class="f-cond-value-cell" style="display:flex;gap:6px;align-items:center;">${condValueHtml(sType, data)}</span>
-        <select class="f-logic"><option value="AND" ${data?.logic !== "OR" ? "selected" : ""}>AND</option><option value="OR" ${data?.logic === "OR" ? "selected" : ""}>OR</option></select>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
       // Rebuild the operator/value UI whenever the selected sensor changes so that
       // binary sensors show ON/OFF and analog sensors show numeric operators + input.
@@ -923,8 +937,75 @@
         <div class="ha-field"><input type="time" class="f-end" value="${data?.end || ""}" placeholder=" "><label>End</label></div>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     }
-    row.querySelector(".irr-remove-btn")?.addEventListener("click", () => row.remove());
+    row.querySelector(".irr-remove-btn")?.addEventListener("click", () => {
+      row.remove();
+      if (type === "condition") refreshCondLogic(container);
+    });
     container.appendChild(row);
+    if (type === "condition") refreshCondLogic(container);
+  }
+
+  // Detail description: collapsed to one line by default with a "more" toggle that
+  // expands the full text (wrapping within the frame) and switches to "show less".
+  // The expanded state is remembered per-automation so live re-renders don't reset it.
+  let _descExpandedId = null;
+  function setupDetailDesc(auto) {
+    const desc = $("#irr-detail-desc");
+    const toggle = $("#irr-detail-desc-toggle");
+    if (!desc || !toggle) return;
+    const text = auto.description || "";
+    const expanded = _descExpandedId === auto.id && text;
+
+    const applyState = (isExpanded) => {
+      desc.classList.toggle("expanded", isExpanded);
+      desc.classList.toggle("collapsed", !isExpanded);
+      toggle.textContent = isExpanded ? "show less" : "more";
+    };
+
+    // Measure overflow in the collapsed (single-line) state.
+    applyState(false);
+    const overflowing = desc.scrollWidth > desc.clientWidth + 1;
+    toggle.style.display = text && (overflowing || expanded) ? "" : "none";
+    if (expanded) applyState(true);
+
+    toggle.onclick = () => {
+      const nowExpanded = !desc.classList.contains("expanded");
+      _descExpandedId = nowExpanded ? auto.id : null;
+      applyState(nowExpanded);
+    };
+  }
+
+  // Scale a state-bar text element's font size down as its content grows longer,
+  // so long labels never overflow the fixed-width cell. `sub` uses a smaller base.
+  function fitStateText(el, sub) {
+    if (!el) return;
+    const len = (el.textContent || "").length;
+    const base = sub ? 12 : 15;
+    let size = base;
+    if (len > 26) size = base - 4;
+    else if (len > 20) size = base - 3;
+    else if (len > 15) size = base - 2;
+    else if (len > 11) size = base - 1;
+    el.style.fontSize = size + "px";
+  }
+
+  // The AND/OR operator only makes sense BETWEEN two conditions, so render it as a
+  // centered connector inserted between adjacent rows: N conditions -> N-1 connectors,
+  // a single condition -> none. The chosen value is stored on the preceding row's
+  // data-logic so it survives add/remove re-renders.
+  function refreshCondLogic(container) {
+    container.querySelectorAll(".irr-cond-connector").forEach((c) => c.remove());
+    const rows = [...container.querySelectorAll(".irr-form-row")];
+    rows.forEach((row, i) => {
+      if (i >= rows.length - 1) return;
+      const logic = row.dataset.logic === "OR" ? "OR" : "AND";
+      const conn = document.createElement("div");
+      conn.className = "irr-cond-connector";
+      conn.innerHTML = `<select class="f-logic"><option value="AND"${logic !== "OR" ? " selected" : ""}>AND</option><option value="OR"${logic === "OR" ? " selected" : ""}>OR</option></select>`;
+      const sel = conn.querySelector(".f-logic");
+      sel.addEventListener("change", () => { row.dataset.logic = sel.value; });
+      row.after(conn);
+    });
   }
 
   // Add row buttons
@@ -1016,7 +1097,7 @@
   });
 
   function collectFormData() {
-    const name = $("#auto-f-name").value.trim();
+    const name = $("#auto-f-name").value.trim().slice(0, 35);
     if (!name) { alert("Name is required"); return null; }
     const days = [...$("#auto-f-days").querySelectorAll(".irr-day-btn.active")].map(b => b.dataset.day);
 
@@ -1038,7 +1119,7 @@
         sensorName: opt?.dataset.name || "",
         op: r.querySelector(".f-op")?.value || "==",
         value: valInput ? (valInput.value ?? "") : (stateSel?.value || "OFF"),
-        logic: r.querySelector(".f-logic")?.value || "AND"
+        logic: r.dataset.logic || "AND"
       };
     };
 

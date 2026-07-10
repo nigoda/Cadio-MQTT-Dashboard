@@ -1421,9 +1421,13 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 }
 .irr-detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--ha-text-disabled); }
 .irr-header { display: flex; flex-wrap: wrap; padding: 20px 20px 12px; border-bottom: 1px solid var(--ha-divider); gap: 12px; }
-.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; }
-.irr-header-left { width: 100%; }
-.irr-desc { font-size: 13px; color: var(--ha-text-secondary); }
+.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.irr-header-left { width: 100%; min-width: 0; }
+.irr-desc { font-size: 13px; color: var(--ha-text-secondary); display: block; max-width: 100%; }
+.irr-desc.collapsed { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.irr-desc.expanded { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.irr-desc-toggle { background: none; border: none; color: var(--ha-primary); cursor: pointer; font-size: 12px; font-weight: 600; padding: 2px 0 0; }
+.irr-desc-toggle:hover { text-decoration: underline; }
 .irr-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; padding-top: 10px; border-top: 1px solid var(--ha-divider); }
 .irr-header-right .irr-status-badge { margin-right: auto; }
 .irr-status-badge { padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
@@ -1438,9 +1442,9 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 
 /* State summary bar */
 .irr-state-bar { display: grid; grid-template-columns: repeat(4,1fr); gap: 1px; background: var(--ha-divider); border-bottom: 1px solid var(--ha-divider); }
-.irr-state-cell { background: var(--ha-card); padding: 16px 20px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; position: relative; }
+.irr-state-cell { background: var(--ha-card); padding: 16px 20px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; position: relative; gap: 10px; }
 .irr-state-cell.flex-col { flex-direction: column; align-items: flex-start; justify-content: center; }
-.irr-cell-content { display: flex; flex-direction: column; gap: 4px; }
+.irr-cell-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; }
 .irr-label { font-size: 12px; color: var(--ha-text-primary); font-weight: 500; }
 #irr-sched-body .irr-label {
   display: inline-block;
@@ -1453,8 +1457,14 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
   padding: 3px 10px;
   border-radius: 20px;
 }
-.irr-state-value { font-size: 15px; font-weight: 600; color: var(--ha-text-primary); }
-.irr-cell-sub { font-size: 12px; color: var(--ha-text-secondary); }
+.irr-state-value { font-size: 15px; font-weight: 600; color: var(--ha-text-primary); overflow-wrap: anywhere; line-height: 1.25; }
+.irr-cell-sub { font-size: 12px; color: var(--ha-text-secondary); overflow-wrap: anywhere; line-height: 1.25; }
+/* Keep the Current State / Next Step blocks at a constant height so the label, value
+   and icon never shift up/down as the text changes (reserve 2 lines for the value and
+   1 line for the sub; values are vertically centered within their reserved space). */
+.irr-cell-content { justify-content: center; }
+.irr-cell-content .irr-state-value { min-height: 2.5em; display: flex; align-items: center; }
+.irr-cell-content .irr-cell-sub { min-height: 1.25em; }
 .irr-cell-icon { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .irr-cell-icon span { font-size: 28px; }
 .irr-cell-icon.blue-bg { background: rgba(3,169,244,.1); color: #03a9f4; }
@@ -1463,6 +1473,15 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-progress-bar { height: 100%; background: #03a9f4; border-radius: 3px; transition: width .5s ease; width: 0%; }
 .irr-progress-pct { font-size: 16px; font-weight: 700; color: var(--ha-text-primary); }
 .irr-state-cell:nth-child(2) { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; }
+
+/* Status cell: keep the toggle + description compact so it doesn't grow tall.
+   The "Automation Enabled/Disabled" description never wraps, and is hidden once the
+   state bar collapses to 2 columns (narrow) so the cell stays short. */
+.irr-status-cell { flex-direction: column; text-align: center; gap: 2px; }
+.irr-status-desc { white-space: nowrap; }
+@media (max-width: 1024px) {
+    .irr-status-desc { display: none; }
+}
 
 /* Custom toggle */
 .irr-custom-toggle { width: 60px !important; height: 28px !important; display: inline-block; vertical-align: middle; }
@@ -1597,6 +1616,10 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-form-row > .f-cond-value-cell,
 .irr-form-row > .f-dur-group { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
 .irr-form-row .f-cond-value-cell > .f-op { min-width: 64px; }
+/* AND/OR connector sits centered (blue) on its own line between two condition rows. */
+.irr-cond-connector { display: flex; justify-content: center; padding: 2px 0; }
+.irr-cond-connector .f-logic { min-width: 76px; text-align: center; text-align-last: center; padding: 6px 10px; background: var(--ha-surface); color: var(--ha-primary); font-weight: 600; border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 12px; font-family: inherit; }
+.irr-cond-connector .f-logic:focus { border-color: var(--ha-primary); outline: none; }
 
 /* Scheduler time-range rows: the .ha-field floating-label inputs are tall and carry a
    bottom margin, so center everything and drop that margin so the Start/End inputs,

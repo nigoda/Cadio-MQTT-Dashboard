@@ -304,7 +304,8 @@
                                                 style="font-size:18px;">pause</span>
                                         </button>
                                     </div>
-                                    <span id="irr-detail-desc" class="irr-desc"></span>
+                                    <span id="irr-detail-desc" class="irr-desc collapsed"></span>
+                                    <button id="irr-detail-desc-toggle" type="button" class="irr-desc-toggle" style="display:none;">more</button>
                                 </div>
                                 <div class="irr-header-right">
                                     <span id="irr-detail-badge" class="irr-status-badge"></span>
@@ -348,7 +349,7 @@
                                     <div class="irr-cell-icon green-bg"><span
                                             class="material-symbols-outlined">play_arrow</span></div>
                                 </div>
-                                <div class="irr-state-cell" style="justify-content:center;">
+                                <div class="irr-state-cell irr-status-cell" style="justify-content:center;">
                                     <span class="irr-label" style="margin-bottom:2px">Status</span>
                                     <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap"
                                         style="margin: 0 12px;">
@@ -356,7 +357,7 @@
                                         <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
                                         <span class="ha-toggle-thumb"></span>
                                     </label>
-                                    <span class="irr-cell-sub" style="margin-top:2px">Automation Enabled</span>
+                                    <span class="irr-cell-sub irr-status-desc" style="margin-top:2px">Automation Enabled</span>
                                 </div>
                             </div>
                             <!-- Sections grid -->
@@ -421,7 +422,7 @@
                     <div class="irr-modal-body">
                         <!-- Name & Description -->
                         <div class="irr-modal-card">
-                            <div class="ha-field"><input type="text" id="auto-f-name" placeholder=" " required><label>Automation Name</label></div>
+                            <div class="ha-field"><input type="text" id="auto-f-name" placeholder=" " maxlength="35" required><label>Automation Name</label></div>
                             <div class="ha-field" style="margin-top:12px;"><input type="text" id="auto-f-desc" placeholder=" "><label>Description</label></div>
                         </div>
 
