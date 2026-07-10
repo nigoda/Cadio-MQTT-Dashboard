@@ -1256,7 +1256,55 @@
   const btnLogout = document.getElementById("btn-logout");
   const confirmModal = document.getElementById("ha-confirm-modal");
   const confirmBtnLogout = document.getElementById("confirm-logout");
+  const confirmBtnLogoutDevice = document.getElementById("confirm-logout-device");
   const confirmBtnCancel = document.getElementById("confirm-cancel");
+
+  // Shared logout flow. `socketEvent` is "logout" (all devices) or
+  // "logout_this_device" (this device only); `msg` is the confirmation shown
+  // on the login screen after redirect.
+  function performLogout(socketEvent, msg) {
+    // Unsubscribe Web Push notifications on THIS device (both logout kinds
+    // sign this device out, so its push subscription should go either way)
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.ready.then(reg => {
+        reg.pushManager.getSubscription().then(sub => {
+          if (sub) {
+            fetch("/api/push/unsubscribe", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ endpoint: sub.endpoint })
+            }).then(() => {
+              sub.unsubscribe().catch(e => console.error("Error unsubscribing push:", e));
+            }).catch(e => console.error("Error notifying server of unsubscription:", e));
+          }
+        }).catch(e => console.error("Error getting push subscription on logout:", e));
+      });
+    }
+
+    // 1. Tell the server which logout to perform
+    if (socket) socket.emit(socketEvent);
+
+    // 2. Clear local data
+    localStorage.removeItem("cadio_email");
+    localStorage.removeItem("cadio_pass");
+    localStorage.removeItem("cadio_session_token");
+
+    // 3. UI Cleanup
+    appEl.classList.add("hidden");
+    loginOverlay.classList.remove("hidden");
+    loginPass.value = "";
+    loginError.classList.add("hidden");
+    if (statusText) statusText.textContent = "Disconnected";
+
+    // 4. Close modal
+    confirmModal.classList.remove("active");
+    confirmModal.style.display = "none";
+
+    // 5. Final Reset (Redirect to clear Flask session and show confirmation)
+    setTimeout(() => {
+      window.location.href = "/logout?msg=" + encodeURIComponent(msg);
+    }, 150);
+  }
 
   if (btnLogout && confirmModal) {
     btnLogout.onclick = () => {
@@ -1272,48 +1320,13 @@
     }
 
     if (confirmBtnLogout) {
-      confirmBtnLogout.onclick = () => {
-        // Unsubscribe Web Push notifications if active on this device
-        if (navigator.serviceWorker) {
-          navigator.serviceWorker.ready.then(reg => {
-            reg.pushManager.getSubscription().then(sub => {
-              if (sub) {
-                fetch("/api/push/unsubscribe", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ endpoint: sub.endpoint })
-                }).then(() => {
-                  sub.unsubscribe().catch(e => console.error("Error unsubscribing push:", e));
-                }).catch(e => console.error("Error notifying server of unsubscription:", e));
-              }
-            }).catch(e => console.error("Error getting push subscription on logout:", e));
-          });
-        }
+      confirmBtnLogout.onclick = () =>
+        performLogout("logout", "You have logged out of all devices.");
+    }
 
-        // 1. Tell the server to kill all sessions
-        if (socket) socket.emit("logout");
-
-        // 2. Clear local data
-        localStorage.removeItem("cadio_email");
-        localStorage.removeItem("cadio_pass");
-        localStorage.removeItem("cadio_session_token");
-        
-        // 3. UI Cleanup
-        appEl.classList.add("hidden");
-        loginOverlay.classList.remove("hidden");
-        loginPass.value = "";
-        loginError.classList.add("hidden");
-        if (statusText) statusText.textContent = "Disconnected";
-        
-        // 4. Close modal
-        confirmModal.classList.remove("active");
-        confirmModal.style.display = "none";
-        
-        // 5. Final Reset (Redirect to clear Flask session and show confirmation)
-        setTimeout(() => {
-          window.location.href = "/logout?msg=" + encodeURIComponent("You have logged out successfully.");
-        }, 150);
-      };
+    if (confirmBtnLogoutDevice) {
+      confirmBtnLogoutDevice.onclick = () =>
+        performLogout("logout_this_device", "You have logged out of this device.");
     }
   }
 

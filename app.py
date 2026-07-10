@@ -1150,6 +1150,38 @@ def handle_logout_device(data):
         handle_list_user_sessions()
 
 
+@socketio.on("logout_this_device")
+def handle_logout_this_device():
+    """Log out ONLY the current device. Other devices stay signed in and the
+    user's MQTT session / automations keep running."""
+    email = _user_sessions.get(request.sid)
+    token = session.get("user_session_token")
+
+    # Revoke just this device's session token (if it has one).
+    if token:
+        import db
+        db.delete_user_session(token)
+    session.pop("user_session_token", None)
+
+    # Unregister only this socket; leave the shared user session intact so
+    # other devices and running automations are unaffected.
+    _user_sessions.pop(request.sid, None)
+    _sid_token.pop(request.sid, None)
+    user_session = session_mgr.get_session(email) if email else None
+    if user_session:
+        try:
+            leave_room(user_session.room)
+        except Exception:
+            pass
+    try:
+        session_mgr.unregister_socket(request.sid)
+    except Exception:
+        pass
+
+    _emit_admin_stats()
+    emit("mqtt_status", {"connected": False, "message": "Not connected"})
+
+
 @socketio.on("publish")
 def handle_publish(data):
     topic = data.get("topic", "")
