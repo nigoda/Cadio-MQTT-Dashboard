@@ -917,10 +917,11 @@
         </div>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     } else if (type === "timeRange") {
-      row.innerHTML = `<div class="ha-field" style="flex:1"><input type="time" class="f-start" value="${data?.start || ""}" placeholder=" "><label>Start</label></div>
-        <span style="padding-top:12px">→</span>
-        <div class="ha-field" style="flex:1"><input type="time" class="f-end" value="${data?.end || ""}" placeholder=" "><label>End</label></div>
-        <button type="button" class="irr-remove-btn material-symbols-outlined" style="margin-top:12px">close</button>`;
+      row.classList.add("irr-form-row-time");
+      row.innerHTML = `<div class="ha-field"><input type="time" class="f-start" value="${data?.start || ""}" placeholder=" "><label>Start</label></div>
+        <span class="irr-time-arrow">→</span>
+        <div class="ha-field"><input type="time" class="f-end" value="${data?.end || ""}" placeholder=" "><label>End</label></div>
+        <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     }
     row.querySelector(".irr-remove-btn")?.addEventListener("click", () => row.remove());
     container.appendChild(row);

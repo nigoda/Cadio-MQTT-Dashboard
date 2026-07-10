@@ -1574,21 +1574,38 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
   margin: 16px 0;
 }
 .irr-form-heading { font-size: 13px; font-weight: 600; color: var(--ha-primary); margin: 20px 0 10px; text-transform: uppercase; letter-spacing: .5px; }
-.irr-form-list { display: flex; flex-direction: column; gap: 8px; }
-.irr-form-row { display: flex; align-items: center; gap: 8px; }
-.irr-form-row select { padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; flex: 1; }
+.irr-form-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Builder rows wrap within the card in EVERY viewport so no control (especially the
+   × remove button or the h/m/s timer) ever spills outside the card frame. */
+.irr-form-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+/* Base styling for every select/number input inside a row (incl. nested operator/state). */
+.irr-form-row select,
+.irr-form-row .f-cond-value-cell select { padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; box-sizing: border-box; }
 .irr-form-row select:focus { border-color: var(--ha-primary); outline: none; }
-.irr-form-row input[type="number"] { width: 80px; padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; }
-.irr-form-row .irr-remove-btn { background: none; border: none; color: var(--ha-red); cursor: pointer; padding: 4px; font-size: 18px; }
+.irr-form-row input[type="number"] { width: 80px; padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; box-sizing: border-box; }
+.irr-form-row .irr-remove-btn { background: none; border: none; color: var(--ha-red); cursor: pointer; padding: 4px; font-size: 18px; flex: 0 0 auto; margin-left: auto; }
 
-/* Action rows: on small screens, wrap the h/m/s timer inputs onto their own row
-   below the device + ON/OFF selectors so they don't overflow the modal frame. */
-@media (max-width: 600px) {
-    .irr-form-row-action { flex-wrap: wrap; row-gap: 6px; }
-    .irr-form-row-action .f-switch { flex: 1 1 auto; min-width: 0; }
-    .irr-form-row-action .irr-remove-btn { order: 2; }
-    .irr-form-row-action .f-dur-group { order: 3; flex-basis: 100%; justify-content: flex-start; }
-}
+/* Only the PRIMARY device/sensor selects (direct children) grow to fill the row.
+   Nested operator/value selects keep their natural width so rows stay aligned. */
+.irr-form-row > .f-switch,
+.irr-form-row > .f-sensor { flex: 1 1 140px; min-width: 0; max-width: 100%; }
+/* Compact fixed-width selects (ON/OFF, AND/OR) — same size in every row for a tidy column. */
+.irr-form-row > .f-state,
+.irr-form-row > .f-logic { flex: 0 0 auto; min-width: 72px; }
+/* Grouped cells (condition operator+value, duration h/m/s) stay together and drop onto
+   their own line when the row runs out of horizontal space. */
+.irr-form-row > .f-cond-value-cell,
+.irr-form-row > .f-dur-group { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+.irr-form-row .f-cond-value-cell > .f-op { min-width: 64px; }
+
+/* Scheduler time-range rows: the .ha-field floating-label inputs are tall and carry a
+   bottom margin, so center everything and drop that margin so the Start/End inputs,
+   the → arrow, and the × button line up on one baseline. Keep the row on a single line
+   so the × stays to the right like the other builder rows instead of wrapping down. */
+.irr-form-row-time { align-items: center; flex-wrap: nowrap; }
+.irr-form-row-time .ha-field { flex: 1 1 0; min-width: 0; margin-bottom: 0; }
+.irr-form-row-time .irr-time-arrow { flex: 0 0 auto; color: var(--ha-text-secondary); }
+.irr-form-row-time .irr-remove-btn { flex: 0 0 auto; margin-left: 4px; }
 
 /* Day picker in form */
 .irr-day-picker { display: flex; gap: 6px; margin-bottom: 12px; }
