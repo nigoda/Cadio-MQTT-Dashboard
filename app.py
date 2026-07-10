@@ -517,15 +517,28 @@ def on_subscribe(client, userdata, mid, granted_qos):
 
 ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@nivixsa.com")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "nivixsa-admin-2024")
+# Optional support (Level 2) and observer (Level 3) admins, seeded from .env.
+SUPPORT_ADMIN_EMAIL = os.getenv("SUPPORT_ADMIN_EMAIL", "").strip()
+SUPPORT_ADMIN_PASSWORD = os.getenv("SUPPORT_ADMIN_PASSWORD", "")
+OBSERVER_ADMIN_EMAIL = os.getenv("OBSERVER_ADMIN_EMAIL", "").strip()
+OBSERVER_ADMIN_PASSWORD = os.getenv("OBSERVER_ADMIN_PASSWORD", "")
 
 def _sync_master_admin():
-    """Ensure the master admin from .env exists in DB with Level 1 permissions."""
+    """Ensure the admins from .env exist in the DB with the correct level:
+    ADMIN_* -> Level 1 (super), SUPPORT_ADMIN_* -> Level 2, OBSERVER_ADMIN_* -> Level 3.
+    Idempotent (save_admin upserts); optional accounts are only seeded when set."""
     try:
         import db
         db.save_admin(ADMIN_EMAIL, ADMIN_PASSWORD, level=1)
         logging.info(f"[AUTH] Master Admin synced: {ADMIN_EMAIL} (Level 1)")
+        if SUPPORT_ADMIN_EMAIL and SUPPORT_ADMIN_PASSWORD:
+            db.save_admin(SUPPORT_ADMIN_EMAIL, SUPPORT_ADMIN_PASSWORD, level=2)
+            logging.info(f"[AUTH] Support Admin synced: {SUPPORT_ADMIN_EMAIL} (Level 2)")
+        if OBSERVER_ADMIN_EMAIL and OBSERVER_ADMIN_PASSWORD:
+            db.save_admin(OBSERVER_ADMIN_EMAIL, OBSERVER_ADMIN_PASSWORD, level=3)
+            logging.info(f"[AUTH] Observer Admin synced: {OBSERVER_ADMIN_EMAIL} (Level 3)")
     except Exception as e:
-        logging.error(f"[AUTH] Master Admin sync failed: {e}")
+        logging.error(f"[AUTH] Admin sync failed: {e}")
 
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
@@ -738,14 +751,33 @@ def admin_impersonate(email):
 
 @socketio.on("admin_request_otp")
 def handle_admin_request_otp(data):
-    """Admin requests an OTP to login as a user."""
-    if session.get("admin_level", 3) > 2: return
+    """Admin requests access to a user account.
+    Level 1 (super admin): direct access — no OTP, and no popup on the user's screen.
+    Level 2 (support): OTP code is shown on the user's live dashboard.
+    Level 3 (observer): not allowed (unchanged)."""
+    level = session.get("admin_level", 3)
+    if level > 2: return
     email = data.get("email", "").strip().lower()
+
+    # Super admin: skip the OTP entirely, mint the impersonation token immediately.
+    # No security_code_request is emitted, so the user sees no popup.
+    if level == 1:
+        import db
+        if not db.get_user(email):
+            emit("admin_otp_error", {"message": "User not found."})
+            return
+        token = str(uuid.uuid4())
+        _impersonation_tokens[token] = email
+        logging.info(f"[ADMIN] Super admin direct access to {email} (no OTP)")
+        emit("admin_otp_success", {"email": email, "token": token})
+        return
+
+    # Level 2 (support): OTP flow — requires the user online to display the code.
     sess = session_mgr.get_session(email)
     if not sess:
         emit("admin_otp_error", {"message": "User is not currently online. Admin can only login if user dashboard is active."})
         return
-    
+
     import random
     code = str(random.randint(100000, 999999))
     sess.otp = code

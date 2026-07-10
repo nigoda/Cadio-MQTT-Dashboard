@@ -888,8 +888,10 @@
     } else if (type === "condition") {
       const initialTopic = data?.sensorStateTopic || "";
       const sType = sensorTypeForTopic(initialTopic);
+      row.classList.add("irr-form-row-cond");
       row.innerHTML = `<select class="f-sensor">${sensorOptions(initialTopic)}</select>
         <span class="f-cond-value-cell" style="display:flex;gap:6px;align-items:center;">${condValueHtml(sType, data)}</span>
+        <span class="irr-form-break"></span>
         <select class="f-logic"><option value="AND" ${data?.logic !== "OR" ? "selected" : ""}>AND</option><option value="OR" ${data?.logic === "OR" ? "selected" : ""}>OR</option></select>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
       // Rebuild the operator/value UI whenever the selected sensor changes so that
