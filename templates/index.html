@@ -106,7 +106,7 @@
             </div>
             <div class="ha-modal-footer">
                 <button id="confirm-cancel" class="ha-btn-cancel-custom">Cancel</button>
-                <button id="confirm-logout" class="ha-btn-cancel-custom">Logout Everywhere</button>
+                <button id="confirm-logout" class="ha-btn-logout-everywhere">Logout Everywhere</button>
                 <button id="confirm-logout-device" class="ha-btn-logout-custom">Logout</button>
             </div>
         </div>
@@ -1151,6 +1151,22 @@ NO     → Device is offline (Last Will message from broker)</pre>
         .ha-btn-cancel-custom:hover {
             background: #e3f2fd;
             transform: translateY(-2px);
+        }
+        .ha-btn-logout-everywhere {
+            background: #2196f3;
+            color: #fff;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 14px;
+            font-weight: 700;
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .ha-btn-logout-everywhere:hover {
+            background: #1976d2;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(33,150,243,0.4);
         }
     </style>
     <!-- PWA Service Worker Registration -->
