@@ -1576,28 +1576,18 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-form-heading { font-size: 13px; font-weight: 600; color: var(--ha-primary); margin: 20px 0 10px; text-transform: uppercase; letter-spacing: .5px; }
 .irr-form-list { display: flex; flex-direction: column; gap: 8px; }
 .irr-form-row { display: flex; align-items: center; gap: 8px; }
-.irr-form-row select { padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; flex: 1; min-width: 0; }
+.irr-form-row select { padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; flex: 1; }
 .irr-form-row select:focus { border-color: var(--ha-primary); outline: none; }
 .irr-form-row input[type="number"] { width: 80px; padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; }
 .irr-form-row .irr-remove-btn { background: none; border: none; color: var(--ha-red); cursor: pointer; padding: 4px; font-size: 18px; }
-/* Condition / scheduler-condition rows (both desktop + mobile):
-   line 1 = sensor + operator + value  ·  line 2 = AND/OR logic + × (via the break spacer). */
-.irr-form-row-cond { flex-wrap: wrap; row-gap: 6px; }
-.irr-form-row-cond .f-sensor { flex: 1 1 auto; min-width: 0; }
-.irr-form-row-cond .f-cond-value-cell { flex: 0 1 auto; }
-.irr-form-row-cond .f-logic { flex: 0 0 auto; }
-.irr-form-break { flex: 0 0 100%; height: 0; }
 
-/* On small screens the builder rows must wrap inside the modal frame so nothing
-   (especially the × remove button) spills outside the border and becomes unclickable. */
+/* Action rows: on small screens, wrap the h/m/s timer inputs onto their own row
+   below the device + ON/OFF selectors so they don't overflow the modal frame. */
 @media (max-width: 600px) {
-    .irr-form-row { flex-wrap: wrap; row-gap: 6px; }
-
-    /* Sequential actions:  line 1 = device switch  ·  line 2 = ON/OFF + h/m/s timer + × */
-    .irr-form-row-action .f-switch { flex: 1 1 100%; }
-    .irr-form-row-action .f-state { order: 1; }
-    .irr-form-row-action .f-dur-group { order: 2; flex: 1 1 auto; justify-content: flex-start; }
-    .irr-form-row-action .irr-remove-btn { order: 3; margin-left: auto; }
+    .irr-form-row-action { flex-wrap: wrap; row-gap: 6px; }
+    .irr-form-row-action .f-switch { flex: 1 1 auto; min-width: 0; }
+    .irr-form-row-action .irr-remove-btn { order: 2; }
+    .irr-form-row-action .f-dur-group { order: 3; flex-basis: 100%; justify-content: flex-start; }
 }
 
 /* Day picker in form */
