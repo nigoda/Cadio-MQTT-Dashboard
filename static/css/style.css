@@ -1629,6 +1629,18 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-form-row-time .ha-field { flex: 1 1 0; min-width: 0; margin-bottom: 0; }
 .irr-form-row-time .irr-time-arrow { flex: 0 0 auto; color: var(--ha-text-secondary); }
 .irr-form-row-time .irr-remove-btn { flex: 0 0 auto; margin-left: 4px; }
+/* iOS Safari sizes input[type=time] to an intrinsic min-width that ignores the
+   flex container, so the End field overflows and hides the arrow + × (Android is
+   fine). Force the time inputs to shrink to fit and stop iOS padding the value. */
+.irr-form-row-time .ha-field input[type="time"] {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+.irr-form-row-time .ha-field input[type="time"]::-webkit-date-and-time-value {
+    text-align: left;
+    margin: 0;
+}
 
 /* Day picker in form */
 .irr-day-picker { display: flex; gap: 6px; margin-bottom: 12px; }
