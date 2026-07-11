@@ -1644,6 +1644,20 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     text-align: left;
     margin: 0;
 }
+/* iOS Safari only (@supports -webkit-touch-callout targets iOS, not Android/desktop):
+   the native time control keeps its intrinsic width and ignores width:100% unless
+   appearance is stripped. This lets it actually shrink so the arrow + × stay visible. */
+@supports (-webkit-touch-callout: none) {
+    .irr-form-row-time .ha-field input[type="time"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+    .irr-form-row-time { column-gap: 6px; }
+    .irr-form-row-time .ha-field { padding: 0; }
+}
 
 /* Day picker in form */
 .irr-day-picker { display: flex; gap: 6px; margin-bottom: 12px; }
