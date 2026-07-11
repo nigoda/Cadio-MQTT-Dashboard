@@ -482,7 +482,7 @@
         if (s.switchName) switchMap.set(s.switchName, s.switchStateTopic || s.switchCmdTopic);
       });
       if (switchMap.size > 0) {
-        liveSw.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap;">${Array.from(switchMap.entries()).map(([name, topic]) => {
+        liveSw.innerHTML = `<div class="irr-live-grid">${Array.from(switchMap.entries()).map(([name, topic]) => {
           let liveState = "Unknown";
           if (window._dashboardEntities) {
             for (const eid in window._dashboardEntities) {
@@ -510,7 +510,7 @@
         if (c.sensorName || c.sensorStateTopic) sensorMap.set(c.sensorName || "Sensor", c.sensorStateTopic);
       });
       if (sensorMap.size > 0) {
-        liveSen.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap;">${Array.from(sensorMap.entries()).map(([name, topic]) => {
+        liveSen.innerHTML = `<div class="irr-live-grid">${Array.from(sensorMap.entries()).map(([name, topic]) => {
           let liveState = "Unknown";
           if (window._dashboardEntities) {
             for (const eid in window._dashboardEntities) {

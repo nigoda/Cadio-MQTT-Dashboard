@@ -1536,9 +1536,12 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-next-activation { font-size: 12px; color: var(--ha-text-secondary); display: flex; align-items: center; gap: 4px; }
 
 /* Live switches */
-.irr-live-grid { display: flex; gap: 12px; flex-wrap: wrap; }
-.irr-live-sw { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; background: var(--ha-card); border-radius: var(--ha-radius-sm); min-width: 70px; border: 1px solid var(--ha-divider); }
-.irr-live-sw-name { font-size: 11px; color: var(--ha-text-secondary); text-align: center; }
+/* Uniform, equal-size cards: a grid of identical cells (same in the switch and
+   sensor sections) on desktop and mobile. Long names clamp to 2 lines + ellipsis
+   with word-break so the card never grows to fit the text. */
+.irr-live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 10px; }
+.irr-live-sw { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 10px 8px; min-height: 92px; background: var(--ha-card); border-radius: var(--ha-radius-sm); min-width: 0; border: 1px solid var(--ha-divider); overflow: hidden; }
+.irr-live-sw-name { font-size: 11px; color: var(--ha-text-secondary); text-align: center; width: 100%; line-height: 1.2; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .irr-live-sw-icon { font-size: 28px; color: var(--ha-text-disabled); }
 .irr-live-sw-icon.on { color: #4caf50; }
 .irr-live-sw-state { font-size: 11px; font-weight: 700; }
@@ -1658,7 +1661,10 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     .irr-auto-list { max-height: 200px; overflow-y: auto; }
     .irr-sections-grid { grid-template-columns: 1fr; }
     .irr-section-wide { grid-column: span 1; }
-    .irr-bottom-grid { grid-template-columns: 1fr; }
+    /* Keep Live Switches | Live Sensors equally split on mobile too (Recent
+       Activity still spans both columns via its inline grid-column: span 2). */
+    .irr-bottom-grid { grid-template-columns: 1fr 1fr; }
+    .irr-section { padding: 14px 12px; }
     .irr-state-bar { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 768px) {
