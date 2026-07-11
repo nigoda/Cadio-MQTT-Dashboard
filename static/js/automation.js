@@ -100,7 +100,9 @@
     if (auto.status !== "ON") return "Off";
     const map = {
       IDLE: "Off", WAIT_CONDITION: "Waiting", INIT_SET: "Initializing", INIT_VERIFY: "Verifying Init",
+      INIT_VERIFY_INDIVIDUAL: "Verify Init", INIT_VERIFY_ALL: "Verify Init All",
       ACTION_SET: "Setting Action", ACTION_VERIFY: "Verifying", ACTION_RUN: "Running",
+      ACTION_DRIFT_VERIFY: "Drift Check", BUFFER_DRIFT_VERIFY: "Buffer Check",
       OVERLAP_NEXT_SET: auto.runtime?.loopingToFirst ? "Init & Setting Next" : "Setting Next",
       OVERLAP_NEXT_VERIFY: auto.runtime?.loopingToFirst ? "Verify Init & Next" : "Verifying Next",
       ACTION_REVERT: "Reverting", ACTION_VERIFY_REVERT: "Verifying Revert", BUFFER: "Buffer",
@@ -611,15 +613,19 @@
     nameEl.title = fullName;
     const btnPlayPause = $("#irr-btn-playpause");
     const iconPlayPause = $("#irr-icon-playpause");
+    // Always keep the button's slot reserved (visibility, not display) so it
+    // appearing when the automation is enabled never shifts the header layout.
+    btnPlayPause.style.display = "flex";
     if (auto.status === "ON") {
-      btnPlayPause.style.display = "flex";
+      btnPlayPause.style.visibility = "visible";
       iconPlayPause.textContent = auto.isPaused ? "play_arrow" : "pause";
       btnPlayPause.style.background = auto.isPaused ? "var(--ha-warning)" : "var(--ha-primary)";
       btnPlayPause.onclick = () => {
         socket.emit("pause_automation", { id: auto.id, isPaused: !auto.isPaused });
       };
     } else {
-      btnPlayPause.style.display = "none";
+      btnPlayPause.style.visibility = "hidden";
+      btnPlayPause.onclick = null;
     }
 
     $("#irr-detail-desc").textContent = auto.description || "";

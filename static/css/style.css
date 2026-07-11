@@ -1430,7 +1430,10 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-desc-toggle:hover { text-decoration: underline; }
 .irr-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; padding-top: 10px; border-top: 1px solid var(--ha-divider); }
 .irr-header-right .irr-status-badge { margin-right: auto; }
-.irr-status-badge { padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+/* Fixed-width badge: its text swings from "Off" to "Pausing for Schedule" as the
+   automation runs; a constant footprint keeps the Reset/Insights/Edit buttons from
+   shifting when the live state updates. Long labels wrap inside the fixed box. */
+.irr-status-badge { min-width: 128px; width: auto; box-sizing: border-box; flex-shrink: 0; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; text-align: center; display: inline-flex; align-items: center; justify-content: center; min-height: 26px; line-height: 1.2; word-break: break-word; overflow-wrap: break-word; }
 .irr-status-badge.running { background: rgba(76,175,80,.2); color: #4caf50; }
 .irr-status-badge.paused { background: rgba(255,152,0,.2); color: #ff9800; }
 .irr-status-badge.error { background: rgba(244,67,54,.2); color: #f44336; }
@@ -1442,7 +1445,7 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 
 /* State summary bar */
 .irr-state-bar { display: grid; grid-template-columns: repeat(4,1fr); gap: 1px; background: var(--ha-divider); border-bottom: 1px solid var(--ha-divider); }
-.irr-state-cell { background: var(--ha-card); padding: 16px 20px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; position: relative; gap: 10px; }
+.irr-state-cell { background: var(--ha-card); padding: 16px 20px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; position: relative; gap: 10px; min-height: 92px; box-sizing: border-box; }
 .irr-state-cell.flex-col { flex-direction: column; align-items: flex-start; justify-content: center; }
 .irr-cell-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; }
 .irr-label { font-size: 12px; color: var(--ha-text-primary); font-weight: 500; }
@@ -1463,8 +1466,10 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
    and icon never shift up/down as the text changes (reserve 2 lines for the value and
    1 line for the sub; values are vertically centered within their reserved space). */
 .irr-cell-content { justify-content: center; }
-.irr-cell-content .irr-state-value { min-height: 2.5em; display: flex; align-items: center; }
-.irr-cell-content .irr-cell-sub { min-height: 1.25em; }
+/* Reserve a constant 2 lines for the value and 1 for the sub, clamping longer text
+   so the cell height never changes as the live state updates. */
+.irr-cell-content .irr-state-value { height: 2.5em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.irr-cell-content .irr-cell-sub { height: 1.25em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .irr-cell-icon { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .irr-cell-icon span { font-size: 28px; }
 .irr-cell-icon.blue-bg { background: rgba(3,169,244,.1); color: #03a9f4; }
@@ -1692,9 +1697,16 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
         padding: 5px 10px;
     }
     .irr-header-right .material-symbols-outlined { font-size: 16px !important; }
+    /* Keep the status badge + Reset / Insights / Edit on ONE row on mobile. */
+    .irr-header-right { flex-wrap: nowrap; gap: 5px; }
+    .irr-header-right .irr-status-badge { width: auto; min-width: 74px; max-width: 100%; padding: 4px 8px; font-size: 10px; letter-spacing: .3px; word-break: break-word; overflow-wrap: break-word; }
+    .irr-header-right .ha-btn-text { flex-shrink: 0; padding: 5px 6px; }
     .irr-sections-grid { padding: 8px 14px; gap: 8px; }
     .irr-bottom-grid { padding: 0 14px 14px; gap: 8px; }
     .irr-state-bar { grid-template-columns: 1fr 1fr; }
+    /* Fixed-height cells on mobile so the 2x2 grid (and its divider borders) never
+       resize as the live state text changes. Content is clipped to the box. */
+    .irr-state-bar .irr-state-cell { height: 104px; min-height: 104px; padding: 12px 12px; overflow: hidden; }
     .irr-sched-grid { padding: 0 14px 12px; }
 }
 
