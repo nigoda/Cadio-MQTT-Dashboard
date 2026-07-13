@@ -872,6 +872,8 @@
 
     // Init rows
     renderFormRows("auto-f-init", auto?.initialization || [], "switch");
+    // Deinitialization rows (run when the automation is turned OFF)
+    renderFormRows("auto-f-deinit", auto?.deinitialization || [], "switch");
     // Set if True / Set if False rows
     renderFormRows("auto-f-set-true", auto?.schedule?.setIfTrue || [], "switch");
     renderFormRows("auto-f-set-false", auto?.schedule?.setIfFalse || [], "switch");
@@ -883,6 +885,12 @@
     renderFormRows("auto-f-actions", auto?.actions || [], "action");
     // Error rows
     renderFormRows("auto-f-error", auto?.errorState || [], "switch");
+
+    // Reset conflict validation state (rows are freshly rendered, so any old
+    // red outlines are gone; just clear the banner and the live-check flag).
+    _liveValidate = false;
+    const warnEl = $("#auto-modal-warning");
+    if (warnEl) { warnEl.classList.add("hidden"); warnEl.innerHTML = ""; }
 
     modalOverlay.classList.remove("hidden");
   }
@@ -1015,7 +1023,7 @@
   }
 
   // Add row buttons
-  ["auto-f-init-add", "auto-f-error-add", "auto-f-set-true-add", "auto-f-set-false-add"].forEach(id => {
+  ["auto-f-init-add", "auto-f-deinit-add", "auto-f-error-add", "auto-f-set-true-add", "auto-f-set-false-add"].forEach(id => {
     $(`#${id}`)?.addEventListener("click", () => addFormRow($(`#${id.replace("-add", "")}`), "switch", {}));
   });
   $("#auto-f-cond-add")?.addEventListener("click", () => addFormRow($("#auto-f-cond"), "condition", {}));
@@ -1180,6 +1188,7 @@
       schedule: schedObj,
       condition: conds,
       initialization: collectSwitchRows("auto-f-init"),
+      deinitialization: collectSwitchRows("auto-f-deinit"),
       actions,
       errorState: collectSwitchRows("auto-f-error"),
       bufferTime: parseInt($("#auto-f-buffer")?.value || "5", 10),
@@ -1187,10 +1196,169 @@
     };
   }
 
+  // ─── Switch conflict validation ─────────────────────────────────────────
+  // A physical switch must not be driven by two automations whose schedules
+  // overlap in day + time — that causes state "drift". Sensors may be shared
+  // freely, and the Error State section is exempt (a safety shutoff may reuse
+  // any switch). Switches are considered across Initialization, Set-if-True,
+  // Set-if-False and Actions.
+  const SWITCH_CONTAINERS = ["auto-f-init", "auto-f-deinit", "auto-f-set-true", "auto-f-set-false", "auto-f-actions"];
+  let _liveValidate = false; // once a save is blocked, re-check on every edit
+
+  function _schedIntervals(sched) {
+    // Return [startMin, endMin) intervals within a day (matches backend check_schedule).
+    sched = sched || {};
+    if (sched.is24hr) return [[0, 1440]];
+    let ranges = sched.timeRanges || [];
+    if (!ranges.length && (sched.startTime || sched.endTime)) {
+      ranges = [{ start: sched.startTime, end: sched.endTime }];
+    }
+    const out = [];
+    for (const r of ranges) {
+      if (!r || !r.start || !r.end) continue;
+      const [sh, sm] = String(r.start).split(":").map(Number);
+      const [eh, em] = String(r.end).split(":").map(Number);
+      const s = sh * 60 + sm, e = eh * 60 + em;
+      if (isNaN(s) || isNaN(e)) continue;
+      if (s < e) out.push([s, e]);
+      else if (s > e) { out.push([s, 1440]); out.push([0, e]); } // wraps past midnight
+      else out.push([0, 1440]); // start == end -> treat as all-day
+    }
+    // Backend treats a non-24hr schedule with no usable range as the whole day.
+    return out.length ? out : [[0, 1440]];
+  }
+
+  // Map an automation's schedule into a set of absolute intervals over the week,
+  // expressed in UTC minutes [0, 10080). This makes the overlap check correct
+  // across different timezones (two automations in different UTC offsets are
+  // compared at the same real-world instant) as well as across midnight and the
+  // week boundary. utcOffset follows JS getTimezoneOffset (utc = local + offset,
+  // e.g. UTC+5:30 = -330), matching the backend's _get_auto_now.
+  const _WEEK_MINS = 7 * 1440;
+  const _DAY_INDEX = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+
+  function _pushWeekInterval(out, start, end) {
+    // start < end, length <= 1440. Rotate into [0, _WEEK_MINS) and split on wrap.
+    const len = end - start;
+    let s = ((start % _WEEK_MINS) + _WEEK_MINS) % _WEEK_MINS;
+    let e = s + len;
+    if (e <= _WEEK_MINS) out.push([s, e]);
+    else { out.push([s, _WEEK_MINS]); out.push([0, e - _WEEK_MINS]); }
+  }
+
+  function _weeklyUtcIntervals(sched) {
+    sched = sched || {};
+    const days = sched.days || [];
+    if (!days.length) return []; // never runs
+    const offset = Number.isFinite(+sched.utcOffset) ? (+sched.utcOffset | 0) : 0;
+    const pieces = _schedIntervals(sched); // within-day local minute pieces
+    const out = [];
+    for (const d of days) {
+      const di = _DAY_INDEX[d];
+      if (di === undefined) continue;
+      for (const [ps, pe] of pieces) {
+        // Local weekly minutes -> UTC weekly minutes (utc = local + offset).
+        _pushWeekInterval(out, di * 1440 + ps + offset, di * 1440 + pe + offset);
+      }
+    }
+    return out;
+  }
+
+  function schedulesOverlap(a, b) {
+    const ia = _weeklyUtcIntervals(a), ib = _weeklyUtcIntervals(b);
+    if (!ia.length || !ib.length) return false;
+    return ia.some(([s1, e1]) => ib.some(([s2, e2]) => s1 < e2 && s2 < e1));
+  }
+
+  function switchTopicsOfAuto(auto) {
+    const set = new Set();
+    const add = (arr) => (arr || []).forEach(x => { if (x && x.switchCmdTopic) set.add(x.switchCmdTopic); });
+    add(auto.initialization);
+    add(auto.deinitialization);
+    add(auto.actions);
+    add(auto.schedule?.setIfTrue);
+    add(auto.schedule?.setIfFalse);
+    return set; // Error State intentionally excluded
+  }
+
+  function _collectScheduleLite() {
+    const daysEl = $("#auto-f-days");
+    const days = daysEl ? [...daysEl.querySelectorAll(".irr-day-btn.active")].map(b => b.dataset.day) : [];
+    const is24hr = !!$("#auto-f-24hr")?.checked;
+    const listEl = $("#auto-f-times-list");
+    const timeRanges = listEl ? [...listEl.querySelectorAll(".irr-form-row")].map(r => ({
+      start: r.querySelector(".f-start")?.value || "",
+      end: r.querySelector(".f-end")?.value || ""
+    })) : [];
+    const utcOffset = parseInt($("#auto-f-tz")?.value, 10) || 0;
+    return { days, is24hr, timeRanges, utcOffset };
+  }
+
+  // Highlight conflicting switch selects, toggle the warning banner, and return
+  // true only when there are NO conflicts (i.e. saving is allowed).
+  function validateSwitchConflicts() {
+    const warnEl = $("#auto-modal-warning");
+    SWITCH_CONTAINERS.forEach(cid => {
+      $(`#${cid}`)?.querySelectorAll(".f-switch.conflict").forEach(el => el.classList.remove("conflict"));
+    });
+
+    const sched = _collectScheduleLite();
+
+    // switchCmdTopic -> Set of other automation names overlapping in schedule
+    const topicToAutos = new Map();
+    for (const id in _autos) {
+      if (id === _editId) continue;
+      const other = _autos[id];
+      if (!schedulesOverlap(sched, other.schedule || {})) continue;
+      for (const t of switchTopicsOfAuto(other)) {
+        if (!topicToAutos.has(t)) topicToAutos.set(t, new Set());
+        topicToAutos.get(t).add(other.name || "Unnamed");
+      }
+    }
+
+    const conflicts = new Map(); // switchName -> Set(other automation names)
+    SWITCH_CONTAINERS.forEach(cid => {
+      $(`#${cid}`)?.querySelectorAll(".f-switch").forEach(sel => {
+        const topic = sel.value;
+        if (topic && topicToAutos.has(topic)) {
+          sel.classList.add("conflict");
+          const swName = sel.selectedOptions[0]?.dataset.name || topic;
+          if (!conflicts.has(swName)) conflicts.set(swName, new Set());
+          topicToAutos.get(topic).forEach(n => conflicts.get(swName).add(n));
+        }
+      });
+    });
+
+    if (!warnEl) return conflicts.size === 0;
+    if (conflicts.size === 0) {
+      warnEl.classList.add("hidden");
+      warnEl.innerHTML = "";
+      return true;
+    }
+    const parts = [...conflicts.entries()].map(([sw, autos]) =>
+      `“${escHtml(sw)}” is already used by ${escHtml([...autos].join(", "))}`);
+    warnEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>${parts.join("; ")} during an overlapping time window. Change or remove the highlighted switch(es) before saving.</span>`;
+    warnEl.classList.remove("hidden");
+    return false;
+  }
+
+  // Once a save has been blocked, keep the highlights/banner in sync as the user
+  // edits switches, days, times or the 24-hour toggle.
+  const _maybeLiveValidate = () => { if (_liveValidate) validateSwitchConflicts(); };
+  modalOverlay?.addEventListener("change", _maybeLiveValidate);
+  modalOverlay?.addEventListener("input", _maybeLiveValidate);
+  modalOverlay?.addEventListener("click", (e) => {
+    if (!_liveValidate) return;
+    if (e.target.classList?.contains("irr-day-btn") || e.target.closest(".irr-remove-btn")) {
+      validateSwitchConflicts();
+    }
+  });
+
   // Save
   $("#auto-modal-save")?.addEventListener("click", () => {
     const data = collectFormData();
     if (!data) return;
+    if (!validateSwitchConflicts()) { _liveValidate = true; return; }
     if (_editId) {
       data.id = _editId;
       socket.emit("update_automation", data);

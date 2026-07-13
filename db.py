@@ -789,3 +789,13 @@ def delete_push_subscription(endpoint):
     conn = _get_conn()
     conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
     conn.commit()
+
+
+def delete_all_push_subscriptions(user_email):
+    """Remove ALL Web Push subscriptions for a user (e.g. on global logout)."""
+    if not user_email:
+        return
+    user_email = user_email.lower()
+    conn = _get_conn()
+    conn.execute("DELETE FROM push_subscriptions WHERE user_email = ?", (user_email,))
+    conn.commit()

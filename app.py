@@ -643,7 +643,9 @@ def handle_admin_user_block(data):
         db.block_user(email)
         # 1. Kill MQTT Session
         session_mgr.remove_session(email)
-        # 2. Nuclear Kick from all devices/browsers
+        # 2. Purge push subscriptions so a blocked user stops getting notifications
+        db.delete_all_push_subscriptions(email)
+        # 3. Nuclear Kick from all devices/browsers
         sids_to_kick = [sid for sid, e in list(_user_sessions.items()) if e.lower() == email.lower()]
         for sid in sids_to_kick:
             socketio.emit("force_logout", {
@@ -1051,6 +1053,8 @@ def handle_logout():
     # Global session invalidation: delete ALL DB sessions for this user
     import db
     db.delete_all_user_sessions(user_email)
+    # Purge every device's push subscription so notifications stop everywhere
+    db.delete_all_push_subscriptions(user_email)
     session.pop("user_session_token", None)
     
     # Broadcast force_logout to ALL sockets of this user (other tabs/devices)
@@ -1260,6 +1264,10 @@ def _send_web_push_async(owner_email, data):
     def run():
         try:
             import db
+            # Safety: never fan out to every user's subscriptions
+            if not owner_email:
+                logging.warning("[WebPush] Skipping push with no owner_email")
+                return
             # Get active subscriptions
             subscriptions = db.get_push_subscriptions(owner_email)
             if not subscriptions:
@@ -1328,9 +1336,9 @@ def send_sys_notification(owner_email, title, message, type="info"):
     }
     
     if not owner_email:
-        # Broadcast globally if no owner
-        socketio.emit("sys_notification", data)
-        _send_web_push_async(None, data)
+        # Never broadcast to everyone: without an owner we cannot scope the
+        # notification, so drop it rather than leaking it to all users.
+        logging.warning(f"[NOTIFY] Dropped notification with no owner_email: {title}")
         return
 
     room = f"user_{owner_email.replace('@', '_').replace('.', '_')}"
@@ -1811,8 +1819,86 @@ def engine_tick(auto):
         _auto_log(auto_id, "New day (00:01) → daily cycle counter reset to 0")
         _emit_auto_update(auto)
 
-    # Priority 1: If status is OFF, go IDLE immediately
+    # Priority 1: If status is OFF
     if auto.get("status") != "ON":
+        deinits = auto.get("deinitialization", [])
+
+        # Deinitialization runs once when the automation is switched OFF: set each
+        # switch, verify it individually, then verify them all together (same
+        # set→verify→verify-all pattern as Initialization) before settling to IDLE.
+        if state == "DEINIT_SET":
+            idx = rt.get("currentDeinitIndex", 0)
+            if not deinits:
+                rt["verifyStart"] = now
+                rt["state"] = "DEINIT_VERIFY_ALL"
+                _emit_auto_update(auto)
+                return
+            if idx < len(deinits):
+                item = deinits[idx]
+                _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"), auto)
+                rt["verifyStart"] = now
+                rt["state"] = "DEINIT_VERIFY_INDIVIDUAL"
+                _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} sent → DEINIT_VERIFY_INDIVIDUAL")
+                _emit_auto_update(auto)
+            else:
+                rt["verifyStart"] = now
+                rt["state"] = "DEINIT_VERIFY_ALL"
+                _auto_log(auto_id, "All individual deinitialization commands sent. Final bulk check → DEINIT_VERIFY_ALL")
+                _emit_auto_update(auto)
+            return
+
+        if state == "DEINIT_VERIFY_INDIVIDUAL":
+            idx = rt.get("currentDeinitIndex", 0)
+            if idx < len(deinits):
+                item = deinits[idx]
+                if _verify_switches([item], auto):
+                    rt["currentDeinitIndex"] = idx + 1
+                    rt["state"] = "DEINIT_SET"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} verified")
+                    _emit_auto_update(auto)
+                elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                    rt["retryCount"] = rt.get("retryCount", 0) + 1
+                    if rt["retryCount"] >= MAX_RETRIES:
+                        # Status is already OFF; don't network-pause — just settle to IDLE.
+                        rt["state"] = "IDLE"
+                        rt["currentDeinitIndex"] = 0
+                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} not responding → IDLE", "warning")
+                        _emit_auto_update(auto)
+                    else:
+                        rt["state"] = "DEINIT_SET"
+                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} verify retry {rt['retryCount']}/{MAX_RETRIES}")
+                        _emit_auto_update(auto)
+            else:
+                rt["state"] = "DEINIT_SET"
+            return
+
+        if state == "DEINIT_VERIFY_ALL":
+            if not deinits or _verify_switches(deinits, auto):
+                rt["state"] = "IDLE"
+                rt["currentDeinitIndex"] = 0
+                rt["currentActionIndex"] = 0
+                rt["timerStart"] = None
+                rt["remainingTime"] = None
+                rt["retryCount"] = 0
+                rt["pauseReason"] = None
+                _auto_log(auto_id, "All deinitialization verified → IDLE")
+                _emit_auto_update(auto)
+            elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                rt["retryCount"] = rt.get("retryCount", 0) + 1
+                if rt["retryCount"] >= MAX_RETRIES:
+                    rt["state"] = "IDLE"
+                    rt["currentDeinitIndex"] = 0
+                    _auto_log(auto_id, "Bulk deinit not responding → IDLE", "warning")
+                    _emit_auto_update(auto)
+                else:
+                    rt["currentDeinitIndex"] = 0
+                    rt["state"] = "DEINIT_SET"
+                    _auto_log(auto_id, f"Bulk deinit verify failed, restarting sequence! Retry {rt['retryCount']}/{MAX_RETRIES}", "warning")
+                    _emit_auto_update(auto)
+            return
+
+        # No deinitialization in progress → settle to IDLE
         if state != "IDLE":
             rt["state"] = "IDLE"
             rt["currentActionIndex"] = 0
@@ -1822,6 +1908,25 @@ def engine_tick(auto):
             rt["pauseReason"] = None
             _auto_log(auto_id, "Status OFF → IDLE")
             _emit_auto_update(auto)
+        return
+
+    # Priority 1.05: Broker connectivity. Without a live MQTT link to the broker we
+    # can neither command nor verify switches, so a dropped connection must pause the
+    # sequence immediately — including mid-action (ACTION_RUN) — instead of only
+    # surfacing when the next command is sent and its verify times out.
+    owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
+    if owner_sess and not owner_sess.mqtt_connected:
+        if state not in ("IDLE", "PAUSED_NETWORK", "ERROR", "ERROR_SET", "ERROR_VERIFY"):
+            _enter_network_pause(auto, rt, now, state, reason="offline", retry=False)
+            if state == "ACTION_RUN":
+                # Re-confirm the switch state the moment the broker link returns.
+                rt["_recheckOnResume"] = True
+            _auto_log(auto_id, "Broker connection lost → NETWORK ERROR PAUSED", "error")
+            _emit_auto_update(auto)
+        elif state == "PAUSED_NETWORK":
+            # Stay paused until the broker link returns.
+            rt["errorReason"] = "offline"
+            rt["pauseUntil"] = None
         return
 
     # Priority 1.1: Device health (missing / offline / not-obeying)
@@ -1849,6 +1954,34 @@ def engine_tick(auto):
             _auto_log(auto_id, f"Device not found (removed/renamed): {names} → ERROR", "error")
             _emit_auto_update(auto)
             return
+
+        # An action paused by its own liveness check: retry on a ~1-minute cadence,
+        # but attempt EARLY the moment the device spontaneously reports back in (it
+        # auto-publishes its state/availability on reconnect, no request needed).
+        if rt.get("prePauseNetwork") == "ACTION_RUN" and rt.get("errorReason") == "offline":
+            paused_ts = rt.get("_offlinePausedTs", "")
+            reported_in = False
+            for t in rt.get("_offlineTopics", []):
+                d = owner_sess.device_states.get(t) if owner_sess else None
+                if d and d.get("ts", "") > paused_ts:
+                    reported_in = True
+                    break
+            due = now >= (rt.get("pauseUntil") or 0)
+            if not reported_in and not due:
+                return  # keep holding until the device reports in or the minute elapses
+            if offline_devices:
+                # Availability still reports offline → arm the next 1-minute retry.
+                rt["pauseUntil"] = now + 60
+                rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
+                return
+            # Reachable again → resume the action and immediately re-verify the switch
+            # (the ACTION_RUN re-check re-sends the command if it reset while offline).
+            _resume_network_pause(auto, rt, now)
+            rt["_recheckOnResume"] = True
+            _auto_log(auto_id, "Device reported back online → re-checking switch & resuming action", "info")
+            _emit_auto_update(auto)
+            return
+
         if offline_devices:
             # Still offline → keep waiting
             if rt.get("errorReason") != "offline":
@@ -1863,8 +1996,11 @@ def engine_tick(auto):
         _auto_log(auto_id, f"Device(s) reachable → resuming {rt['state']}", "info")
         _emit_auto_update(auto)
         return
-    elif offline_devices:
-        # Enter network pause due to an offline device (resume when it returns)
+    elif offline_devices and state != "ACTION_RUN":
+        # Enter network pause due to an offline device (resume when it returns).
+        # ACTION_RUN is intentionally excluded: it runs its own interval-based
+        # liveness check so it can roll the timer back to the exact check point
+        # instead of freezing at the current (later) tick.
         names = ", ".join(offline_devices)
         _enter_network_pause(auto, rt, now, state, reason="offline", retry=False)
         _auto_log(auto_id, f"Device offline: {names} → NETWORK ERROR PAUSED", "error")
@@ -2198,13 +2334,13 @@ def engine_tick(auto):
                     rt["stopAfterRevert"] = False
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Init → Loop to Action 1")
+                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Loop to Action 1")
                 elif cycle_limit_reached:
                     rt["loopingToFirst"] = True
                     rt["stopAfterRevert"] = True
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Max cycles ({max_cycles}/day) reached, init → revert → stop")
+                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Max cycles ({max_cycles}/day) reached → revert → stop")
                 else:
                     rt["loopingToFirst"] = False
                     rt["state"] = "ACTION_REVERT"
@@ -2220,23 +2356,79 @@ def engine_tick(auto):
                 logging.error(f"[DB] Failed to persist cycle history: {e}")
             _emit_auto_update(auto)
             return
-        # State enforcement: ensure switch is still in expected state
+        # Periodic liveness verification of the running switch. The check interval
+        # scales with the action duration so we don't over-poll: >10min → every 60s,
+        # 1–10min → every 30s, <1min → every 5s. While a check passes, the action
+        # timer is left completely untouched. If a check fails, the timer is rolled
+        # back to the exact moment the check was due (so unverified run-time isn't
+        # counted), then the sequence pauses.
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
         if idx < len(actions):
             action = actions[idx]
-            if not _verify_switches([action], auto):
-                # Freeze the action timer
-                elapsed_so_far = now - (rt.get("timerStart") or now)
-                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_so_far)
-                rt["timerStart"] = None
-                # Send correction command and enter verify state
-                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
-                rt["driftRetryCount"] = 0
-                rt["verifyStart"] = now
-                rt["state"] = "ACTION_DRIFT_VERIFY"
-                _auto_log(auto_id, f"Switch drift detected on Action {idx+1} — correcting", "warning")
-                _emit_auto_update(auto)
+            duration = action.get("duration", 0)
+            if duration > 600:
+                verify_interval = 60
+            elif duration >= 60:
+                verify_interval = 30
+            else:
+                verify_interval = 5
+
+            # (Re)anchor the check schedule whenever the run (re)starts — timerStart
+            # changes on entry/resume, so this self-reschedules across any pause.
+            anchor = rt.get("timerStart")
+            if rt.get("_verifyAnchor") != anchor:
+                rt["_verifyAnchor"] = anchor
+                if rt.pop("_recheckOnResume", False):
+                    # Just came back from an offline pause — confirm the switch is
+                    # online AND in the expected state immediately, before letting the
+                    # timer run on (the device may have reset while it was offline).
+                    rt["nextVerifyAt"] = now
+                else:
+                    rt["nextVerifyAt"] = (anchor or now) + verify_interval
+
+            next_at = rt.get("nextVerifyAt") or (now + verify_interval)
+            if now >= next_at:
+                owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
+                ctrl = action.get("switchStateTopic") or action.get("switchCmdTopic")
+                online = _topic_is_available(owner_sess, ctrl) if owner_sess else True
+                state_ok = _verify_switches([action], auto)
+
+                if online and state_ok:
+                    # Verified good — schedule the next check; timer untouched.
+                    rt["nextVerifyAt"] = next_at + verify_interval
+                else:
+                    # Roll the action timer back to the check's trigger point so the
+                    # unverified interval isn't counted as run-time.
+                    elapsed_trig = next_at - (anchor or now)
+                    rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_trig)
+                    rt["timerStart"] = None
+                    rt.pop("nextVerifyAt", None)
+                    rt.pop("_verifyAnchor", None)
+                    if not online:
+                        # Network/offline → hold and retry on a ~1-minute cadence, but
+                        # attempt EARLY the instant the device spontaneously reports
+                        # back in (on reconnect it auto-publishes its state/availability
+                        # without us asking). The timer stays frozen at the check point
+                        # until the switch is re-verified.
+                        avail_topics = list(owner_sess.avail_map.get(ctrl, [])) if owner_sess else []
+                        rt["prePauseNetwork"] = "ACTION_RUN"
+                        rt["errorReason"] = "offline"
+                        rt["retryCount"] = 0
+                        rt["pauseUntil"] = now + 60
+                        rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
+                        rt["_offlineTopics"] = [t for t in (action.get("switchStateTopic"), action.get("switchCmdTopic"), *avail_topics) if t]
+                        rt["_recheckOnResume"] = True
+                        rt["state"] = "PAUSED_NETWORK"
+                        _auto_log(auto_id, f"Action {idx+1} check: device offline → NETWORK ERROR PAUSED (retry ≤1 min, or when device reports in)", "error")
+                    else:
+                        # Online but wrong state → drift correction.
+                        _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
+                        rt["driftRetryCount"] = 0
+                        rt["verifyStart"] = now
+                        rt["state"] = "ACTION_DRIFT_VERIFY"
+                        _auto_log(auto_id, f"Switch drift detected on Action {idx+1} — correcting", "warning")
+                    _emit_auto_update(auto)
         return
 
     if state == "ACTION_DRIFT_VERIFY":
@@ -2270,10 +2462,13 @@ def engine_tick(auto):
         next_idx = (idx + 1) % len(actions)
         
         if next_idx == 0 and rt.get("loopingToFirst"):
-            rt["currentInitIndex"] = 0
-            rt["state"] = "INIT_SET"
+            # Initialization runs only ONCE when the automation is turned ON — it
+            # is NOT re-run on each cycle loop. Skip straight to the buffer before
+            # reverting the last action and starting the next cycle.
+            rt["bufferStart"] = now
+            rt["state"] = "BUFFER"
             rt["retryCount"] = 0
-            _auto_log(auto_id, "Looping: Starting sequential initialization")
+            _auto_log(auto_id, "Looping to Action 1 → BUFFER")
             _emit_auto_update(auto)
             return
         else:
@@ -2401,7 +2596,7 @@ def engine_tick(auto):
                     # Loop back for another cycle
                     rt["currentActionIndex"] = 0
                     rt["state"] = "ACTION_SET"
-                    _auto_log(auto_id, "Init + Revert complete → Starting next cycle (Action 1)")
+                    _auto_log(auto_id, "Revert complete → Starting next cycle (Action 1)")
             elif idx + 1 < len(actions):
                 # Make-Before-Break finished. Advance to next action and start its timer.
                 next_idx = idx + 1
@@ -2887,6 +3082,7 @@ def handle_create_automation(data):
         "schedule": data.get("schedule", {"days": [], "startTime": "", "endTime": ""}),
         "condition": data.get("condition", []),
         "initialization": data.get("initialization", []),
+        "deinitialization": data.get("deinitialization", []),
         "actions": data.get("actions", []),
         "errorState": data.get("errorState", []),
         "bufferTime": data.get("bufferTime", BUFFER_SECONDS),
@@ -2922,7 +3118,7 @@ def handle_update_automation(data):
     old_actions = auto.get("actions", [])
     
     for key in ("name", "description", "schedule", "condition",
-                "initialization", "actions", "errorState", "bufferTime", "maxCyclesPerDay"):
+                "initialization", "deinitialization", "actions", "errorState", "bufferTime", "maxCyclesPerDay"):
         if key in data:
             auto[key] = data[key]
 
@@ -3013,8 +3209,18 @@ def handle_toggle_automation(data):
         if sched.get("ai_enabled"):
             socketio.start_background_task(_run_ai_for_automation, auto_id)
     else:
-        auto["runtime"] = _new_runtime(auto.get("runtime", {}))
-        _auto_log(auto_id, "Turned OFF → IDLE")
+        deinits = auto.get("deinitialization", [])
+        new_rt = _new_runtime(auto.get("runtime", {}))
+        if deinits:
+            # Run the deinitialization set→verify sequence before settling to IDLE.
+            new_rt["state"] = "DEINIT_SET"
+            new_rt["currentDeinitIndex"] = 0
+            new_rt["retryCount"] = 0
+            auto["runtime"] = new_rt
+            _auto_log(auto_id, "Turned OFF → DEINIT_SET (deinitialization)")
+        else:
+            auto["runtime"] = new_rt
+            _auto_log(auto_id, "Turned OFF → IDLE")
     _emit_auto_update(auto)
     start_engine()
     # Persist to DB

@@ -1566,6 +1566,28 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-modal-header h2 { font-size: 18px; font-weight: 500; }
 .irr-modal-body { flex: 1; overflow-y: auto; padding: 20px; }
 .irr-modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--ha-divider); }
+/* Inline validation banner shown just above the Save button when a switch is
+   already used by another automation during an overlapping time window. */
+.irr-modal-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px;
+  padding: 10px 12px;
+  background: rgba(244, 67, 54, 0.12);
+  border: 1px solid var(--ha-red);
+  border-radius: var(--ha-radius-sm, 8px);
+  color: var(--ha-red);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.irr-modal-warning.hidden { display: none; }
+.irr-modal-warning .material-symbols-outlined { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+/* Red outline on a switch <select> that conflicts with another automation. */
+.irr-form-row select.f-switch.conflict {
+  border-color: var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+}
 /* Modal Card Layout */
 .irr-modal-card {
   background: var(--ha-surface, #1c2333);

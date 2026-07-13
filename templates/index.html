@@ -481,6 +481,14 @@
                             <button id="auto-f-actions-add" class="ha-btn-text">+ Add Action</button>
                         </div>
 
+                        <!-- 3.5 Deinitialization -->
+                        <div class="irr-modal-card">
+                            <h3 class="irr-modal-card-heading">🔻 Deinitialization</h3>
+                            <p class="irr-modal-card-desc">Set switches to a safe state when the automation is turned OFF (runs once, set → verify)</p>
+                            <div id="auto-f-deinit" class="irr-form-list"></div>
+                            <button id="auto-f-deinit-add" class="ha-btn-text">+ Add Switch</button>
+                        </div>
+
                         <!-- 4. Error State -->
                         <div class="irr-modal-card">
                             <h3 class="irr-modal-card-heading">🛑 Error State</h3>
@@ -524,6 +532,7 @@
                         </div>
 
                     </div>
+                    <div id="auto-modal-warning" class="irr-modal-warning hidden" role="alert"></div>
                     <div class="irr-modal-footer">
                         <button id="auto-modal-cancel" class="ha-btn-secondary"
                             style="width:auto;padding:10px 24px">Cancel</button>

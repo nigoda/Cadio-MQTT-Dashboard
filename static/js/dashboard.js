@@ -185,8 +185,20 @@
     if (loginEmail) loginEmail.value = "";
     if (loginPass) loginPass.value = "";
 
-    // 4. Redirect to /logout to clear Flask session and show the message
-    window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Logged out globally.");
+    // 4. Unsubscribe Web Push on this device so notifications stop here too
+    const redirect = () => {
+      window.location.href =
+        "/logout?msg=" + encodeURIComponent(data.message || "Logged out globally.");
+    };
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.ready
+        .then(reg => reg.pushManager.getSubscription())
+        .then(sub => (sub ? sub.unsubscribe() : null))
+        .catch(e => console.error("Error unsubscribing push on force logout:", e))
+        .finally(redirect);
+    } else {
+      redirect();
+    }
   });
   socket.on("mqtt_status", (data) => {
     const connected = data.connected;
@@ -1272,22 +1284,27 @@
   // on the login screen after redirect.
   function performLogout(socketEvent, msg) {
     // Unsubscribe Web Push notifications on THIS device (both logout kinds
-    // sign this device out, so its push subscription should go either way)
-    if (navigator.serviceWorker) {
-      navigator.serviceWorker.ready.then(reg => {
-        reg.pushManager.getSubscription().then(sub => {
-          if (sub) {
-            fetch("/api/push/unsubscribe", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ endpoint: sub.endpoint })
-            }).then(() => {
-              sub.unsubscribe().catch(e => console.error("Error unsubscribing push:", e));
-            }).catch(e => console.error("Error notifying server of unsubscription:", e));
-          }
-        }).catch(e => console.error("Error getting push subscription on logout:", e));
-      });
-    }
+    // sign this device out, so its push subscription should go either way).
+    // We hold the redirect until this completes so the /api/push/unsubscribe
+    // request isn't aborted by navigation (which would leave a live sub that
+    // keeps delivering notifications after logout).
+    const cleanupPush = () => {
+      if (!navigator.serviceWorker) return Promise.resolve();
+      return navigator.serviceWorker.ready
+        .then(reg => reg.pushManager.getSubscription())
+        .then(sub => {
+          if (!sub) return null;
+          return fetch("/api/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: sub.endpoint })
+          })
+            .catch(e => console.error("Error notifying server of unsubscription:", e))
+            .then(() => sub.unsubscribe())
+            .catch(e => console.error("Error unsubscribing push:", e));
+        })
+        .catch(e => console.error("Error getting push subscription on logout:", e));
+    };
 
     // 1. Tell the server which logout to perform
     if (socket) socket.emit(socketEvent);
@@ -1309,9 +1326,10 @@
     confirmModal.style.display = "none";
 
     // 5. Final Reset (Redirect to clear Flask session and show confirmation)
-    setTimeout(() => {
+    //    only after push cleanup has finished.
+    cleanupPush().finally(() => {
       window.location.href = "/logout?msg=" + encodeURIComponent(msg);
-    }, 150);
+    });
   }
 
   if (btnLogout && confirmModal) {
