@@ -592,6 +592,27 @@
         }
       });
     }
+
+    // Also update deinitialization live state text if visible
+    const deinitBody = $("#irr-deinit-body");
+    if (deinitBody) {
+      const deinits = auto.deinitialization || [];
+      const rows = deinitBody.querySelectorAll(".irr-deinit-live");
+      rows.forEach((span, i) => {
+        if (deinits[i]) {
+          const topic = deinits[i].switchStateTopic || deinits[i].switchCmdTopic || "";
+          let lState = "Unknown";
+          if (window._dashboardEntities) {
+            for (const eid in window._dashboardEntities) {
+              const e = window._dashboardEntities[eid];
+              if (e.stateTopic === topic || e.cmdTopic === topic) { lState = (e.state || "Unknown").toUpperCase(); break; }
+            }
+          }
+          const lColor = lState === "ON" ? "color:var(--ha-state-on)" : (lState === "OFF" ? "color:var(--ha-state-off)" : "");
+          span.innerHTML = `(Live: <span style="font-weight:600; ${lColor}">${lState}</span>)`;
+        }
+      });
+    }
   }
 
   // ─── Render Detail ───
@@ -646,6 +667,13 @@
     const initBody = $("#irr-init-body");
     const inits = auto.initialization || [];
     initBody.innerHTML = inits.map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+
+    // Deinit
+    const deinitBody = $("#irr-deinit-body");
+    if (deinitBody) {
+      const deinits = auto.deinitialization || [];
+      deinitBody.innerHTML = deinits.map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    }
 
     // Condition
     const condBody = $("#irr-cond-body");
@@ -951,12 +979,53 @@
         <div class="ha-field"><input type="time" class="f-end" value="${data?.end || ""}" placeholder=" "><label>End</label></div>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     }
+    if (type === "switch") {
+      const switchSelect = row.querySelector(".f-switch");
+      if (switchSelect) {
+        switchSelect.addEventListener("change", () => refreshSwitchOptions(container));
+      }
+    }
+
     row.querySelector(".irr-remove-btn")?.addEventListener("click", () => {
       row.remove();
       if (type === "condition") refreshCondLogic(container);
+      if (type === "switch") refreshSwitchOptions(container);
     });
     container.appendChild(row);
     if (type === "condition") refreshCondLogic(container);
+    if (type === "switch") refreshSwitchOptions(container);
+  }
+
+  function refreshSwitchOptions(container) {
+    if (!container || !container.id) return;
+    if (container.id !== "auto-f-init" && container.id !== "auto-f-deinit") return;
+
+    const selects = [...container.querySelectorAll(".f-switch")];
+    const selectedValues = selects.map(s => s.value).filter(v => v);
+
+    let changed = false;
+    selects.forEach(select => {
+      const currentVal = select.value;
+      [...select.options].forEach(opt => {
+        if (opt.value !== currentVal && selectedValues.includes(opt.value)) {
+          opt.disabled = true;
+        } else {
+          opt.disabled = false;
+        }
+      });
+      
+      if (!currentVal || select.options[select.selectedIndex]?.disabled) {
+        const firstEnabled = [...select.options].find(o => !o.disabled);
+        if (firstEnabled) {
+          select.value = firstEnabled.value;
+          changed = true;
+        }
+      }
+    });
+
+    if (changed) {
+      refreshSwitchOptions(container);
+    }
   }
 
   // Detail description: collapsed to one line by default with a "more" toggle that

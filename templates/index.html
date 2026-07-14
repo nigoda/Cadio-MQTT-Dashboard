@@ -362,11 +362,15 @@
                             </div>
                             <!-- Sections grid -->
                             <div class="irr-sections-grid">
-                                <div class="irr-section" id="irr-init-section">
+                                <div class="irr-section irr-section-wide" id="irr-init-section">
                                     <h3>🔧 Initialization</h3>
                                     <div id="irr-init-body"></div>
                                 </div>
-                                <div class="irr-section" id="irr-sched-section">
+                                <div class="irr-section irr-section-wide" id="irr-deinit-section">
+                                    <h3>🔻 Deinitialization</h3>
+                                    <div id="irr-deinit-body"></div>
+                                </div>
+                                <div class="irr-section irr-section-wide" id="irr-sched-section">
                                     <h3 id="main-sched-heading">📅 Scheduler</h3>
                                     <div id="irr-sched-body"></div>
                                 </div>
@@ -433,6 +437,14 @@
                             <div id="auto-f-init" class="irr-form-list"></div>
                             <button id="auto-f-init-add" class="ha-btn-text">+ Add Switch</button>
                         </div>
+                        
+                        <!-- 1b. Deinitialization -->
+                        <div class="irr-modal-card">
+                            <h3 class="irr-modal-card-heading">🔻 Deinitialization</h3>
+                            <p class="irr-modal-card-desc">Set switches to a safe state when the automation is turned OFF (runs once, set → verify)</p>
+                            <div id="auto-f-deinit" class="irr-form-list"></div>
+                            <button id="auto-f-deinit-add" class="ha-btn-text">+ Add Switch</button>
+                        </div>
 
                         <!-- 2. Scheduler (includes Conditions + Enforcement) -->
                         <div class="irr-modal-card">
@@ -481,13 +493,7 @@
                             <button id="auto-f-actions-add" class="ha-btn-text">+ Add Action</button>
                         </div>
 
-                        <!-- 3.5 Deinitialization -->
-                        <div class="irr-modal-card">
-                            <h3 class="irr-modal-card-heading">🔻 Deinitialization</h3>
-                            <p class="irr-modal-card-desc">Set switches to a safe state when the automation is turned OFF (runs once, set → verify)</p>
-                            <div id="auto-f-deinit" class="irr-form-list"></div>
-                            <button id="auto-f-deinit-add" class="ha-btn-text">+ Add Switch</button>
-                        </div>
+
 
                         <!-- 4. Error State -->
                         <div class="irr-modal-card">

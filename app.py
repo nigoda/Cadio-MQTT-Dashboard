@@ -2461,14 +2461,13 @@ def engine_tick(auto):
         idx = rt.get("currentActionIndex", 0)
         next_idx = (idx + 1) % len(actions)
         
-        if next_idx == 0 and rt.get("loopingToFirst"):
-            # Initialization runs only ONCE when the automation is turned ON — it
-            # is NOT re-run on each cycle loop. Skip straight to the buffer before
-            # reverting the last action and starting the next cycle.
+        if next_idx == 0 and rt.get("stopAfterRevert"):
+            # Max cycles reached. Do not overlap with the next cycle.
+            # Skip straight to the buffer before reverting the last action and stopping.
             rt["bufferStart"] = now
             rt["state"] = "BUFFER"
             rt["retryCount"] = 0
-            _auto_log(auto_id, "Looping to Action 1 → BUFFER")
+            _auto_log(auto_id, "Max cycles reached → Skipping overlap → BUFFER")
             _emit_auto_update(auto)
             return
         else:
@@ -2593,10 +2592,15 @@ def engine_tick(auto):
                     rt["state"] = "COMPLETED"
                     _auto_log(auto_id, f"Max cycles done → COMPLETED (stopping)")
                 else:
-                    # Loop back for another cycle
-                    rt["currentActionIndex"] = 0
-                    rt["state"] = "ACTION_SET"
-                    _auto_log(auto_id, "Revert complete → Starting next cycle (Action 1)")
+                    # Loop back for another cycle (Make-Before-Break overlap finished). Advance to Action 1 RUN.
+                    next_idx = 0
+                    rt["currentActionIndex"] = next_idx
+                    duration = actions[next_idx].get("duration", 0)
+                    rt["timerStart"] = now
+                    rt["remainingTime"] = duration
+                    rt["state"] = "ACTION_RUN"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Revert complete → Advanced to next cycle Action 1 → ACTION_RUN ({duration}s)")
             elif idx + 1 < len(actions):
                 # Make-Before-Break finished. Advance to next action and start its timer.
                 next_idx = idx + 1
