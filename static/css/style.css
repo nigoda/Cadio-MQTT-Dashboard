@@ -1702,6 +1702,9 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     .irr-auto-list { max-height: 200px; overflow-y: auto; }
     .irr-sections-grid { grid-template-columns: 1fr; }
     .irr-section-wide { grid-column: span 1; }
+    /* Mobile only: move Error State below Actions (it's the last item in the grid,
+       so a higher order pushes it after Actions). Desktop keeps its DOM order. */
+    #irr-error-section { order: 1; }
     /* Keep Live Switches | Live Sensors equally split on mobile too (Recent
        Activity still spans both columns via its inline grid-column: span 2). */
     .irr-bottom-grid { grid-template-columns: 1fr 1fr; }
