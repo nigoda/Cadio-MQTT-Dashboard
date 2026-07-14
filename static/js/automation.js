@@ -1001,31 +1001,27 @@
     if (container.id !== "auto-f-init" && container.id !== "auto-f-deinit") return;
 
     const selects = [...container.querySelectorAll(".f-switch")];
-    const selectedValues = selects.map(s => s.value).filter(v => v);
+    const used = new Set();
 
-    let changed = false;
+    // Walk the rows in order and give each one the first switch not already taken
+    // by an earlier row. Empty rows and duplicates (e.g. a new row defaulting to
+    // switch 0 when switch 0 is already used) advance to the next available switch.
+    selects.forEach(select => {
+      const val = select.value;
+      if (!val || used.has(val)) {
+        const next = [...select.options].find(o => o.value && !used.has(o.value));
+        if (next) select.value = next.value;
+      }
+      if (select.value) used.add(select.value);
+    });
+
+    // Disable switches already chosen in another row so the same one can't be picked twice.
     selects.forEach(select => {
       const currentVal = select.value;
       [...select.options].forEach(opt => {
-        if (opt.value !== currentVal && selectedValues.includes(opt.value)) {
-          opt.disabled = true;
-        } else {
-          opt.disabled = false;
-        }
+        opt.disabled = opt.value !== currentVal && used.has(opt.value);
       });
-      
-      if (!currentVal || select.options[select.selectedIndex]?.disabled) {
-        const firstEnabled = [...select.options].find(o => !o.disabled);
-        if (firstEnabled) {
-          select.value = firstEnabled.value;
-          changed = true;
-        }
-      }
     });
-
-    if (changed) {
-      refreshSwitchOptions(container);
-    }
   }
 
   // Detail description: collapsed to one line by default with a "more" toggle that
