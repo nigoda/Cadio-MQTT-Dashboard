@@ -23,6 +23,7 @@ if ASYNC_MODE == "eventlet":
 import copy
 import json
 import logging
+import collections
 import ssl
 import threading
 import time
@@ -1799,7 +1800,7 @@ def _emit_auto_update(auto):
         socketio.emit("automation_update", {"automation": safe, "logs": logs})
 
 
-def engine_tick(auto):
+def engine_tick(auto, active_overrides=None):
     """Execute one tick of the state machine for an automation."""
     rt = auto["runtime"]
     state = rt["state"]
@@ -2030,8 +2031,18 @@ def engine_tick(auto):
         
         enforce_list = sched_cfg.get("setIfTrue", []) if sched_is_true else sched_cfg.get("setIfFalse", [])
         
+        yielded_this_tick = []
         for item in enforce_list:
             topic = item.get("switchCmdTopic", "")
+            
+            # Global Priority Check:
+            # If this automation is enforcing setIfFalse (because its schedule is inactive),
+            # but another automation has an active claim (action or setIfTrue) on this exact
+            # switch, we must yield and skip enforcement so they don't fight.
+            if not sched_is_true and active_overrides and topic in active_overrides:
+                yielded_this_tick.append(topic)
+                continue
+                
             last_sent_key = f"_last_sent_{topic}"
             retry_key = f"_retry_{topic}"
 
@@ -2065,6 +2076,10 @@ def engine_tick(auto):
                 if now - rt.get(ping_key, 0) >= 60:
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[ping_key] = now
+
+        if rt.get("yielded_switches", []) != yielded_this_tick:
+            rt["yielded_switches"] = yielded_this_tick
+            _emit_auto_update(auto)
 
     # Priority 1.5: Enforce Pause
     if bg_unverified:
@@ -2714,10 +2729,35 @@ def _engine_loop():
     logging.info("[ENGINE] Automation engine started")
     _last_db_save = time.time()
     while _engine_running:
+        # Build global active overrides per session
+        active_overrides = collections.defaultdict(set)
+        try:
+            for session, auto_id, auto in session_mgr.get_all_automations():
+                state = auto.get("runtime", {}).get("state", "IDLE")
+                # 1. Any currently executing action claims the switch
+                actions = auto.get("actions", [])
+                idx = auto.get("runtime", {}).get("currentActionIndex", 0)
+                if state in ("ACTION_RUN", "ACTION_SET", "ACTION_DRIFT_VERIFY", "OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY"):
+                    if idx < len(actions):
+                        ctrl = actions[idx].get("switchCmdTopic", "") or actions[idx].get("switchStateTopic", "")
+                        if ctrl: active_overrides[session.email].add(ctrl)
+                    if state in ("OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY") and len(actions) > 0:
+                        next_idx = (idx + 1) % len(actions)
+                        ctrl = actions[next_idx].get("switchCmdTopic", "") or actions[next_idx].get("switchStateTopic", "")
+                        if ctrl: active_overrides[session.email].add(ctrl)
+                
+                # 2. Any active schedule's setIfTrue claims the switch
+                if check_schedule(auto):
+                    for item in auto.get("schedule", {}).get("setIfTrue", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: active_overrides[session.email].add(ctrl)
+        except Exception as e:
+            logging.error(f"[ENGINE] Error building active overrides: {e}")
+
         # Tick all session-based automations (multi-tenant)
         for session, auto_id, auto in session_mgr.get_all_automations():
             try:
-                engine_tick(auto)
+                engine_tick(auto, active_overrides.get(session.email, set()))
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
         # Periodic DB save every 60 seconds

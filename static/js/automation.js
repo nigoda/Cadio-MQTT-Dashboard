@@ -753,7 +753,12 @@
     </div>${schedCondHTML}`;
 
     const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
-    const setFalseHTML = (sched.setIfFalse || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+    const setFalseHTML = (sched.setIfFalse || []).map(i => {
+      const topic = i.switchCmdTopic || "";
+      const isYielded = (auto.runtime?.yielded_switches || []).includes(topic);
+      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active automation">warning</span>` : "";
+      return `<div class="irr-sw-row"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+    }).join("");
 
     if (setTrueHTML || setFalseHTML) {
       schedBody.innerHTML += `<div style="display:flex;gap:20px;margin-top:16px;">
