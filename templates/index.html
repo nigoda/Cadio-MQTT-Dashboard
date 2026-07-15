@@ -99,14 +99,15 @@
                 <h2 style="color: #fff; margin: 0; font-weight: 600;">Security Warning</h2>
             </div>
             <div class="ha-modal-body" style="margin-top: 15px;">
-                <p style="color: #fff; font-size: 18px; margin-bottom: 10px;">Are you sure you want to logout?</p>
+                <p style="color: #fff; font-size: 18px; margin-bottom: 10px;">How would you like to log out?</p>
                 <p style="color: rgba(255,255,255,0.7); font-size: 15px; line-height: 1.5;">
-                    This will log you out of <b>ALL</b> devices and <b>STOP</b> all running automations until you log back in.
+                    <b>Logout</b> signs out of this device only. <b>Logout Everywhere</b> signs out of <b>ALL</b> devices and <b>STOPS</b> all running automations until you log back in.
                 </p>
             </div>
             <div class="ha-modal-footer">
                 <button id="confirm-cancel" class="ha-btn-cancel-custom">Cancel</button>
-                <button id="confirm-logout" class="ha-btn-logout-custom">Logout Everywhere</button>
+                <button id="confirm-logout" class="ha-btn-logout-everywhere">Logout Everywhere</button>
+                <button id="confirm-logout-device" class="ha-btn-logout-custom">Logout</button>
             </div>
         </div>
     </div>
@@ -186,6 +187,10 @@
                 </button>
             </nav>
             <div class="ha-sidebar-footer">
+                <div class="ha-user-email-row">
+                    <span class="material-symbols-outlined ha-user-email-icon">person</span>
+                    <span id="user-email-display" class="ha-user-email-text" title="">—</span>
+                </div>
                 <div class="ha-connection-status">
                     <span id="status-indicator" class="ha-status-dot"></span>
                     <span id="status-text">Connecting…</span>
@@ -219,6 +224,9 @@
             <section id="tab-overview" class="ha-view active">
                 <div class="ha-view-header">
                     <h1>Overview</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="overview-search" class="ha-input-sm" placeholder="Search devices…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="status-badges" class="ha-badges-row"></div>
                 <div id="overview-devices" class="ha-masonry">
@@ -240,17 +248,39 @@
                 <div class="irr-workspace">
                     <!-- LEFT: Automation List -->
                     <div class="irr-list-panel">
+                        <div class="irr-auto-search">
+                            <div class="irr-auto-search-box">
+                                <span class="material-symbols-outlined irr-auto-search-icon">search</span>
+                                <input type="text" id="auto-search" class="irr-auto-search-input"
+                                    placeholder="Search automations..." autocomplete="off">
+                            </div>
+                            <button type="button" id="auto-clear-filters" class="irr-auto-clear-btn hidden"
+                                title="Clear search & filters">
+                                <span class="material-symbols-outlined">filter_alt_off</span>
+                            </button>
+                        </div>
+                        <div class="irr-auto-filter-row">
+                            <div id="auto-filter-dd" class="irr-filter-dd">
+                                <button type="button" id="auto-filter-dd-trigger" class="irr-filter-dd-trigger"
+                                    aria-haspopup="listbox" aria-expanded="false" title="Filter automations (select one or more)">
+                                    <span class="material-symbols-outlined irr-filter-dd-ic">filter_list</span>
+                                    <span id="auto-filter-dd-label">All</span>
+                                    <span class="material-symbols-outlined irr-filter-dd-caret">expand_more</span>
+                                </button>
+                                <div id="auto-filter-dd-menu" class="irr-filter-dd-menu hidden" role="listbox">
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="all" checked><span>All</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="on"><span>On</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="off"><span>Off</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="running"><span>Running</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="idle"><span>Idle</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="paused"><span>Paused</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="error"><span>Error</span></label>
+                                </div>
+                            </div>
+                            <button type="button" id="auto-filter-clear" class="irr-filter-clear-btn" title="Clear filter (select all)">Clear</button>
+                        </div>
                         <div id="auto-list" class="irr-auto-list">
                             <div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>
-                        </div>
-                        <!-- Controller Status -->
-                        <div class="irr-controller-status">
-                            <h4>Controller Status</h4>
-                            <div class="irr-ctrl-row"><span class="irr-ctrl-dot connected"></span> <span>Online</span>
-                            </div>
-                            <div class="irr-ctrl-info"><span>Uptime</span><span id="irr-uptime">—</span></div>
-                            <div class="irr-ctrl-info"><span>IP Address</span><span id="irr-ip">—</span></div>
-                            <div class="irr-ctrl-info"><span>Firmware</span><span id="irr-fw">—</span></div>
                         </div>
                     </div>
 
@@ -274,7 +304,8 @@
                                                 style="font-size:18px;">pause</span>
                                         </button>
                                     </div>
-                                    <span id="irr-detail-desc" class="irr-desc"></span>
+                                    <span id="irr-detail-desc" class="irr-desc collapsed"></span>
+                                    <button id="irr-detail-desc-toggle" type="button" class="irr-desc-toggle" style="display:none;">more</button>
                                 </div>
                                 <div class="irr-header-right">
                                     <span id="irr-detail-badge" class="irr-status-badge"></span>
@@ -318,24 +349,31 @@
                                     <div class="irr-cell-icon green-bg"><span
                                             class="material-symbols-outlined">play_arrow</span></div>
                                 </div>
-                                <div class="irr-state-cell" style="justify-content:center;">
+                                <div class="irr-state-cell irr-status-cell" style="justify-content:center;">
                                     <span class="irr-label" style="margin-bottom:2px">Status</span>
-                                    <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap"
-                                        style="margin: 0 12px;">
-                                        <input type="checkbox" id="irr-status-toggle">
-                                        <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
-                                        <span class="ha-toggle-thumb"></span>
-                                    </label>
-                                    <span class="irr-cell-sub" style="margin-top:2px">Automation Enabled</span>
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap" style="margin: 0;">
+                                            <input type="checkbox" id="irr-status-toggle">
+                                            <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
+                                            <span class="ha-toggle-thumb"></span>
+                                        </label>
+                                        <div id="irr-status-loading" class="ha-spinner" style="display:none; width:16px; height:16px; border-width:2px; border-top-color:var(--ha-primary)"></div>
+                                    </div>
+                                    <span class="irr-cell-sub irr-status-desc" style="margin-top:2px">Automation Enabled</span>
                                 </div>
                             </div>
+                            <div id="irr-run-error" class="irr-run-error-banner" style="display:none;"></div>
                             <!-- Sections grid -->
                             <div class="irr-sections-grid">
                                 <div class="irr-section" id="irr-init-section">
                                     <h3>🔧 Initialization</h3>
                                     <div id="irr-init-body"></div>
                                 </div>
-                                <div class="irr-section" id="irr-sched-section">
+                                <div class="irr-section" id="irr-deinit-section">
+                                    <h3>🔻 Deinitialization</h3>
+                                    <div id="irr-deinit-body"></div>
+                                </div>
+                                <div class="irr-section irr-section-wide" id="irr-sched-section">
                                     <h3 id="main-sched-heading">📅 Scheduler</h3>
                                     <div id="irr-sched-body"></div>
                                 </div>
@@ -391,16 +429,24 @@
                     <div class="irr-modal-body">
                         <!-- Name & Description -->
                         <div class="irr-modal-card">
-                            <div class="ha-field"><input type="text" id="auto-f-name" placeholder=" " required><label>Automation Name</label></div>
+                            <div class="ha-field"><input type="text" id="auto-f-name" placeholder=" " maxlength="35" required><label>Automation Name</label></div>
                             <div class="ha-field" style="margin-top:12px;"><input type="text" id="auto-f-desc" placeholder=" "><label>Description</label></div>
                         </div>
 
                         <!-- 1. Initialization -->
                         <div class="irr-modal-card">
                             <h3 class="irr-modal-card-heading">🔧 Initialization</h3>
-                            <p class="irr-modal-card-desc">Set switches to a safe state before each cycle starts</p>
+                            <p class="irr-modal-card-desc">Set switches to a safe state when the automation is turned ON (runs once, set → verify)</p>
                             <div id="auto-f-init" class="irr-form-list"></div>
                             <button id="auto-f-init-add" class="ha-btn-text">+ Add Switch</button>
+                        </div>
+                        
+                        <!-- 1b. Deinitialization -->
+                        <div class="irr-modal-card">
+                            <h3 class="irr-modal-card-heading">🔻 Deinitialization</h3>
+                            <p class="irr-modal-card-desc">Set switches to a safe state when the automation is turned OFF (runs once, set → verify)</p>
+                            <div id="auto-f-deinit" class="irr-form-list"></div>
+                            <button id="auto-f-deinit-add" class="ha-btn-text">+ Add Switch</button>
                         </div>
 
                         <!-- 2. Scheduler (includes Conditions + Enforcement) -->
@@ -450,6 +496,8 @@
                             <button id="auto-f-actions-add" class="ha-btn-text">+ Add Action</button>
                         </div>
 
+
+
                         <!-- 4. Error State -->
                         <div class="irr-modal-card">
                             <h3 class="irr-modal-card-heading">🛑 Error State</h3>
@@ -493,6 +541,7 @@
                         </div>
 
                     </div>
+                    <div id="auto-modal-warning" class="irr-modal-warning hidden" role="alert"></div>
                     <div class="irr-modal-footer">
                         <button id="auto-modal-cancel" class="ha-btn-secondary"
                             style="width:auto;padding:10px 24px">Cancel</button>
@@ -616,6 +665,9 @@
             <section id="tab-lights" class="ha-view">
                 <div class="ha-view-header">
                     <h1>Lights</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="lights-search" class="ha-input-sm" placeholder="Search lights…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="lights-devices" class="ha-masonry">
                     <div class="ha-card">
@@ -628,6 +680,9 @@
             <section id="tab-switches" class="ha-view">
                 <div class="ha-view-header">
                     <h1>Switches</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="switches-search" class="ha-input-sm" placeholder="Search switches…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="switches-devices" class="ha-masonry">
                     <div class="ha-card">
@@ -640,6 +695,9 @@
             <section id="tab-sensors" class="ha-view">
                 <div class="ha-view-header">
                     <h1>Sensors</h1>
+                    <div class="ha-view-actions">
+                        <input type="text" id="sensors-search" class="ha-input-sm" placeholder="Search sensors…" autocomplete="off">
+                    </div>
                 </div>
                 <div id="sensors-badges" class="ha-badges-row"></div>
                 <div id="sensors-devices" class="ha-masonry">
@@ -668,6 +726,17 @@
                     <div class="ha-view-actions">
                         <input type="text" id="log-filter" class="ha-input-sm" placeholder="Filter…">
                         <button id="btn-clear-log" class="ha-btn-text">Clear</button>
+                    </div>
+                </div>
+                <div class="ha-card ha-sessions-card">
+                    <div class="ha-card-header" style="display:flex;align-items:center;justify-content:space-between;">
+                        <span><span class="material-symbols-outlined" style="vertical-align:middle;margin-right:6px;">devices</span>Logged-in Devices</span>
+                        <button id="btn-refresh-sessions" class="ha-btn-text" title="Refresh device list">
+                            <span class="material-symbols-outlined" style="font-size:18px;">refresh</span>
+                        </button>
+                    </div>
+                    <div id="sessions-list" class="ha-sessions-list">
+                        <div class="ha-empty-row">Loading devices…</div>
                     </div>
                 </div>
                 <div class="ha-card">
@@ -907,6 +976,21 @@ NO     → Device is offline (Last Will message from broker)</pre>
                             <button id="btn-save-settings" class="ha-btn-primary" style="width: 100%; border-radius: 12px; height: 48px; font-weight: 500;">Save Personal Key</button>
                         </div>
                     </div>
+
+                    <!-- Global AI Priority List -->
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">sort</span> Global AI Priority List
+                        </div>
+                        <div class="ha-api-section">
+                            <p style="color:var(--ha-text-secondary); font-size:0.9rem; margin-bottom:15px;">
+                                Rearrange automations to control which ones the AI schedules first. Higher in the list means higher priority.
+                            </p>
+                            <div id="ai-priority-list" style="display:flex; flex-direction:column; gap:8px;">
+                                <!-- Rendered dynamically by settings.js -->
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 
@@ -1048,8 +1132,28 @@ NO     → Device is offline (Last Will message from broker)</pre>
         .ha-modal-footer {
             display: flex;
             justify-content: flex-end;
-            gap: 15px;
+            flex-wrap: nowrap;          /* all three buttons stay on one line */
+            gap: 10px;
             margin-top: 40px;
+        }
+        .ha-modal-footer > button {
+            flex: 0 1 auto;
+            min-width: 0;               /* allow shrink so the row never breaks */
+            padding-left: 18px;
+            padding-right: 18px;
+        }
+        /* Narrow screens: equal-width buttons, tighter padding/font. Long labels
+           wrap inside their own button rather than pushing the row to two lines. */
+        @media (max-width: 520px) {
+            .ha-modal-content { padding: 24px 16px; }
+            .ha-modal-footer { gap: 8px; margin-top: 28px; }
+            .ha-modal-footer > button {
+                flex: 1 1 0;
+                padding: 10px 6px;
+                font-size: 13px;
+                white-space: normal;
+                line-height: 1.2;
+            }
         }
         .ha-btn-logout-custom {
             background: #ff5252;
@@ -1081,6 +1185,22 @@ NO     → Device is offline (Last Will message from broker)</pre>
         .ha-btn-cancel-custom:hover {
             background: #e3f2fd;
             transform: translateY(-2px);
+        }
+        .ha-btn-logout-everywhere {
+            background: #2196f3;
+            color: #fff;
+            border: none;
+            padding: 12px 28px;
+            border-radius: 14px;
+            font-weight: 700;
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .ha-btn-logout-everywhere:hover {
+            background: #1976d2;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(33,150,243,0.4);
         }
     </style>
     <!-- PWA Service Worker Registration -->

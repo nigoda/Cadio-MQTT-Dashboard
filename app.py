@@ -4,10 +4,26 @@ Bridges Nivixsa cloud MQTT to the browser via Flask-SocketIO.
 Uses the Nivixsa login API to obtain the real MQTT broker details.
 """
 
+# Load environment first so the async mode can be chosen before importing any
+# module that eventlet needs to monkey-patch.
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+# Async mode is configurable. Default "eventlet" (used in Docker/production).
+# On Windows local dev, eventlet's cooperative networking can stall the whole
+# server during blocking I/O (login API calls, MQTT connect, DNS). Set
+# ASYNC_MODE=threading in your .env there to avoid it.
+ASYNC_MODE = os.getenv("ASYNC_MODE", "eventlet").strip().lower()
+if ASYNC_MODE == "eventlet":
+    # eventlet must be monkey-patched BEFORE importing socket/threading users.
+    import eventlet
+    eventlet.monkey_patch()
+
 import copy
 import json
 import logging
-import os
+import collections
 import ssl
 import threading
 import time
@@ -16,15 +32,15 @@ import re
 import atexit
 import math
 from datetime import datetime, timedelta
-from dotenv import load_dotenv
-
-load_dotenv()
 
 import paho.mqtt.client as mqtt
 import requests
 import psutil
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+# Log level is configurable; default INFO. DEBUG floods the console on every MQTT
+# message which, under eventlet, can block the hub and slow the whole server.
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.INFO), format="%(asctime)s [%(levelname)s] %(message)s")
 from flask import Flask, render_template, request, session, redirect, send_from_directory, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
@@ -42,7 +58,7 @@ DISCOVERY_PREFIX = "homeassistant"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.urandom(24)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=ASYNC_MODE)
 
 # In-memory stores
 device_states: dict = {}        # topic -> last payload
@@ -182,6 +198,7 @@ session_mgr = SessionManager()
 
 # Per-socket user session tracking (for multi-user isolation)
 _user_sessions: dict = {}       # socket_sid -> email
+_sid_token: dict = {}           # socket_sid -> DB session_token (for per-device logout)
 _impersonation_tokens: dict = {} # token -> email (Temporary access tokens)
 
 def _get_user_email():
@@ -233,7 +250,7 @@ def _find_automation(auto_id):
 MAX_AUTO_LOG = 200
 VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
 DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — device was already responding)
-NETWORK_RETRY_DELAY = 300       # seconds (5 min) to wait before retrying a device that won't obey
+NETWORK_RETRY_DELAY = 120       # seconds (2 min) to wait before retrying a device that won't obey
 DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is judged "missing"
 
 # MQTT Watchdog globals
@@ -503,7 +520,9 @@ ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@nivixsa.com")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "nivixsa-admin-2024")
 
 def _sync_master_admin():
-    """Ensure the master admin from .env exists in DB with Level 1 permissions."""
+    """Ensure the master admin from .env exists in the DB with Level 1 (super).
+    Support (Level 2) and observer (Level 3) admins are created by the super admin
+    from the admin panel (Admin Team → Add Admin), not seeded from .env."""
     try:
         import db
         db.save_admin(ADMIN_EMAIL, ADMIN_PASSWORD, level=1)
@@ -625,7 +644,9 @@ def handle_admin_user_block(data):
         db.block_user(email)
         # 1. Kill MQTT Session
         session_mgr.remove_session(email)
-        # 2. Nuclear Kick from all devices/browsers
+        # 2. Purge push subscriptions so a blocked user stops getting notifications
+        db.delete_all_push_subscriptions(email)
+        # 3. Nuclear Kick from all devices/browsers
         sids_to_kick = [sid for sid, e in list(_user_sessions.items()) if e.lower() == email.lower()]
         for sid in sids_to_kick:
             socketio.emit("force_logout", {
@@ -722,14 +743,33 @@ def admin_impersonate(email):
 
 @socketio.on("admin_request_otp")
 def handle_admin_request_otp(data):
-    """Admin requests an OTP to login as a user."""
-    if session.get("admin_level", 3) > 2: return
+    """Admin requests access to a user account.
+    Level 1 (super admin): direct access — no OTP, and no popup on the user's screen.
+    Level 2 (support): OTP code is shown on the user's live dashboard.
+    Level 3 (observer): not allowed (unchanged)."""
+    level = session.get("admin_level", 3)
+    if level > 2: return
     email = data.get("email", "").strip().lower()
+
+    # Super admin: skip the OTP entirely, mint the impersonation token immediately.
+    # No security_code_request is emitted, so the user sees no popup.
+    if level == 1:
+        import db
+        if not db.get_user(email):
+            emit("admin_otp_error", {"message": "User not found."})
+            return
+        token = str(uuid.uuid4())
+        _impersonation_tokens[token] = email
+        logging.info(f"[ADMIN] Super admin direct access to {email} (no OTP)")
+        emit("admin_otp_success", {"email": email, "token": token})
+        return
+
+    # Level 2 (support): OTP flow — requires the user online to display the code.
     sess = session_mgr.get_session(email)
     if not sess:
         emit("admin_otp_error", {"message": "User is not currently online. Admin can only login if user dashboard is active."})
         return
-    
+
     import random
     code = str(random.randint(100000, 999999))
     sess.otp = code
@@ -838,6 +878,7 @@ def handle_ws_disconnect():
     sid = request.sid
     # Standard disconnect (browser close) doesn't necessarily kill the MQTT session 
     # unless it was the last socket.
+    _sid_token.pop(sid, None)
     email = _user_sessions.pop(sid, None)
     if email:
         session_mgr.unregister_socket(sid)
@@ -846,23 +887,67 @@ def handle_ws_disconnect():
     _emit_admin_stats()
 
 
+def _resolve_session_token(email, data):
+    """Return the DB session token to use for this device.
+
+    Reuses the client-provided token (from localStorage) or the cookie token when
+    it is still valid for this user — this keeps a single session row per device
+    across page refreshes/reconnects. Only creates a new token when none is valid.
+    """
+    import db
+    from flask import request as ws_request
+    client_token = data.get("token") or session.get("user_session_token")
+    if client_token and db.validate_user_session(client_token) == email:
+        return client_token
+    ua = ""
+    try:
+        ua = ws_request.headers.get("User-Agent", "")
+    except Exception:
+        pass
+    return db.create_user_session(email, ua)
+
+
 @socketio.on("login")
 def handle_login(data):
     email = data.get("email", "").strip().lower()
     password = data.get("password", "")
-    
     # 1. Check if blocked locally BEFORE hitting external API
     import db
     if db.is_user_blocked(email):
         emit("mqtt_status", {"connected": False, "message": "Account blocked: security strike policy. Contact admin."})
         return
 
+    # 1.5 Token-gated auto-login: if this is a SILENT auto-login (from saved
+    # credentials / reconnect) and this device holds a session token that has
+    # been revoked (e.g. "Log out this device" was used from elsewhere), refuse
+    # the re-login and force the user to sign in manually again. This makes
+    # per-device logout effective even for devices that were offline at the time.
+    # The device's token is provided by the client (localStorage) and/or the cookie.
+    client_token = data.get("token") or session.get("user_session_token")
+    if data.get("auto") and client_token:
+        try:
+            revoked = db.validate_user_session(client_token) != email
+        except Exception:
+            revoked = False  # fail open: never block a login on a DB hiccup
+        if revoked:
+            emit("force_logout", {
+                "email": email,
+                "message": "This device was logged out. Please sign in again."
+            })
+            return
+
     # 2. Fast path: if session already exists and is connected, just re-join the room
     existing_sess = session_mgr.get_session(email)
     if existing_sess and existing_sess.mqtt_connected and existing_sess.password == password:
+        # Reuse this device's existing valid token (avoids creating a duplicate
+        # session row on every refresh); create one only if none is valid yet.
+        tok = _resolve_session_token(email, data)
+        session["user_session_token"] = tok
         _user_sessions[request.sid] = email
+        _sid_token[request.sid] = tok
         session_mgr.register_socket(request.sid, email)
         join_room(existing_sess.room)
+        emit("session_token", {"token": tok})
         emit("mqtt_status", {"connected": True, "message": "Connected"})
         for topic, d in existing_sess.device_states.items():
             emit("device_update", {"topic": topic, **d})
@@ -883,12 +968,14 @@ def handle_login(data):
     db.save_user(email, password)
     db.unblock_user(email)
     
-    # 5. Create a database-backed session token for global invalidation
-    session_token = db.create_user_session(email, request.headers.get("User-Agent", ""))
+    # 5. Reuse this device's existing valid token or create a new one
+    session_token = _resolve_session_token(email, data)
     session["user_session_token"] = session_token
+    emit("session_token", {"token": session_token})
         
     # 6. Register socket and join user's private room
     _user_sessions[request.sid] = email
+    _sid_token[request.sid] = session_token
     sess = session_mgr.create_session(
         email, password,
         broker=MQTT_BROKER, port=MQTT_PORT, discovery_prefix=DISCOVERY_PREFIX
@@ -967,6 +1054,8 @@ def handle_logout():
     # Global session invalidation: delete ALL DB sessions for this user
     import db
     db.delete_all_user_sessions(user_email)
+    # Purge every device's push subscription so notifications stop everywhere
+    db.delete_all_push_subscriptions(user_email)
     session.pop("user_session_token", None)
     
     # Broadcast force_logout to ALL sockets of this user (other tabs/devices)
@@ -981,11 +1070,140 @@ def handle_logout():
     # Unregister ALL sockets for this user
     for s in sids:
         _user_sessions.pop(s, None)
+        _sid_token.pop(s, None)
     if user_session:
         session_mgr.unregister_socket(request.sid)
         leave_room(user_session.room)
         session_mgr.remove_session(user_email)
     
+    _emit_admin_stats()
+    emit("mqtt_status", {"connected": False, "message": "Not connected"})
+
+
+def _parse_user_agent(ua):
+    """Produce a short, human-friendly device/browser label from a User-Agent string."""
+    ua = ua or ""
+    ua_l = ua.lower()
+    # Operating system / device
+    if "android" in ua_l:
+        os_name = "Android"
+    elif "iphone" in ua_l or "ipad" in ua_l or "ipod" in ua_l:
+        os_name = "iOS"
+    elif "windows" in ua_l:
+        os_name = "Windows"
+    elif "mac os" in ua_l or "macintosh" in ua_l:
+        os_name = "macOS"
+    elif "linux" in ua_l:
+        os_name = "Linux"
+    else:
+        os_name = "Unknown OS"
+    # Browser
+    if "edg/" in ua_l or "edge" in ua_l:
+        browser = "Edge"
+    elif "chrome" in ua_l and "chromium" not in ua_l:
+        browser = "Chrome"
+    elif "firefox" in ua_l:
+        browser = "Firefox"
+    elif "safari" in ua_l:
+        browser = "Safari"
+    else:
+        browser = "Browser"
+    return f"{browser} on {os_name}"
+
+
+@socketio.on("list_user_sessions")
+def handle_list_user_sessions():
+    """Send the current user their active login sessions (devices)."""
+    email = _user_sessions.get(request.sid)
+    if not email:
+        emit("user_sessions", {"sessions": []})
+        return
+    import db
+    current_token = session.get("user_session_token")
+    online_tokens = set(t for t in _sid_token.values() if t)
+    rows = db.get_user_sessions(email)
+    out = []
+    for r in rows:
+        token = r.get("session_token", "")
+        out.append({
+            "id": token[:12],  # short, non-credential identifier used for revocation
+            "device": _parse_user_agent(r.get("user_agent")),
+            "user_agent": r.get("user_agent") or "",
+            "created_at": r.get("created_at") or "",
+            "expires_at": r.get("expires_at") or "",
+            "current": bool(current_token) and token == current_token,
+            "online": token in online_tokens,
+        })
+    emit("user_sessions", {"sessions": out})
+
+
+@socketio.on("logout_device")
+def handle_logout_device(data):
+    """Revoke a single login session (device) belonging to the current user."""
+    email = _user_sessions.get(request.sid)
+    if not email:
+        return
+    session_id = (data or {}).get("id", "")
+    if not session_id:
+        return
+    import db
+    # Resolve the short id back to the full token, scoped to this user only.
+    match = next((r["session_token"] for r in db.get_user_sessions(email)
+                  if r.get("session_token", "").startswith(session_id)), None)
+    if not match:
+        emit("user_sessions_error", {"message": "Session not found."})
+        return
+
+    # Delete the token from the DB (device is logged out on its next request).
+    db.delete_user_session(match)
+
+    # Immediately force-disconnect any live sockets bound to that token.
+    sids = [s for s, t in list(_sid_token.items()) if t == match]
+    for s in sids:
+        socketio.emit("force_logout", {
+            "email": email,
+            "message": "This device was logged out from another device."
+        }, room=s)
+        _sid_token.pop(s, None)
+        _user_sessions.pop(s, None)
+        try:
+            session_mgr.unregister_socket(s)
+        except Exception:
+            pass
+
+    # Refresh the requester's device list (unless they logged themselves out).
+    if match != session.get("user_session_token"):
+        handle_list_user_sessions()
+
+
+@socketio.on("logout_this_device")
+def handle_logout_this_device():
+    """Log out ONLY the current device. Other devices stay signed in and the
+    user's MQTT session / automations keep running."""
+    email = _user_sessions.get(request.sid)
+    token = session.get("user_session_token")
+
+    # Revoke just this device's session token (if it has one).
+    if token:
+        import db
+        db.delete_user_session(token)
+    session.pop("user_session_token", None)
+
+    # Unregister only this socket; leave the shared user session intact so
+    # other devices and running automations are unaffected.
+    _user_sessions.pop(request.sid, None)
+    _sid_token.pop(request.sid, None)
+    user_session = session_mgr.get_session(email) if email else None
+    if user_session:
+        try:
+            leave_room(user_session.room)
+        except Exception:
+            pass
+    try:
+        session_mgr.unregister_socket(request.sid)
+    except Exception:
+        pass
+
     _emit_admin_stats()
     emit("mqtt_status", {"connected": False, "message": "Not connected"})
 
@@ -1047,6 +1265,10 @@ def _send_web_push_async(owner_email, data):
     def run():
         try:
             import db
+            # Safety: never fan out to every user's subscriptions
+            if not owner_email:
+                logging.warning("[WebPush] Skipping push with no owner_email")
+                return
             # Get active subscriptions
             subscriptions = db.get_push_subscriptions(owner_email)
             if not subscriptions:
@@ -1115,9 +1337,9 @@ def send_sys_notification(owner_email, title, message, type="info"):
     }
     
     if not owner_email:
-        # Broadcast globally if no owner
-        socketio.emit("sys_notification", data)
-        _send_web_push_async(None, data)
+        # Never broadcast to everyone: without an owner we cannot scope the
+        # notification, so drop it rather than leaking it to all users.
+        logging.warning(f"[NOTIFY] Dropped notification with no owner_email: {title}")
         return
 
     room = f"user_{owner_email.replace('@', '_').replace('.', '_')}"
@@ -1365,6 +1587,43 @@ def _mqtt_set_switch(cmd_topic, state, auto=None):
         logging.info(f"[ENGINE] Published {payload} to {cmd_topic}")
 
 
+def _match_condition(cond, auto):
+    """Evaluate a single sensor condition against its live value.
+
+    Supports operators: ==, != (equality — numeric when both sides parse as numbers,
+    otherwise case-insensitive string compare) and >, >=, <, <= (numeric only).
+    Missing/legacy conditions (no "op") default to equality. Returns False when the
+    live value is unavailable or a numeric operator gets a non-numeric value."""
+    sensor_topic = cond.get("sensorStateTopic", "")
+    actual = _get_switch_state(sensor_topic, auto)
+    if actual is None:
+        return False
+
+    op = cond.get("op") or "=="
+    expected = cond.get("value", "")
+
+    if op in ("<", "<=", ">", ">="):
+        try:
+            a = float(actual)
+            b = float(expected)
+        except (ValueError, TypeError):
+            return False
+        if op == "<":
+            return a < b
+        if op == "<=":
+            return a <= b
+        if op == ">":
+            return a > b
+        return a >= b
+
+    # Equality / inequality: prefer numeric compare, fall back to string compare.
+    try:
+        eq = float(actual) == float(expected)
+    except (ValueError, TypeError):
+        eq = str(actual).strip().upper() == str(expected).strip().upper()
+    return (not eq) if op == "!=" else eq
+
+
 def evaluate_condition(auto):
     """Evaluate the condition expression using AND/OR logic.
     AND has higher precedence than OR (groups are formed by AND, then OR'd).
@@ -1376,10 +1635,7 @@ def evaluate_condition(auto):
     # Build results list with logic operators
     results = []
     for cond in conditions:
-        sensor_topic = cond.get("sensorStateTopic", "")
-        expected = str(cond.get("value", "")).upper()
-        actual = _get_switch_state(sensor_topic, auto)
-        matched = actual == expected if actual is not None else False
+        matched = _match_condition(cond, auto)
         results.append({"matched": matched, "logic": cond.get("logic")})
 
     # Evaluate: AND groups first, then OR between groups
@@ -1492,10 +1748,7 @@ def _evaluate_sched_conditions(conditions, auto):
 
     results = []
     for cond in conditions:
-        sensor_topic = cond.get("sensorStateTopic", "")
-        expected = str(cond.get("value", "")).upper()
-        actual = _get_switch_state(sensor_topic, auto)
-        matched = actual == expected if actual is not None else False
+        matched = _match_condition(cond, auto)
         results.append({"matched": matched, "logic": cond.get("logic")})
 
     # Evaluate: AND groups first, then OR between groups
@@ -1547,25 +1800,106 @@ def _emit_auto_update(auto):
         socketio.emit("automation_update", {"automation": safe, "logs": logs})
 
 
-def engine_tick(auto):
+def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
     """Execute one tick of the state machine for an automation."""
     rt = auto["runtime"]
     state = rt["state"]
     auto_id = auto["id"]
     now = time.time()
 
-    # Daily rollover: reset today's cycle counter as soon as a new day begins,
-    # so the displayed count returns to 0 at midnight (not only after the next cycle).
-    today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
-    if rt.get("cycles_today", 0) and rt.get("cycles_date") != today_str:
+    # Daily rollover: reset today's cycle counter shortly after midnight (at 00:01),
+    # so the displayed count returns to 0 at the start of a new day. The 1-minute guard
+    # avoids resetting exactly at 00:00 while a cycle may still be wrapping up.
+    now_local = _get_auto_now(auto)
+    today_str = now_local.strftime("%Y-%m-%d")
+    minute_of_day = now_local.hour * 60 + now_local.minute
+    if rt.get("cycles_today", 0) and rt.get("cycles_date") != today_str and minute_of_day >= 1:
         rt["cycles_date"] = today_str
         rt["cycles_today"] = 0
         rt.pop("_cycle_paused", None)
-        _auto_log(auto_id, "New day → daily cycle counter reset to 0")
+        _auto_log(auto_id, "New day (00:01) → daily cycle counter reset to 0")
         _emit_auto_update(auto)
 
-    # Priority 1: If status is OFF, go IDLE immediately
+    # Priority 1: If status is OFF
     if auto.get("status") != "ON":
+        deinits = auto.get("deinitialization", [])
+
+        # Deinitialization runs once when the automation is switched OFF: set each
+        # switch, verify it individually, then verify them all together (same
+        # set→verify→verify-all pattern as Initialization) before settling to IDLE.
+        if state == "DEINIT_SET":
+            idx = rt.get("currentDeinitIndex", 0)
+            if not deinits:
+                rt["verifyStart"] = now
+                rt["state"] = "DEINIT_VERIFY_ALL"
+                _emit_auto_update(auto)
+                return
+            if idx < len(deinits):
+                item = deinits[idx]
+                _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"), auto)
+                rt["verifyStart"] = now
+                rt["state"] = "DEINIT_VERIFY_INDIVIDUAL"
+                _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} sent → DEINIT_VERIFY_INDIVIDUAL")
+                _emit_auto_update(auto)
+            else:
+                rt["verifyStart"] = now
+                rt["state"] = "DEINIT_VERIFY_ALL"
+                _auto_log(auto_id, "All individual deinitialization commands sent. Final bulk check → DEINIT_VERIFY_ALL")
+                _emit_auto_update(auto)
+            return
+
+        if state == "DEINIT_VERIFY_INDIVIDUAL":
+            idx = rt.get("currentDeinitIndex", 0)
+            if idx < len(deinits):
+                item = deinits[idx]
+                if _verify_switches([item], auto):
+                    rt["currentDeinitIndex"] = idx + 1
+                    rt["state"] = "DEINIT_SET"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} verified")
+                    _emit_auto_update(auto)
+                elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                    rt["retryCount"] = rt.get("retryCount", 0) + 1
+                    if rt["retryCount"] >= MAX_RETRIES:
+                        # Status is already OFF; don't network-pause — just settle to IDLE.
+                        rt["state"] = "IDLE"
+                        rt["currentDeinitIndex"] = 0
+                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} not responding → IDLE", "warning")
+                        _emit_auto_update(auto)
+                    else:
+                        rt["state"] = "DEINIT_SET"
+                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} verify retry {rt['retryCount']}/{MAX_RETRIES}")
+                        _emit_auto_update(auto)
+            else:
+                rt["state"] = "DEINIT_SET"
+            return
+
+        if state == "DEINIT_VERIFY_ALL":
+            if not deinits or _verify_switches(deinits, auto):
+                rt["state"] = "IDLE"
+                rt["currentDeinitIndex"] = 0
+                rt["currentActionIndex"] = 0
+                rt["timerStart"] = None
+                rt["remainingTime"] = None
+                rt["retryCount"] = 0
+                rt["pauseReason"] = None
+                _auto_log(auto_id, "All deinitialization verified → IDLE")
+                _emit_auto_update(auto)
+            elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
+                rt["retryCount"] = rt.get("retryCount", 0) + 1
+                if rt["retryCount"] >= MAX_RETRIES:
+                    rt["state"] = "IDLE"
+                    rt["currentDeinitIndex"] = 0
+                    _auto_log(auto_id, "Bulk deinit not responding → IDLE", "warning")
+                    _emit_auto_update(auto)
+                else:
+                    rt["currentDeinitIndex"] = 0
+                    rt["state"] = "DEINIT_SET"
+                    _auto_log(auto_id, f"Bulk deinit verify failed, restarting sequence! Retry {rt['retryCount']}/{MAX_RETRIES}", "warning")
+                    _emit_auto_update(auto)
+            return
+
+        # No deinitialization in progress → settle to IDLE
         if state != "IDLE":
             rt["state"] = "IDLE"
             rt["currentActionIndex"] = 0
@@ -1575,6 +1909,25 @@ def engine_tick(auto):
             rt["pauseReason"] = None
             _auto_log(auto_id, "Status OFF → IDLE")
             _emit_auto_update(auto)
+        return
+
+    # Priority 1.05: Broker connectivity. Without a live MQTT link to the broker we
+    # can neither command nor verify switches, so a dropped connection must pause the
+    # sequence immediately — including mid-action (ACTION_RUN) — instead of only
+    # surfacing when the next command is sent and its verify times out.
+    owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
+    if owner_sess and not owner_sess.mqtt_connected:
+        if state not in ("IDLE", "PAUSED_NETWORK", "ERROR", "ERROR_SET", "ERROR_VERIFY"):
+            _enter_network_pause(auto, rt, now, state, reason="offline", retry=False)
+            if state == "ACTION_RUN":
+                # Re-confirm the switch state the moment the broker link returns.
+                rt["_recheckOnResume"] = True
+            _auto_log(auto_id, "Broker connection lost → NETWORK ERROR PAUSED", "error")
+            _emit_auto_update(auto)
+        elif state == "PAUSED_NETWORK":
+            # Stay paused until the broker link returns.
+            rt["errorReason"] = "offline"
+            rt["pauseUntil"] = None
         return
 
     # Priority 1.1: Device health (missing / offline / not-obeying)
@@ -1602,6 +1955,49 @@ def engine_tick(auto):
             _auto_log(auto_id, f"Device not found (removed/renamed): {names} → ERROR", "error")
             _emit_auto_update(auto)
             return
+
+        # An action paused by its own liveness check: retry on a ~1-minute cadence,
+        # but attempt EARLY the moment the device spontaneously reports back in (it
+        # auto-publishes its state/availability on reconnect, no request needed).
+        if rt.get("prePauseNetwork") == "ACTION_RUN" and rt.get("errorReason") == "offline":
+            paused_ts = rt.get("_offlinePausedTs", "")
+            reported_in = False
+            for t in rt.get("_offlineTopics", []):
+                d = owner_sess.device_states.get(t) if owner_sess else None
+                if d and d.get("ts", "") > paused_ts:
+                    reported_in = True
+                    break
+            due = now >= (rt.get("pauseUntil") or 0)
+            if not reported_in and not due:
+                return  # keep holding until the device reports in or the minute elapses
+            
+            if reported_in:
+                # Device spontaneously sent data! Actively verify it NOW.
+                _resume_network_pause(auto, rt, now)
+                actions = auto.get("actions", [])
+                idx = rt.get("currentActionIndex", 0)
+                if idx < len(actions):
+                    action = actions[idx]
+                    _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
+                    rt["driftRetryCount"] = 0
+                    rt["verifyStart"] = now
+                    rt["state"] = "ACTION_DRIFT_VERIFY"
+                    _auto_log(auto_id, "Device reported in early. Actively verifying state.", "info")
+                    _emit_auto_update(auto)
+                return
+
+            if offline_devices:
+                # Availability still reports offline → arm the next 1-minute retry.
+                rt["pauseUntil"] = now + 60
+                rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
+                return
+            # Reachable again → resume the action
+            _resume_network_pause(auto, rt, now)
+            rt["_recheckOnResume"] = True
+            _auto_log(auto_id, "Device reported back online → re-checking switch & resuming action", "info")
+            _emit_auto_update(auto)
+            return
+
         if offline_devices:
             # Still offline → keep waiting
             if rt.get("errorReason") != "offline":
@@ -1616,8 +2012,11 @@ def engine_tick(auto):
         _auto_log(auto_id, f"Device(s) reachable → resuming {rt['state']}", "info")
         _emit_auto_update(auto)
         return
-    elif offline_devices:
-        # Enter network pause due to an offline device (resume when it returns)
+    elif offline_devices and state != "ACTION_RUN":
+        # Enter network pause due to an offline device (resume when it returns).
+        # ACTION_RUN is intentionally excluded: it runs its own interval-based
+        # liveness check so it can roll the timer back to the exact check point
+        # instead of freezing at the current (later) tick.
         names = ", ".join(offline_devices)
         _enter_network_pause(auto, rt, now, state, reason="offline", retry=False)
         _auto_log(auto_id, f"Device offline: {names} → NETWORK ERROR PAUSED", "error")
@@ -1632,8 +2031,19 @@ def engine_tick(auto):
         
         enforce_list = sched_cfg.get("setIfTrue", []) if sched_is_true else sched_cfg.get("setIfFalse", [])
         
+        yielded_this_tick = []
         for item in enforce_list:
             topic = item.get("switchCmdTopic", "")
+            
+            # Global Priority Check:
+            # We ONLY yield if we are enforcing setIfFalse (inactive schedule).
+            # If we are enforcing setIfTrue, we never yield (it strictly overrides everything).
+            if not sched_is_true:
+                if (sequence_overrides and topic in sequence_overrides) or \
+                   (schedule_overrides and topic in schedule_overrides):
+                    yielded_this_tick.append(topic)
+                    continue
+                
             last_sent_key = f"_last_sent_{topic}"
             retry_key = f"_retry_{topic}"
 
@@ -1651,14 +2061,28 @@ def engine_tick(auto):
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[last_sent_key] = now
                     rt[retry_key] = retries + 1
-                    level = "info" if retries == 0 else "warning"
-                    _auto_log(auto_id, f"Scheduler background enforce: {item.get('switchName')} → {item.get('state')} (Attempt {retries + 1}/{MAX_RETRIES})", level)
+                    if retries == 0:
+                        _auto_log(auto_id, f"Scheduler drift detected on {item.get('switchName', topic)} — correcting to {item.get('state')}", "warning")
+                    else:
+                        _auto_log(auto_id, f"Scheduler drift correction retry {retries + 1}/{MAX_RETRIES} on {item.get('switchName', topic)} → {item.get('state')}", "warning")
                     _emit_auto_update(auto)
             else:
                 if retry_key in rt:
                     rt.pop(retry_key, None)
                 if last_sent_key in rt:
                     rt.pop(last_sent_key, None)
+                
+                # Active Ping / Reinforcement
+                # Every 60 seconds, re-send the enforced command to ensure the device hasn't
+                # silently dropped off or lost state without us noticing.
+                ping_key = f"_last_ping_{topic}"
+                if now - rt.get(ping_key, 0) >= 60:
+                    _mqtt_set_switch(topic, item.get("state", ""), auto)
+                    rt[ping_key] = now
+
+        if rt.get("yielded_switches", []) != yielded_this_tick:
+            rt["yielded_switches"] = yielded_this_tick
+            _emit_auto_update(auto)
 
     # Priority 1.5: Enforce Pause
     if bg_unverified:
@@ -1766,9 +2190,14 @@ def engine_tick(auto):
                         _auto_log(auto_id, f"Max cycles reached ({cycles_today}/{max_cycles}) — pausing until tomorrow")
                         _emit_auto_update(auto)
                     return
-            rt["state"] = "ACTION_SET"
-            rt["currentActionIndex"] = 0
-            _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
+            
+            if not auto.get("actions"):
+                rt["state"] = "SCHEDULER_RUN"
+                _auto_log(auto_id, "Condition satisfied + Schedule active → SCHEDULER_RUN (No actions mode)")
+            else:
+                rt["state"] = "ACTION_SET"
+                rt["currentActionIndex"] = 0
+                _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
             _emit_auto_update(auto)
         return
 
@@ -1951,13 +2380,13 @@ def engine_tick(auto):
                     rt["stopAfterRevert"] = False
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Init → Loop to Action 1")
+                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Loop to Action 1")
                 elif cycle_limit_reached:
                     rt["loopingToFirst"] = True
                     rt["stopAfterRevert"] = True
                     rt["state"] = "OVERLAP_NEXT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Max cycles ({max_cycles}/day) reached, init → revert → stop")
+                    _auto_log(auto_id, f"Cycle #{cycles_today_val} done → Max cycles ({max_cycles}/day) reached → revert → stop")
                 else:
                     rt["loopingToFirst"] = False
                     rt["state"] = "ACTION_REVERT"
@@ -1973,23 +2402,68 @@ def engine_tick(auto):
                 logging.error(f"[DB] Failed to persist cycle history: {e}")
             _emit_auto_update(auto)
             return
-        # State enforcement: ensure switch is still in expected state
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
         if idx < len(actions):
             action = actions[idx]
+            rt.pop("_recheckOnResume", None)
+
+            # 1. Instant Drift Check (Memory Payload)
             if not _verify_switches([action], auto):
-                # Freeze the action timer
                 elapsed_so_far = now - (rt.get("timerStart") or now)
                 rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_so_far)
                 rt["timerStart"] = None
-                # Send correction command and enter verify state
                 _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
                 rt["driftRetryCount"] = 0
                 rt["verifyStart"] = now
                 rt["state"] = "ACTION_DRIFT_VERIFY"
                 _auto_log(auto_id, f"Switch drift detected on Action {idx+1} — correcting", "warning")
                 _emit_auto_update(auto)
+                return
+
+            # 2. Interval Network Liveness Check
+            duration = action.get("duration", 0)
+            if duration > 600:
+                verify_interval = 60
+            elif duration >= 60:
+                verify_interval = 30
+            else:
+                verify_interval = 5
+
+            anchor = rt.get("timerStart")
+            if rt.get("_verifyAnchor") != anchor:
+                rt["_verifyAnchor"] = anchor
+                rt["nextVerifyAt"] = (anchor or now) + verify_interval
+
+            next_at = rt.get("nextVerifyAt") or (now + verify_interval)
+            
+            if now >= next_at:
+                owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
+                ctrl = action.get("switchStateTopic") or action.get("switchCmdTopic")
+                online = _topic_is_available(owner_sess, ctrl) if owner_sess else True
+
+                if online:
+                    # Verified good — schedule the next check; timer untouched.
+                    rt["nextVerifyAt"] = next_at + verify_interval
+                else:
+                    # Device offline (LWT). Roll timer back exactly to interval boundary.
+                    elapsed_trig = next_at - (anchor or now)
+                    rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_trig)
+                    rt["timerStart"] = None
+                    rt.pop("nextVerifyAt", None)
+                    rt.pop("_verifyAnchor", None)
+                    
+                    avail_topics = list(owner_sess.avail_map.get(ctrl, [])) if owner_sess else []
+                    rt["prePauseNetwork"] = "ACTION_RUN"
+                    rt["errorReason"] = "offline"
+                    rt["retryCount"] = 0
+                    rt["pauseUntil"] = now + 60
+                    rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
+                    rt["_offlineTopics"] = [t for t in (action.get("switchStateTopic"), action.get("switchCmdTopic"), *avail_topics) if t]
+                    rt["_recheckOnResume"] = True
+                    rt["state"] = "PAUSED_NETWORK"
+                    _auto_log(auto_id, f"Action {idx+1} check: device offline → NETWORK ERROR PAUSED", "error")
+                    _emit_auto_update(auto)
         return
 
     if state == "ACTION_DRIFT_VERIFY":
@@ -2022,11 +2496,13 @@ def engine_tick(auto):
         idx = rt.get("currentActionIndex", 0)
         next_idx = (idx + 1) % len(actions)
         
-        if next_idx == 0 and rt.get("loopingToFirst"):
-            rt["currentInitIndex"] = 0
-            rt["state"] = "INIT_SET"
+        if next_idx == 0 and rt.get("stopAfterRevert"):
+            # Max cycles reached. Do not overlap with the next cycle.
+            # Skip straight to the buffer before reverting the last action and stopping.
+            rt["bufferStart"] = now
+            rt["state"] = "BUFFER"
             rt["retryCount"] = 0
-            _auto_log(auto_id, "Looping: Starting sequential initialization")
+            _auto_log(auto_id, "Max cycles reached → Skipping overlap → BUFFER")
             _emit_auto_update(auto)
             return
         else:
@@ -2151,10 +2627,15 @@ def engine_tick(auto):
                     rt["state"] = "COMPLETED"
                     _auto_log(auto_id, f"Max cycles done → COMPLETED (stopping)")
                 else:
-                    # Loop back for another cycle
-                    rt["currentActionIndex"] = 0
-                    rt["state"] = "ACTION_SET"
-                    _auto_log(auto_id, "Init + Revert complete → Starting next cycle (Action 1)")
+                    # Loop back for another cycle (Make-Before-Break overlap finished). Advance to Action 1 RUN.
+                    next_idx = 0
+                    rt["currentActionIndex"] = next_idx
+                    duration = actions[next_idx].get("duration", 0)
+                    rt["timerStart"] = now
+                    rt["remainingTime"] = duration
+                    rt["state"] = "ACTION_RUN"
+                    rt["retryCount"] = 0
+                    _auto_log(auto_id, f"Revert complete → Advanced to next cycle Action 1 → ACTION_RUN ({duration}s)")
             elif idx + 1 < len(actions):
                 # Make-Before-Break finished. Advance to next action and start its timer.
                 next_idx = idx + 1
@@ -2202,6 +2683,16 @@ def engine_tick(auto):
             _emit_auto_update(auto)
         return
 
+    if state == "SCHEDULER_RUN":
+        cond = evaluate_condition(auto)
+        sched = check_schedule(auto)
+        if not cond or not sched:
+            # Scheduler time ended, just return to wait condition without counting cycles
+            rt["state"] = "WAIT_CONDITION"
+            _auto_log(auto_id, "Scheduler block ended (condition/schedule false) → WAIT_CONDITION")
+            _emit_auto_update(auto)
+        return
+
     if state == "COMPLETED":
         rt["currentActionIndex"] = 0
         rt["timerStart"] = None
@@ -2241,10 +2732,37 @@ def _engine_loop():
     logging.info("[ENGINE] Automation engine started")
     _last_db_save = time.time()
     while _engine_running:
+        # Build global active overrides per session
+        sequence_overrides = collections.defaultdict(set)
+        schedule_overrides = collections.defaultdict(set)
+        try:
+            for session, auto_id, auto in session_mgr.get_all_automations():
+                state = auto.get("runtime", {}).get("state", "IDLE")
+                # 1. Any currently executing automation claims ALL its switches (actions, init, deinit)
+                if state not in ("IDLE", "ERROR", "ERROR_SET", "ERROR_VERIFY", "PAUSED_NETWORK"):
+                    for item in auto.get("actions", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: sequence_overrides[session.email].add(ctrl)
+                    for item in auto.get("initialization", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: sequence_overrides[session.email].add(ctrl)
+                    for item in auto.get("deinitialization", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: sequence_overrides[session.email].add(ctrl)
+                
+                
+                # 2. Any active schedule's setIfTrue claims the switch as a schedule override
+                if check_schedule(auto):
+                    for item in auto.get("schedule", {}).get("setIfTrue", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: schedule_overrides[session.email].add(ctrl)
+        except Exception as e:
+            logging.error(f"[ENGINE] Error building active overrides: {e}")
+
         # Tick all session-based automations (multi-tenant)
         for session, auto_id, auto in session_mgr.get_all_automations():
             try:
-                engine_tick(auto)
+                engine_tick(auto, sequence_overrides.get(session.email, set()), schedule_overrides.get(session.email, set()))
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
         # Periodic DB save every 60 seconds
@@ -2361,6 +2879,46 @@ def _ai_scheduler_loop():
         time.sleep(60)  # check every minute
 
 
+def _schedules_overlap(a, b):
+    """Check if two automations overlap in time ranges AND share at least one switch."""
+    def get_switches(auto):
+        switches = set()
+        for x in auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("actions", []):
+            if "switchCmdTopic" in x: switches.add(x["switchCmdTopic"])
+        return switches
+
+    if not get_switches(a).intersection(get_switches(b)):
+        return False
+        
+    sched_a = a.get("schedule", {})
+    sched_b = b.get("schedule", {})
+    
+    if sched_a.get("is24hr") or sched_b.get("is24hr"):
+        return True
+        
+    def parse_time(t_str):
+        if not t_str: return 0
+        try:
+            h, m = t_str.split(":")
+            return int(h) * 60 + int(m)
+        except:
+            return 0
+            
+    ra = sched_a.get("timeRanges", [])
+    rb = sched_b.get("timeRanges", [])
+    if not ra or not rb:
+        return False
+        
+    for rangeA in ra:
+        for rangeB in rb:
+            sA = parse_time(rangeA.get("start", "00:00"))
+            eA = parse_time(rangeA.get("end", "23:59"))
+            sB = parse_time(rangeB.get("start", "00:00"))
+            eB = parse_time(rangeB.get("end", "23:59"))
+            if sA <= eB and sB <= eA:
+                return True
+    return False
+
 def _run_ai_for_automation(auto_id):
     """Helper to run the AI engine for a single automation."""
     global _ai_running_set
@@ -2430,7 +2988,16 @@ def _run_ai_for_automation(auto_id):
             _emit_auto_update(auto)
             return
 
-        ctx = build_automation_context(auto_id, auto)
+        occupied_days = set()
+        all_autos = list(session_mgr.get_all_automations())
+        for other_sess, other_id, other_auto in all_autos:
+            if other_id == auto_id: continue
+            if other_auto.get("status") != "ON": continue
+            if _schedules_overlap(auto, other_auto):
+                days = other_auto.get("schedule", {}).get("days", [])
+                occupied_days.update(days)
+
+        ctx = build_automation_context(auto_id, auto, list(occupied_days))
         decision = get_ai_schedule_decision(weather_data, ctx)
         if not decision:
             _auto_log(auto_id, "AI failed: model returned no decision", level="error")
@@ -2523,8 +3090,12 @@ def _run_ai_for_automation(auto_id):
 
 
 def _run_ai_for_all_automations():
-    """Run the AI agent for every automation that has ai_enabled=True."""
-    for session, auto_id, auto in session_mgr.get_all_automations():
+    """Run the AI agent for every automation that has ai_enabled=True, ordered by ai_priority."""
+    all_autos = list(session_mgr.get_all_automations())
+    # Sort by ai_priority (default 99999), lower number = higher priority (executes first)
+    all_autos.sort(key=lambda x: x[2].get("ai_priority", 99999))
+    
+    for session, auto_id, auto in all_autos:
         _run_ai_for_automation(auto_id)
 
 
@@ -2623,6 +3194,23 @@ def handle_update_api_settings(data):
     
     emit("log_message", {"entity": "System", "state": "API Settings Updated"})
 
+@socketio.on("update_ai_priority")
+def handle_update_ai_priority(data):
+    import db
+    user_email = _get_user_email()
+    id_priority_map = data.get("priorities", {})
+    if id_priority_map:
+        db.update_automation_priorities(user_email, id_priority_map)
+        
+        # Also update in-memory session
+        sess = session_mgr.get_session_by_sid(request.sid)
+        if sess:
+            for auto_id, prio in id_priority_map.items():
+                if auto_id in sess.automations:
+                    sess.automations[auto_id]["ai_priority"] = prio
+        
+        emit("log_message", {"entity": "System", "state": "AI Priorities Updated"})
+
 
 @socketio.on("create_automation")
 def handle_create_automation(data):
@@ -2640,6 +3228,7 @@ def handle_create_automation(data):
         "schedule": data.get("schedule", {"days": [], "startTime": "", "endTime": ""}),
         "condition": data.get("condition", []),
         "initialization": data.get("initialization", []),
+        "deinitialization": data.get("deinitialization", []),
         "actions": data.get("actions", []),
         "errorState": data.get("errorState", []),
         "bufferTime": data.get("bufferTime", BUFFER_SECONDS),
@@ -2675,7 +3264,7 @@ def handle_update_automation(data):
     old_actions = auto.get("actions", [])
     
     for key in ("name", "description", "schedule", "condition",
-                "initialization", "actions", "errorState", "bufferTime", "maxCyclesPerDay"):
+                "initialization", "deinitialization", "actions", "errorState", "bufferTime", "maxCyclesPerDay"):
         if key in data:
             auto[key] = data[key]
 
@@ -2716,6 +3305,12 @@ def handle_update_automation(data):
             # Index was already out of bounds for some reason
             rt["state"] = "IDLE"
             rt["currentActionIndex"] = 0
+            
+    elif rt.get("state") == "SCHEDULER_RUN" and actions_changed and auto.get("actions"):
+        # User added actions to a running scheduler-only automation
+        _auto_log(auto_id, "Actions added to running scheduler! Transitioning to action sequence.")
+        rt["state"] = "ACTION_SET"
+        rt["currentActionIndex"] = 0
 
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")
     _emit_auto_update(auto)
@@ -2766,8 +3361,18 @@ def handle_toggle_automation(data):
         if sched.get("ai_enabled"):
             socketio.start_background_task(_run_ai_for_automation, auto_id)
     else:
-        auto["runtime"] = _new_runtime(auto.get("runtime", {}))
-        _auto_log(auto_id, "Turned OFF → IDLE")
+        deinits = auto.get("deinitialization", [])
+        new_rt = _new_runtime(auto.get("runtime", {}))
+        if deinits:
+            # Run the deinitialization set→verify sequence before settling to IDLE.
+            new_rt["state"] = "DEINIT_SET"
+            new_rt["currentDeinitIndex"] = 0
+            new_rt["retryCount"] = 0
+            auto["runtime"] = new_rt
+            _auto_log(auto_id, "Turned OFF → DEINIT_SET (deinitialization)")
+        else:
+            auto["runtime"] = new_rt
+            _auto_log(auto_id, "Turned OFF → IDLE")
     _emit_auto_update(auto)
     start_engine()
     # Persist to DB
@@ -2999,4 +3604,4 @@ if __name__ == "__main__":
     start_engine()
     # Start Admin Telemetry
     socketio.start_background_task(_admin_telemetry_loop)
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False, allow_unsafe_werkzeug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=False)

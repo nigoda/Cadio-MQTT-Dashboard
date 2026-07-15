@@ -47,9 +47,13 @@ def _get_conn():
     """Get or create a thread-local SQLite connection."""
     global _conn
     if _conn is None:
-        _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        # timeout + busy_timeout make writers wait for a lock (up to 5s) instead
+        # of failing/hanging immediately — important under threading async mode
+        # where the telemetry loop and login handlers share this connection.
+        _conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=5.0)
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA journal_mode=WAL")  # better concurrent read/write
+        _conn.execute("PRAGMA busy_timeout=5000")  # wait up to 5s for locks
         _conn.execute("PRAGMA foreign_keys=ON")
     return _conn
 
@@ -156,6 +160,8 @@ def _migrate_columns(conn):
         ("users", "blocked_at", "TEXT"),
         # Legacy columns we need for migration
         ("users", "api_key_b64", "TEXT DEFAULT ''"),
+        # Automations AI priority
+        ("automations", "ai_priority", "INTEGER DEFAULT 99999"),
     ]
     for table, column, col_type in migrations:
         try:
@@ -502,7 +508,7 @@ def _auto_to_row(user_email, auto):
     runtime = auto.get("runtime", {})
     config = {}
     for k, v in auto.items():
-        if k not in ("id", "name", "description", "status", "runtime", "logs"):
+        if k not in ("id", "name", "description", "status", "runtime", "logs", "ai_priority"):
             config[k] = v
     return (
         auto["id"],
@@ -512,6 +518,7 @@ def _auto_to_row(user_email, auto):
         auto.get("status", "OFF"),
         json.dumps(config, default=str),
         json.dumps(runtime, default=str),
+        auto.get("ai_priority", 99999),
         datetime.utcnow().isoformat(),
     )
 
@@ -523,6 +530,7 @@ def _row_to_auto(row):
         "name": row["name"],
         "description": row["description"],
         "status": row["status"],
+        "ai_priority": row["ai_priority"] if "ai_priority" in row.keys() else 99999,
     }
     config = json.loads(row["config_json"] or "{}")
     auto.update(config)
@@ -536,14 +544,15 @@ def save_automation(user_email, auto):
     conn = _get_conn()
     vals = _auto_to_row(user_email, auto)
     conn.execute(
-        """INSERT INTO automations (id, user_email, name, description, status, config_json, runtime_json, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO automations (id, user_email, name, description, status, config_json, runtime_json, ai_priority, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
                name = excluded.name,
                description = excluded.description,
                status = excluded.status,
                config_json = excluded.config_json,
                runtime_json = excluded.runtime_json,
+               ai_priority = excluded.ai_priority,
                updated_at = excluded.updated_at""",
         vals
     )
@@ -577,6 +586,20 @@ def delete_automation(auto_id):
     conn = _get_conn()
     conn.execute("DELETE FROM automation_logs WHERE automation_id = ?", (auto_id,))
     conn.execute("DELETE FROM automations WHERE id = ?", (auto_id,))
+    conn.commit()
+
+
+def update_automation_priorities(user_email, id_priority_map):
+    """Bulk update ai_priority for multiple automations."""
+    user_email = user_email.lower()
+    conn = _get_conn()
+    now = datetime.utcnow().isoformat()
+    # Using executemany for bulk update
+    data = [(priority, now, auto_id, user_email) for auto_id, priority in id_priority_map.items()]
+    conn.executemany(
+        "UPDATE automations SET ai_priority = ?, updated_at = ? WHERE id = ? AND user_email = ?",
+        data
+    )
     conn.commit()
 
 
@@ -654,25 +677,27 @@ def get_users_with_active_automations():
 # ---------------------------------------------------------------------------
 
 def create_user_session(user_email, user_agent=None):
-    """Create a new database-backed session token for a user."""
+    """Create a new database-backed session token for a user.
+    Sessions never expire (expires_at = NULL); they remain valid until an explicit
+    logout revokes them."""
     conn = _get_conn()
     token = secrets.token_hex(32)
-    expires_at = (datetime.utcnow() + timedelta(days=30)).isoformat()
     conn.execute(
         "INSERT INTO sessions (session_token, user_email, user_agent, expires_at) VALUES (?, ?, ?, ?)",
-        (token, user_email.lower(), user_agent, expires_at)
+        (token, user_email.lower(), user_agent, None)
     )
     conn.commit()
     return token
 
 
 def validate_user_session(session_token):
-    """Validate a session token. Returns user email if valid, None if expired/invalid."""
+    """Validate a session token. Returns user email if valid, None if revoked/invalid.
+    A NULL expires_at means the session never expires."""
     if not session_token:
         return None
     conn = _get_conn()
     row = conn.execute(
-        "SELECT user_email FROM sessions WHERE session_token = ? AND expires_at > ?",
+        "SELECT user_email FROM sessions WHERE session_token = ? AND (expires_at IS NULL OR expires_at > ?)",
         (session_token, datetime.utcnow().isoformat())
     ).fetchone()
     return row["user_email"] if row else None
@@ -692,6 +717,20 @@ def delete_all_user_sessions(user_email):
     conn = _get_conn()
     conn.execute("DELETE FROM sessions WHERE user_email = ?", (user_email.lower(),))
     conn.commit()
+
+
+def get_user_sessions(user_email):
+    """Return all active (non-expired) login sessions for a user, newest first.
+    Each item: {session_token, created_at, expires_at, user_agent}."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT session_token, created_at, expires_at, user_agent
+           FROM sessions
+           WHERE user_email = ? AND (expires_at IS NULL OR expires_at > ?)
+           ORDER BY created_at DESC""",
+        (user_email.lower(), datetime.utcnow().isoformat())
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def create_admin_session(admin_email, user_agent=None):
@@ -768,4 +807,14 @@ def delete_push_subscription(endpoint):
     """Remove a bad/expired Web Push subscription."""
     conn = _get_conn()
     conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+    conn.commit()
+
+
+def delete_all_push_subscriptions(user_email):
+    """Remove ALL Web Push subscriptions for a user (e.g. on global logout)."""
+    if not user_email:
+        return
+    user_email = user_email.lower()
+    conn = _get_conn()
+    conn.execute("DELETE FROM push_subscriptions WHERE user_email = ?", (user_email,))
     conn.commit()

@@ -243,8 +243,27 @@ body {
 }
 .ha-status-dot.connected { background: var(--ha-green); }
 .ha-device-badge {
-    font-size: 11px;
-    color: var(--ha-text-disabled);
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+}
+.ha-user-email-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0 4px;
+}
+.ha-user-email-icon {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    flex-shrink: 0;
+}
+.ha-user-email-text {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
 }
 .ha-logout-btn {
     display: flex; align-items: center; gap: 8px;
@@ -581,6 +600,33 @@ body {
 }
 .ha-log-table td:nth-child(2) { color: var(--ha-primary); }
 .ha-log-table td:nth-child(3) { font-family: 'Roboto Mono', monospace; }
+
+/* Logged-in Devices (user sessions) */
+.ha-sessions-card { margin-bottom: 16px; }
+.ha-sessions-list { display: flex; flex-direction: column; }
+.ha-session-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.ha-session-row:last-child { border-bottom: none; }
+.ha-session-info { min-width: 0; flex: 1; }
+.ha-session-device {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 14px; font-weight: 500; color: var(--ha-text);
+}
+.ha-session-device .material-symbols-outlined { font-size: 20px; color: var(--ha-text-secondary); }
+.ha-session-meta { font-size: 12px; color: var(--ha-text-secondary); margin-top: 4px; }
+.ha-session-badge {
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
+    padding: 2px 8px; border-radius: 10px;
+}
+.ha-session-badge.current { background: rgba(3,169,244,.15); color: var(--ha-primary); }
+.ha-session-badge.online { background: rgba(76,175,80,.15); color: #4caf50; }
+.ha-session-badge.offline { background: rgba(255,255,255,.06); color: var(--ha-text-secondary); }
+.ha-session-logout { flex-shrink: 0; }
+.ha-session-logout.danger { color: var(--ha-red); }
+.ha-session-logout.danger:hover { background: rgba(244,67,54,.1); }
 
 /* Inputs */
 .ha-input-sm {
@@ -1131,6 +1177,181 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     overflow: hidden;
     box-shadow: var(--ha-shadow);
 }
+.irr-auto-search {
+    position: relative;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+}
+.irr-auto-search-box {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+.irr-auto-search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    pointer-events: none;
+}
+.irr-auto-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px 8px 34px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+}
+.irr-auto-search-input:focus {
+    border-color: var(--ha-primary);
+    outline: none;
+}
+.irr-auto-filter-select {
+    flex-shrink: 0;
+    padding: 8px 8px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    max-width: 110px;
+}
+.irr-auto-filter-select:focus {
+    border-color: var(--ha-primary);
+    outline: none;
+}
+.irr-auto-filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+}
+.irr-filter-chip {
+    padding: 4px 10px;
+    background: var(--ha-surface);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: 14px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background var(--ha-transition), color var(--ha-transition), border-color var(--ha-transition);
+}
+.irr-filter-chip:hover {
+    color: var(--ha-text);
+    border-color: var(--ha-text-secondary);
+}
+.irr-filter-chip.active {
+    background: var(--ha-primary);
+    color: #fff;
+    border-color: var(--ha-primary);
+}
+/* Automations filter dropdown (multi-select) + clear button */
+.irr-auto-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+}
+.irr-filter-dd { position: relative; flex: 1; }
+.irr-filter-dd-trigger {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 12px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color var(--ha-transition);
+}
+.irr-filter-dd-trigger:hover { border-color: var(--ha-text-secondary); }
+.irr-filter-dd-ic { font-size: 18px; color: var(--ha-text-secondary); }
+.irr-filter-dd-caret {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    margin-left: auto;
+    transition: transform var(--ha-transition);
+}
+.irr-filter-dd-trigger[aria-expanded="true"] .irr-filter-dd-caret { transform: rotate(180deg); }
+.irr-filter-dd-menu {
+    position: fixed;      /* fixed + JS-positioned so it escapes the list panel's overflow:hidden */
+    z-index: 3000;
+    min-width: 170px;
+    background: var(--ha-surface);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    padding: 4px;
+}
+.irr-filter-dd-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--ha-text);
+    cursor: pointer;
+}
+.irr-filter-dd-opt:hover { background: rgba(255,255,255,0.06); }
+.irr-filter-dd-cb { accent-color: var(--ha-primary); cursor: pointer; width: 15px; height: 15px; margin: 0; }
+.irr-filter-clear-btn {
+    flex-shrink: 0;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 18px;
+    background: var(--ha-surface);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: color var(--ha-transition), border-color var(--ha-transition);
+}
+.irr-filter-clear-btn:hover { color: var(--ha-text); border-color: var(--ha-text-secondary); }
+.irr-auto-clear-btn {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px;
+    background: var(--ha-surface);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    cursor: pointer;
+    transition: color var(--ha-transition), border-color var(--ha-transition);
+}
+.irr-auto-clear-btn:hover {
+    color: var(--ha-red);
+    border-color: var(--ha-red);
+}
+.irr-auto-clear-btn .material-symbols-outlined {
+    font-size: 18px;
+}
+.irr-auto-clear-btn.hidden {
+    display: none;
+}
 .irr-auto-list {
     flex: 1; overflow-y: auto;
     padding: 8px;
@@ -1200,12 +1421,19 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 }
 .irr-detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--ha-text-disabled); }
 .irr-header { display: flex; flex-wrap: wrap; padding: 20px 20px 12px; border-bottom: 1px solid var(--ha-divider); gap: 12px; }
-.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; }
-.irr-header-left { width: 100%; }
-.irr-desc { font-size: 13px; color: var(--ha-text-secondary); }
+.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.irr-header-left { width: 100%; min-width: 0; }
+.irr-desc { font-size: 13px; color: var(--ha-text-secondary); display: block; max-width: 100%; }
+.irr-desc.collapsed { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.irr-desc.expanded { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.irr-desc-toggle { background: none; border: none; color: var(--ha-primary); cursor: pointer; font-size: 12px; font-weight: 600; padding: 2px 0 0; }
+.irr-desc-toggle:hover { text-decoration: underline; }
 .irr-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; padding-top: 10px; border-top: 1px solid var(--ha-divider); }
 .irr-header-right .irr-status-badge { margin-right: auto; }
-.irr-status-badge { padding: 4px 12px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; }
+/* Fixed-width badge: its text swings from "Off" to "Pausing for Schedule" as the
+   automation runs; a constant footprint keeps the Reset/Insights/Edit buttons from
+   shifting when the live state updates. Long labels wrap inside the fixed box. */
+.irr-status-badge { min-width: 128px; width: auto; box-sizing: border-box; flex-shrink: 0; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; text-align: center; display: inline-flex; align-items: center; justify-content: center; min-height: 26px; line-height: 1.2; word-break: break-word; overflow-wrap: break-word; }
 .irr-status-badge.running { background: rgba(76,175,80,.2); color: #4caf50; }
 .irr-status-badge.paused { background: rgba(255,152,0,.2); color: #ff9800; }
 .irr-status-badge.error { background: rgba(244,67,54,.2); color: #f44336; }
@@ -1217,9 +1445,9 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 
 /* State summary bar */
 .irr-state-bar { display: grid; grid-template-columns: repeat(4,1fr); gap: 1px; background: var(--ha-divider); border-bottom: 1px solid var(--ha-divider); }
-.irr-state-cell { background: var(--ha-card); padding: 16px 20px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; position: relative; }
+.irr-state-cell { background: var(--ha-card); padding: 16px 20px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; position: relative; gap: 10px; min-height: 92px; box-sizing: border-box; }
 .irr-state-cell.flex-col { flex-direction: column; align-items: flex-start; justify-content: center; }
-.irr-cell-content { display: flex; flex-direction: column; gap: 4px; }
+.irr-cell-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; }
 .irr-label { font-size: 12px; color: var(--ha-text-primary); font-weight: 500; }
 #irr-sched-body .irr-label {
   display: inline-block;
@@ -1232,8 +1460,16 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
   padding: 3px 10px;
   border-radius: 20px;
 }
-.irr-state-value { font-size: 15px; font-weight: 600; color: var(--ha-text-primary); }
-.irr-cell-sub { font-size: 12px; color: var(--ha-text-secondary); }
+.irr-state-value { font-size: 15px; font-weight: 600; color: var(--ha-text-primary); overflow-wrap: anywhere; line-height: 1.25; }
+.irr-cell-sub { font-size: 12px; color: var(--ha-text-secondary); overflow-wrap: anywhere; line-height: 1.25; }
+/* Keep the Current State / Next Step blocks at a constant height so the label, value
+   and icon never shift up/down as the text changes (reserve 2 lines for the value and
+   1 line for the sub; values are vertically centered within their reserved space). */
+.irr-cell-content { justify-content: center; }
+/* Reserve a constant 2 lines for the value and 1 for the sub, clamping longer text
+   so the cell height never changes as the live state updates. */
+.irr-cell-content .irr-state-value { height: 2.5em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.irr-cell-content .irr-cell-sub { height: 1.25em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .irr-cell-icon { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .irr-cell-icon span { font-size: 28px; }
 .irr-cell-icon.blue-bg { background: rgba(3,169,244,.1); color: #03a9f4; }
@@ -1242,6 +1478,15 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-progress-bar { height: 100%; background: #03a9f4; border-radius: 3px; transition: width .5s ease; width: 0%; }
 .irr-progress-pct { font-size: 16px; font-weight: 700; color: var(--ha-text-primary); }
 .irr-state-cell:nth-child(2) { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; }
+
+/* Status cell: keep the toggle + description compact so it doesn't grow tall.
+   The "Automation Enabled/Disabled" description never wraps, and is hidden once the
+   state bar collapses to 2 columns (narrow) so the cell stays short. */
+.irr-status-cell { flex-direction: column; text-align: center; gap: 2px; }
+.irr-status-desc { white-space: nowrap; }
+@media (max-width: 1024px) {
+    .irr-status-desc { display: none; }
+}
 
 /* Custom toggle */
 .irr-custom-toggle { width: 60px !important; height: 28px !important; display: inline-block; vertical-align: middle; }
@@ -1296,9 +1541,12 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-next-activation { font-size: 12px; color: var(--ha-text-secondary); display: flex; align-items: center; gap: 4px; }
 
 /* Live switches */
-.irr-live-grid { display: flex; gap: 12px; flex-wrap: wrap; }
-.irr-live-sw { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; background: var(--ha-card); border-radius: var(--ha-radius-sm); min-width: 70px; border: 1px solid var(--ha-divider); }
-.irr-live-sw-name { font-size: 11px; color: var(--ha-text-secondary); text-align: center; }
+/* Uniform, equal-size cards: a grid of identical cells (same in the switch and
+   sensor sections) on desktop and mobile. Long names clamp to 2 lines + ellipsis
+   with word-break so the card never grows to fit the text. */
+.irr-live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 10px; }
+.irr-live-sw { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 10px 8px; min-height: 92px; background: var(--ha-card); border-radius: var(--ha-radius-sm); min-width: 0; border: 1px solid var(--ha-divider); overflow: hidden; }
+.irr-live-sw-name { font-size: 11px; color: var(--ha-text-secondary); text-align: center; width: 100%; line-height: 1.2; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .irr-live-sw-icon { font-size: 28px; color: var(--ha-text-disabled); }
 .irr-live-sw-icon.on { color: #4caf50; }
 .irr-live-sw-state { font-size: 11px; font-weight: 700; }
@@ -1318,6 +1566,57 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-modal-header h2 { font-size: 18px; font-weight: 500; }
 .irr-modal-body { flex: 1; overflow-y: auto; padding: 20px; }
 .irr-modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--ha-divider); }
+/* Inline validation banner shown just above the Save button when a switch is
+   already used by another automation during an overlapping time window. */
+.irr-modal-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px;
+  padding: 10px 12px;
+  background: rgba(244, 67, 54, 0.12);
+  border: 1px solid var(--ha-red);
+  border-radius: var(--ha-radius-sm, 8px);
+  color: var(--ha-red);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.irr-modal-warning.hidden { display: none; }
+.irr-modal-warning .material-symbols-outlined { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+/* Red outline on a switch <select> that conflicts with another automation. */
+.irr-form-row select.f-switch.conflict {
+  border-color: var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+}
+/* Orange outline for edit-time warnings */
+.irr-form-row select.f-switch.warning-conflict {
+  border-color: var(--ha-warning, #ff9800);
+  box-shadow: 0 0 0 1px var(--ha-warning, #ff9800);
+}
+.irr-modal-warning.warning {
+  background: rgba(255, 152, 0, 0.1);
+  color: var(--ha-warning, #ff9800);
+  border: 1px solid rgba(255, 152, 0, 0.2);
+}
+.irr-run-error-banner {
+  background: rgba(244, 67, 54, 0.1);
+  color: var(--ha-red);
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  border: 1px solid rgba(244, 67, 54, 0.2);
+}
+.irr-run-error-banner .material-symbols-outlined { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+.irr-sw-row.conflict {
+  border: 1px solid var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+  border-radius: 4px;
+}
 /* Modal Card Layout */
 .irr-modal-card {
   background: var(--ha-surface, #1c2333);
@@ -1353,12 +1652,68 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
   margin: 16px 0;
 }
 .irr-form-heading { font-size: 13px; font-weight: 600; color: var(--ha-primary); margin: 20px 0 10px; text-transform: uppercase; letter-spacing: .5px; }
-.irr-form-list { display: flex; flex-direction: column; gap: 8px; }
-.irr-form-row { display: flex; align-items: center; gap: 8px; }
-.irr-form-row select { padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; flex: 1; }
+.irr-form-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Builder rows wrap within the card in EVERY viewport so no control (especially the
+   × remove button or the h/m/s timer) ever spills outside the card frame. */
+.irr-form-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+/* Base styling for every select/number input inside a row (incl. nested operator/state). */
+.irr-form-row select,
+.irr-form-row .f-cond-value-cell select { padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; box-sizing: border-box; }
 .irr-form-row select:focus { border-color: var(--ha-primary); outline: none; }
-.irr-form-row input[type="number"] { width: 80px; padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; }
-.irr-form-row .irr-remove-btn { background: none; border: none; color: var(--ha-red); cursor: pointer; padding: 4px; font-size: 18px; }
+.irr-form-row input[type="number"] { width: 80px; padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; box-sizing: border-box; }
+.irr-form-row .irr-remove-btn { background: none; border: none; color: var(--ha-red); cursor: pointer; padding: 4px; font-size: 18px; flex: 0 0 auto; margin-left: auto; }
+
+/* Only the PRIMARY device/sensor selects (direct children) grow to fill the row.
+   Nested operator/value selects keep their natural width so rows stay aligned. */
+.irr-form-row > .f-switch,
+.irr-form-row > .f-sensor { flex: 1 1 140px; min-width: 0; max-width: 100%; }
+/* Compact fixed-width selects (ON/OFF, AND/OR) — same size in every row for a tidy column. */
+.irr-form-row > .f-state,
+.irr-form-row > .f-logic { flex: 0 0 auto; min-width: 72px; }
+/* Grouped cells (condition operator+value, duration h/m/s) stay together and drop onto
+   their own line when the row runs out of horizontal space. */
+.irr-form-row > .f-cond-value-cell,
+.irr-form-row > .f-dur-group { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+.irr-form-row .f-cond-value-cell > .f-op { min-width: 64px; }
+/* AND/OR connector sits centered (blue) on its own line between two condition rows. */
+.irr-cond-connector { display: flex; justify-content: center; padding: 2px 0; }
+.irr-cond-connector .f-logic { min-width: 76px; text-align: center; text-align-last: center; padding: 6px 10px; background: var(--ha-surface); color: var(--ha-primary); font-weight: 600; border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 12px; font-family: inherit; }
+.irr-cond-connector .f-logic:focus { border-color: var(--ha-primary); outline: none; }
+
+/* Scheduler time-range rows: the .ha-field floating-label inputs are tall and carry a
+   bottom margin, so center everything and drop that margin so the Start/End inputs,
+   the → arrow, and the × button line up on one baseline. Keep the row on a single line
+   so the × stays to the right like the other builder rows instead of wrapping down. */
+.irr-form-row-time { align-items: center; flex-wrap: nowrap; }
+.irr-form-row-time .ha-field { flex: 1 1 0; min-width: 0; margin-bottom: 0; }
+.irr-form-row-time .irr-time-arrow { flex: 0 0 auto; color: var(--ha-text-secondary); }
+.irr-form-row-time .irr-remove-btn { flex: 0 0 auto; margin-left: 4px; }
+/* iOS Safari sizes input[type=time] to an intrinsic min-width that ignores the
+   flex container, so the End field overflows and hides the arrow + × (Android is
+   fine). Force the time inputs to shrink to fit and stop iOS padding the value. */
+.irr-form-row-time .ha-field input[type="time"] {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+.irr-form-row-time .ha-field input[type="time"]::-webkit-date-and-time-value {
+    text-align: left;
+    margin: 0;
+}
+/* iOS Safari only (@supports -webkit-touch-callout targets iOS, not Android/desktop):
+   the native time control keeps its intrinsic width and ignores width:100% unless
+   appearance is stripped. This lets it actually shrink so the arrow + × stay visible. */
+@supports (-webkit-touch-callout: none) {
+    .irr-form-row-time .ha-field input[type="time"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+    .irr-form-row-time { column-gap: 6px; }
+    .irr-form-row-time .ha-field { padding: 0; }
+}
 
 /* Day picker in form */
 .irr-day-picker { display: flex; gap: 6px; margin-bottom: 12px; }
@@ -1370,10 +1725,19 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 /* Responsive */
 @media (max-width: 1024px) {
     .irr-workspace { grid-template-columns: 1fr; height: auto; }
-    .irr-list-panel { max-height: 200px; }
+    /* Let the list panel grow to fit the search + filter chips, and cap the
+       automation list to ~2 items on mobile so it scrolls instead of growing. */
+    .irr-list-panel { max-height: none; }
+    .irr-auto-list { max-height: 200px; overflow-y: auto; }
     .irr-sections-grid { grid-template-columns: 1fr; }
     .irr-section-wide { grid-column: span 1; }
-    .irr-bottom-grid { grid-template-columns: 1fr; }
+    /* Mobile only: move Error State below Actions (it's the last item in the grid,
+       so a higher order pushes it after Actions). Desktop keeps its DOM order. */
+    #irr-error-section { order: 1; }
+    /* Keep Live Switches | Live Sensors equally split on mobile too (Recent
+       Activity still spans both columns via its inline grid-column: span 2). */
+    .irr-bottom-grid { grid-template-columns: 1fr 1fr; }
+    .irr-section { padding: 14px 12px; }
     .irr-state-bar { grid-template-columns: repeat(2, 1fr); }
 }
 @media (max-width: 768px) {
@@ -1387,9 +1751,16 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
         padding: 5px 10px;
     }
     .irr-header-right .material-symbols-outlined { font-size: 16px !important; }
+    /* Keep the status badge + Reset / Insights / Edit on ONE row on mobile. */
+    .irr-header-right { flex-wrap: nowrap; gap: 5px; }
+    .irr-header-right .irr-status-badge { width: auto; min-width: 74px; max-width: 100%; padding: 4px 8px; font-size: 10px; letter-spacing: .3px; word-break: break-word; overflow-wrap: break-word; }
+    .irr-header-right .ha-btn-text { flex-shrink: 0; padding: 5px 6px; }
     .irr-sections-grid { padding: 8px 14px; gap: 8px; }
     .irr-bottom-grid { padding: 0 14px 14px; gap: 8px; }
     .irr-state-bar { grid-template-columns: 1fr 1fr; }
+    /* Fixed-height cells on mobile so the 2x2 grid (and its divider borders) never
+       resize as the live state text changes. Content is clipped to the box. */
+    .irr-state-bar .irr-state-cell { height: 104px; min-height: 104px; padding: 12px 12px; overflow: hidden; }
     .irr-sched-grid { padding: 0 14px 12px; }
 }
 

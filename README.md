@@ -3,6 +3,8 @@
 Everything you need to build a custom smart home platform using Nivixsa devices.
 This guide is designed for **developers** and **AI agents** - any language, any framework.
 
+> **Deploying this dashboard?** See the [deployment runbook](docs/README.md) for the full Docker + Cloudflare-tunnel setup, and [docs/HANDOFF.md](docs/HANDOFF.md) for operational notes.
+
 ---
 
 ## Table of Contents

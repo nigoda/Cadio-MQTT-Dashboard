@@ -14,6 +14,8 @@
   let _editId = null;    // null = create, string = edit
   let _aiLatLonTargetId = null;
   let _activeAnalyticsId = null; // Tracks which automation analytics is currently open
+  let _searchQuery = "";  // Current automation name filter (lowercased)
+  let _statusFilter = new Set(["all"]);  // Active status/state filters (multi-select, OR)
   const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
   // DOM
@@ -22,6 +24,13 @@
   const detailEmpty = $(".irr-detail-empty");
   const btnAdd = $("#btn-add-automation");
   const modalOverlay = $("#auto-modal-overlay");
+  const searchInput = $("#auto-search");
+  const filterDD = $("#auto-filter-dd");
+  const filterDDTrigger = $("#auto-filter-dd-trigger");
+  const filterDDMenu = $("#auto-filter-dd-menu");
+  const filterDDLabel = $("#auto-filter-dd-label");
+  const filterClearBtn = $("#auto-filter-clear");
+  const clearFiltersBtn = $("#auto-clear-filters");
 
   // ─── Helpers ───
   function populateTimezones() {
@@ -59,13 +68,41 @@
     return "running";
   }
 
+  // True if an automation belongs to a single named filter category.
+  function autoInCategory(auto, filter) {
+    if (!filter || filter === "all") return true;
+    const isOn = auto?.status === "ON";
+    const rs = auto?.runtime?.state || "IDLE";
+    switch (filter) {
+      case "on": return isOn;
+      case "off": return !isOn;
+      case "running": return isOn && stateClass(auto) === "running";
+      case "idle": return isOn && ["IDLE", "WAIT_CONDITION", "COMPLETED"].includes(rs);
+      case "paused": return isOn && rs.startsWith("PAUSED");
+      case "error": return isOn && rs.startsWith("ERROR");
+      default: return true;
+    }
+  }
+
+  // Decide whether an automation matches the active filter set (OR across filters).
+  // An empty set or a set containing "all" means: show everything.
+  function matchesStatusFilter(auto, filters) {
+    if (!filters || filters.size === 0 || filters.has("all")) return true;
+    for (const f of filters) {
+      if (autoInCategory(auto, f)) return true;
+    }
+    return false;
+  }
+
   function stateLabel(auto) {
     if (!auto) return "Off";
     const rs = auto.runtime?.state || "IDLE";
     if (auto.status !== "ON") return "Off";
     const map = {
       IDLE: "Off", WAIT_CONDITION: "Waiting", INIT_SET: "Initializing", INIT_VERIFY: "Verifying Init",
+      INIT_VERIFY_INDIVIDUAL: "Verify Init", INIT_VERIFY_ALL: "Verify Init All",
       ACTION_SET: "Setting Action", ACTION_VERIFY: "Verifying", ACTION_RUN: "Running",
+      ACTION_DRIFT_VERIFY: "Drift Check", BUFFER_DRIFT_VERIFY: "Buffer Check",
       OVERLAP_NEXT_SET: auto.runtime?.loopingToFirst ? "Init & Setting Next" : "Setting Next",
       OVERLAP_NEXT_VERIFY: auto.runtime?.loopingToFirst ? "Verify Init & Next" : "Verifying Next",
       ACTION_REVERT: "Reverting", ACTION_VERIFY_REVERT: "Verifying Revert", BUFFER: "Buffer",
@@ -116,8 +153,42 @@
     return getSensorEntities().map(e => {
       const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
       const dName = `${e.name} (${devName})`;
-      return `<option value="${escHtml(e.stateTopic)}" data-name="${escHtml(dName)}" ${e.stateTopic === selectedTopic ? "selected" : ""}>${escHtml(dName)}</option>`;
+      return `<option value="${escHtml(e.stateTopic)}" data-name="${escHtml(dName)}" data-type="${escHtml(e.type || "")}" ${e.stateTopic === selectedTopic ? "selected" : ""}>${escHtml(dName)}</option>`;
     }).join("");
+  }
+
+  // Numeric comparison operators offered for non-binary (analog) sensors.
+  const COND_NUMERIC_OPS = ["==", "!=", ">", ">=", "<", "<="];
+  // Equality operators offered for binary sensors.
+  const COND_BINARY_OPS = ["==", "!="];
+
+  // Resolve whether a sensor state topic belongs to a binary_sensor or an analog sensor.
+  function sensorTypeForTopic(topic) {
+    const e = getSensorEntities().find(x => x.stateTopic === topic);
+    return e ? (e.type || "binary_sensor") : "binary_sensor";
+  }
+
+  // Build the operator + value portion of a condition row based on the sensor type.
+  // Binary sensors → ==/!= operator with an ON/OFF selector.
+  // Analog sensors → operator dropdown (==, !=, >, >=, <, <=) with a manual numeric input.
+  function condValueHtml(sensorType, data) {
+    if (sensorType === "sensor") {
+      const selOp = COND_NUMERIC_OPS.includes(data?.op) ? data.op : "==";
+      const opOptions = COND_NUMERIC_OPS.map(o => `<option value="${o}" ${o === selOp ? "selected" : ""}>${o}</option>`).join("");
+      const val = (data?.value === undefined || data?.value === null) ? "" : data.value;
+      return `<select class="f-op">${opOptions}</select>
+        <input type="number" class="f-val" step="any" value="${escHtml(String(val))}" placeholder="Value" style="width:90px;">`;
+    }
+    const selBinOp = COND_BINARY_OPS.includes(data?.op) ? data.op : "==";
+    const binOpOptions = COND_BINARY_OPS.map(o => `<option value="${o}" ${o === selBinOp ? "selected" : ""}>${o}</option>`).join("");
+    return `<select class="f-op">${binOpOptions}</select>
+      <select class="f-state"><option value="ON" ${data?.value === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.value !== "ON" ? "selected" : ""}>OFF</option></select>`;
+  }
+
+  // Operator symbol shown in the read-only condition summary.
+  function condOpDisplay(c) {
+    const o = c?.op;
+    return (!o || o === "==" || o === "=") ? "=" : o;
   }
 
   // ─── Render List ───
@@ -180,7 +251,12 @@
     
     // Enforce monotonic increase: never let bar go backwards during a running cycle
     const autoId = auto.id;
-    if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state || (rt.state === "INIT_SET" && !rt.loopingToFirst)) {
+    // A new cycle begins at index 0 with loopingToFirst cleared. This happens both on
+    // a fresh startup (state INIT_SET) and when looping back for another cycle, where the
+    // backend jumps straight to ACTION_SET (skipping INIT_SET). Reset the high-water-mark
+    // in both cases so the bar restarts from 0% instead of sticking at 100%.
+    const isFreshCycleStart = (rt.state === "INIT_SET" || rt.state === "ACTION_SET") && idx === 0 && !rt.loopingToFirst;
+    if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state || isFreshCycleStart) {
       // Reset high-water-mark when cycle ends, automation is idle, or fresh startup/reset
       delete _lastProgress[autoId];
     } else {
@@ -206,7 +282,15 @@
       autoList.innerHTML = '<div class="ha-empty-row">No automations yet. Click "Add New" to create one.</div>';
       return;
     }
-    autoList.innerHTML = autos.map(a => {
+    const filtered = autos.filter(a => {
+      if (_searchQuery && !(a.name || "").toLowerCase().includes(_searchQuery)) return false;
+      return matchesStatusFilter(a, _statusFilter);
+    });
+    if (filtered.length === 0) {
+      autoList.innerHTML = `<div class="ha-empty-row">No automations match your filters.</div>`;
+      return;
+    }
+    autoList.innerHTML = filtered.map(a => {
       const cls = stateClass(a);
       const sel = a.id === _selectedId ? " active" : "";
       const isRunning = a.status === "ON" && a.runtime && a.runtime.state !== "IDLE" && a.runtime.state !== "ERROR";
@@ -254,10 +338,34 @@
       });
     });
     autoList.querySelectorAll(".ha-toggle input").forEach(inp => {
-      inp.addEventListener("change", (e) => {
+      inp.onchange = (e) => {
         e.stopPropagation();
-        socket.emit("toggle_automation", { id: inp.dataset.id, status: inp.checked ? "ON" : "OFF" });
-      });
+        const a = _autos[inp.dataset.id];
+        if (!a) return;
+        const isTurningOn = inp.checked;
+        if (!isTurningOn) {
+          socket.emit("toggle_automation", { id: a.id, status: "OFF" });
+          return;
+        }
+
+        inp.disabled = true; // disable while checking
+        const conflictsMap = validateRunConflicts(a);
+        inp.disabled = false;
+
+        if (conflictsMap.size > 0) {
+          inp.checked = false; // revert visual toggle
+          const parts = [...conflictsMap.entries()].map(([swName, otherAutos]) => 
+             `"${swName}" is actively used by ${[...otherAutos].join(", ")}`
+          );
+          if (window.showToastNotification) {
+             window.showToastNotification("Hardware Conflict", `Cannot run: ${parts.join("; ")}`, "error");
+          } else {
+             alert(`Cannot run: ${parts.join("; ")}`);
+          }
+        } else {
+          socket.emit("toggle_automation", { id: a.id, status: "ON" });
+        }
+      };
     });
   }
 
@@ -341,6 +449,13 @@
     $("#irr-next-step").textContent = nextStep;
     $("#irr-next-step-sub").textContent = nextSub;
 
+    // Shrink the state/next-step text as it gets longer so long labels
+    // (e.g. "NETWORK ERROR PAUSED", "Initialization & Switch ON") stay inside the cell.
+    fitStateText($("#irr-cur-state"));
+    fitStateText($("#irr-next-step"));
+    fitStateText($("#irr-cur-state-sub"), true);
+    fitStateText($("#irr-next-step-sub"), true);
+
     // Also update progress bars in the list for ALL running automations
     document.querySelectorAll(".irr-auto-item").forEach(el => {
       const a = _autos[el.dataset.id];
@@ -393,7 +508,7 @@
         if (s.switchName) switchMap.set(s.switchName, s.switchStateTopic || s.switchCmdTopic);
       });
       if (switchMap.size > 0) {
-        liveSw.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap;">${Array.from(switchMap.entries()).map(([name, topic]) => {
+        liveSw.innerHTML = `<div class="irr-live-grid">${Array.from(switchMap.entries()).map(([name, topic]) => {
           let liveState = "Unknown";
           if (window._dashboardEntities) {
             for (const eid in window._dashboardEntities) {
@@ -421,7 +536,7 @@
         if (c.sensorName || c.sensorStateTopic) sensorMap.set(c.sensorName || "Sensor", c.sensorStateTopic);
       });
       if (sensorMap.size > 0) {
-        liveSen.innerHTML = `<div style="display:flex;gap:12px;flex-wrap:wrap;">${Array.from(sensorMap.entries()).map(([name, topic]) => {
+        liveSen.innerHTML = `<div class="irr-live-grid">${Array.from(sensorMap.entries()).map(([name, topic]) => {
           let liveState = "Unknown";
           if (window._dashboardEntities) {
             for (const eid in window._dashboardEntities) {
@@ -501,6 +616,27 @@
         }
       });
     }
+
+    // Also update deinitialization live state text if visible
+    const deinitBody = $("#irr-deinit-body");
+    if (deinitBody) {
+      const deinits = auto.deinitialization || [];
+      const rows = deinitBody.querySelectorAll(".irr-deinit-live");
+      rows.forEach((span, i) => {
+        if (deinits[i]) {
+          const topic = deinits[i].switchStateTopic || deinits[i].switchCmdTopic || "";
+          let lState = "Unknown";
+          if (window._dashboardEntities) {
+            for (const eid in window._dashboardEntities) {
+              const e = window._dashboardEntities[eid];
+              if (e.stateTopic === topic || e.cmdTopic === topic) { lState = (e.state || "Unknown").toUpperCase(); break; }
+            }
+          }
+          const lColor = lState === "ON" ? "color:var(--ha-state-on)" : (lState === "OFF" ? "color:var(--ha-state-off)" : "");
+          span.innerHTML = `(Live: <span style="font-weight:600; ${lColor}">${lState}</span>)`;
+        }
+      });
+    }
   }
 
   // ─── Render Detail ───
@@ -516,21 +652,29 @@
     const idx = rt.currentActionIndex || 0;
 
     // Header
-    $("#irr-detail-name").textContent = auto.name;
+    const fullName = auto.name || "";
+    const nameEl = $("#irr-detail-name");
+    nameEl.textContent = fullName.length > 35 ? fullName.slice(0, 35).trimEnd() + "…" : fullName;
+    nameEl.title = fullName;
     const btnPlayPause = $("#irr-btn-playpause");
     const iconPlayPause = $("#irr-icon-playpause");
+    // Always keep the button's slot reserved (visibility, not display) so it
+    // appearing when the automation is enabled never shifts the header layout.
+    btnPlayPause.style.display = "flex";
     if (auto.status === "ON") {
-      btnPlayPause.style.display = "flex";
+      btnPlayPause.style.visibility = "visible";
       iconPlayPause.textContent = auto.isPaused ? "play_arrow" : "pause";
       btnPlayPause.style.background = auto.isPaused ? "var(--ha-warning)" : "var(--ha-primary)";
       btnPlayPause.onclick = () => {
         socket.emit("pause_automation", { id: auto.id, isPaused: !auto.isPaused });
       };
     } else {
-      btnPlayPause.style.display = "none";
+      btnPlayPause.style.visibility = "hidden";
+      btnPlayPause.onclick = null;
     }
 
     $("#irr-detail-desc").textContent = auto.description || "";
+    setupDetailDesc(auto);
     const badge = $("#irr-detail-badge");
     badge.textContent = stateLabel(auto);
     badge.className = "irr-status-badge " + cls;
@@ -541,19 +685,71 @@
     const toggle = $("#irr-status-toggle");
     toggle.checked = auto.status === "ON";
     $(".toggle-text-on").textContent = auto.status === "ON" ? "ON" : "OFF";
-    toggle.onchange = () => socket.emit("toggle_automation", { id: auto.id, status: toggle.checked ? "ON" : "OFF" });
+    
+    // Clear previous errors/highlights
+    const errEl = $("#irr-run-error");
+    if (errEl) errEl.style.display = "none";
+    document.querySelectorAll(".irr-sw-row.conflict").forEach(el => el.classList.remove("conflict"));
+
+    toggle.onchange = (e) => {
+      const isTurningOn = toggle.checked;
+      if (!isTurningOn) {
+        // Turning OFF is always safe
+        socket.emit("toggle_automation", { id: auto.id, status: "OFF" });
+        return;
+      }
+
+      // Turning ON - run validation
+      const loadingEl = $("#irr-status-loading");
+      if (loadingEl) loadingEl.style.display = "block";
+      toggle.disabled = true;
+
+      const conflictsMap = validateRunConflicts(auto);
+      if (loadingEl) loadingEl.style.display = "none";
+      toggle.disabled = false;
+
+      if (conflictsMap.size > 0) {
+        toggle.checked = false; // revert toggle visually
+        const switchTopics = conflictsMap.topics;
+        
+        const parts = [...conflictsMap.entries()].map(([swName, otherAutos]) => 
+            `“${escHtml(swName)}” is actively used by ${escHtml([...otherAutos].join(", "))}`
+        );
+        if (errEl) {
+          errEl.style.display = "flex";
+          errEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>Cannot run: ${parts.join("; ")}</span>`;
+        }
+        
+        // Apply red borders to the rows
+        switchTopics.forEach(t => {
+            document.querySelectorAll(`.irr-sw-row[data-topic="${t}"]`).forEach(el => el.classList.add("conflict"));
+        });
+        
+      } else {
+        if (errEl) errEl.style.display = "none";
+        socket.emit("toggle_automation", { id: auto.id, status: "ON" });
+      }
+    };
+    toggle.onclick = null;
 
     // Init
     const initBody = $("#irr-init-body");
     const inits = auto.initialization || [];
-    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+
+    // Deinit
+    const deinitBody = $("#irr-deinit-body");
+    if (deinitBody) {
+      const deinits = auto.deinitialization || [];
+      deinitBody.innerHTML = deinits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    }
 
     // Condition
     const condBody = $("#irr-cond-body");
     const conds = auto.condition || [];
     condBody.innerHTML = conds.map((c, i) => {
       const logicBadge = c.logic && i < conds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">=</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
     }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">No conditions (always true)</span>';
 
     // Actions
@@ -569,7 +765,7 @@
       let status = "⏳ Pending";
       if (i < idx) status = "✔ Done";
       if (isActive) status = "▶ " + (rt.state === "ACTION_RUN" ? "Running" : "Processing");
-      return `<tr class="${isActive ? "active-action" : ""}"><td>${i + 1}</td><td>${escHtml(a.switchName || "Switch")}</td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
+      return `<tr class="${isActive ? "active-action irr-sw-row" : "irr-sw-row"}" data-topic="${escHtml(a.switchCmdTopic || "")}"><td>${i + 1}</td><td>${escHtml(a.switchName || "Switch")}</td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
     }).join("")}</tbody></table>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No actions configured</span>';
 
     // Error state
@@ -605,7 +801,7 @@
     const schedConds = sched.conditions || [];
     const schedCondHTML = schedConds.length > 0 ? `<div style="margin-top:12px;"><span class="irr-label">Conditions</span><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${schedConds.map((c, i) => {
       const logicBadge = c.logic && i < schedConds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">=</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
     }).join("")}</div></div>` : '';
 
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
@@ -625,8 +821,13 @@
       </div>
     </div>${schedCondHTML}`;
 
-    const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
-    const setFalseHTML = (sched.setIfFalse || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+    const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+    const setFalseHTML = (sched.setIfFalse || []).map(i => {
+      const topic = i.switchCmdTopic || "";
+      const isYielded = (auto.runtime?.yielded_switches || []).includes(topic);
+      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active automation">warning</span>` : "";
+      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+    }).join("");
 
     if (setTrueHTML || setFalseHTML) {
       schedBody.innerHTML += `<div style="display:flex;gap:20px;margin-top:16px;">
@@ -773,6 +974,8 @@
 
     // Init rows
     renderFormRows("auto-f-init", auto?.initialization || [], "switch");
+    // Deinitialization rows (run when the automation is turned OFF)
+    renderFormRows("auto-f-deinit", auto?.deinitialization || [], "switch");
     // Set if True / Set if False rows
     renderFormRows("auto-f-set-true", auto?.schedule?.setIfTrue || [], "switch");
     renderFormRows("auto-f-set-false", auto?.schedule?.setIfFalse || [], "switch");
@@ -784,6 +987,12 @@
     renderFormRows("auto-f-actions", auto?.actions || [], "action");
     // Error rows
     renderFormRows("auto-f-error", auto?.errorState || [], "switch");
+
+    // Reset conflict validation state (rows are freshly rendered, so any old
+    // red outlines are gone; just clear the banner and the live-check flag).
+    $("#auto-modal-warning")?.classList.add("hidden");
+    const warnEl = $("#auto-modal-warning");
+    if (warnEl) { warnEl.classList.add("hidden"); warnEl.innerHTML = ""; }
 
     modalOverlay.classList.remove("hidden");
   }
@@ -804,19 +1013,31 @@
         <select class="f-state"><option value="ON" ${data?.state === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.state !== "ON" ? "selected" : ""}>OFF</option></select>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     } else if (type === "condition") {
-      row.innerHTML = `<select class="f-sensor">${sensorOptions(data?.sensorStateTopic || "")}</select>
-        <span class="irr-cond-op">=</span>
-        <select class="f-state"><option value="ON" ${data?.value === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.value !== "ON" ? "selected" : ""}>OFF</option><option value="HIGH" ${data?.value === "HIGH" ? "selected" : ""}>HIGH</option><option value="LOW" ${data?.value === "LOW" ? "selected" : ""}>LOW</option></select>
-        <select class="f-logic"><option value="AND" ${data?.logic !== "OR" ? "selected" : ""}>AND</option><option value="OR" ${data?.logic === "OR" ? "selected" : ""}>OR</option></select>
+      const initialTopic = data?.sensorStateTopic || "";
+      const sType = sensorTypeForTopic(initialTopic);
+      // Each condition is one line: sensor + operator + value + × (right). The AND/OR is a
+      // separate centered connector inserted BETWEEN rows (see refreshCondLogic). Logic is
+      // stored on the row's data-logic so it survives add/remove re-renders.
+      row.dataset.logic = data?.logic === "OR" ? "OR" : "AND";
+      row.innerHTML = `<select class="f-sensor">${sensorOptions(initialTopic)}</select>
+        <span class="f-cond-value-cell" style="display:flex;gap:6px;align-items:center;">${condValueHtml(sType, data)}</span>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
+      // Rebuild the operator/value UI whenever the selected sensor changes so that
+      // binary sensors show ON/OFF and analog sensors show numeric operators + input.
+      const sensorSel = row.querySelector(".f-sensor");
+      sensorSel?.addEventListener("change", () => {
+        const cell = row.querySelector(".f-cond-value-cell");
+        if (cell) cell.innerHTML = condValueHtml(sensorTypeForTopic(sensorSel.value), {});
+      });
     } else if (type === "action") {
       const dur = data?.duration || 0;
       const h = Math.floor(dur / 3600);
       const m = Math.floor((dur % 3600) / 60);
       const s = dur % 60;
+      row.classList.add("irr-form-row-action");
       row.innerHTML = `<select class="f-switch">${switchOptions(data?.switchCmdTopic || "")}</select>
         <select class="f-state"><option value="ON" ${data?.state === "ON" ? "selected" : ""}>ON</option><option value="OFF" ${data?.state !== "ON" ? "selected" : ""}>OFF</option></select>
-        <div style="display:flex;gap:4px;align-items:center;">
+        <div class="f-dur-group" style="display:flex;gap:4px;align-items:center;">
           <input type="number" class="f-dur-h" value="${h}" min="0" max="99" style="width:48px;text-align:center;padding:8px 4px;" oninput="if(this.value.length > 2) this.value = this.value.slice(0,2)">
           <span style="font-size:13px;color:var(--ha-text-secondary);margin-right:4px;">h</span>
           <input type="number" class="f-dur-m" value="${m}" min="0" max="59" style="width:48px;text-align:center;padding:8px 4px;" oninput="if(this.value.length > 2) this.value = this.value.slice(0,2)">
@@ -826,17 +1047,122 @@
         </div>
         <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     } else if (type === "timeRange") {
-      row.innerHTML = `<div class="ha-field" style="flex:1"><input type="time" class="f-start" value="${data?.start || ""}" placeholder=" "><label>Start</label></div>
-        <span style="padding-top:12px">→</span>
-        <div class="ha-field" style="flex:1"><input type="time" class="f-end" value="${data?.end || ""}" placeholder=" "><label>End</label></div>
-        <button type="button" class="irr-remove-btn material-symbols-outlined" style="margin-top:12px">close</button>`;
+      row.classList.add("irr-form-row-time");
+      row.innerHTML = `<div class="ha-field"><input type="time" class="f-start" value="${data?.start || ""}" placeholder=" "><label>Start</label></div>
+        <span class="irr-time-arrow">→</span>
+        <div class="ha-field"><input type="time" class="f-end" value="${data?.end || ""}" placeholder=" "><label>End</label></div>
+        <button type="button" class="irr-remove-btn material-symbols-outlined">close</button>`;
     }
-    row.querySelector(".irr-remove-btn")?.addEventListener("click", () => row.remove());
+    if (type === "switch") {
+      const switchSelect = row.querySelector(".f-switch");
+      if (switchSelect) {
+        switchSelect.addEventListener("change", () => refreshSwitchOptions(container));
+      }
+    }
+
+    row.querySelector(".irr-remove-btn")?.addEventListener("click", () => {
+      row.remove();
+      if (type === "condition") refreshCondLogic(container);
+      if (type === "switch") refreshSwitchOptions(container);
+    });
     container.appendChild(row);
+    if (type === "condition") refreshCondLogic(container);
+    if (type === "switch") refreshSwitchOptions(container);
+  }
+
+  function refreshSwitchOptions(container) {
+    if (!container || !container.id) return;
+    if (container.id !== "auto-f-init" && container.id !== "auto-f-deinit") return;
+
+    const selects = [...container.querySelectorAll(".f-switch")];
+    const used = new Set();
+
+    // Walk the rows in order and give each one the first switch not already taken
+    // by an earlier row. Empty rows and duplicates (e.g. a new row defaulting to
+    // switch 0 when switch 0 is already used) advance to the next available switch.
+    selects.forEach(select => {
+      const val = select.value;
+      if (!val || used.has(val)) {
+        const next = [...select.options].find(o => o.value && !used.has(o.value));
+        if (next) select.value = next.value;
+      }
+      if (select.value) used.add(select.value);
+    });
+
+    // Disable switches already chosen in another row so the same one can't be picked twice.
+    selects.forEach(select => {
+      const currentVal = select.value;
+      [...select.options].forEach(opt => {
+        opt.disabled = opt.value !== currentVal && used.has(opt.value);
+      });
+    });
+  }
+
+  // Detail description: collapsed to one line by default with a "more" toggle that
+  // expands the full text (wrapping within the frame) and switches to "show less".
+  // The expanded state is remembered per-automation so live re-renders don't reset it.
+  let _descExpandedId = null;
+  function setupDetailDesc(auto) {
+    const desc = $("#irr-detail-desc");
+    const toggle = $("#irr-detail-desc-toggle");
+    if (!desc || !toggle) return;
+    const text = auto.description || "";
+    const expanded = _descExpandedId === auto.id && text;
+
+    const applyState = (isExpanded) => {
+      desc.classList.toggle("expanded", isExpanded);
+      desc.classList.toggle("collapsed", !isExpanded);
+      toggle.textContent = isExpanded ? "show less" : "more";
+    };
+
+    // Measure overflow in the collapsed (single-line) state.
+    applyState(false);
+    const overflowing = desc.scrollWidth > desc.clientWidth + 1;
+    toggle.style.display = text && (overflowing || expanded) ? "" : "none";
+    if (expanded) applyState(true);
+
+    toggle.onclick = () => {
+      const nowExpanded = !desc.classList.contains("expanded");
+      _descExpandedId = nowExpanded ? auto.id : null;
+      applyState(nowExpanded);
+    };
+  }
+
+  // Scale a state-bar text element's font size down as its content grows longer,
+  // so long labels never overflow the fixed-width cell. `sub` uses a smaller base.
+  function fitStateText(el, sub) {
+    if (!el) return;
+    const len = (el.textContent || "").length;
+    const base = sub ? 12 : 15;
+    let size = base;
+    if (len > 26) size = base - 4;
+    else if (len > 20) size = base - 3;
+    else if (len > 15) size = base - 2;
+    else if (len > 11) size = base - 1;
+    el.style.fontSize = size + "px";
+  }
+
+  // The AND/OR operator only makes sense BETWEEN two conditions, so render it as a
+  // centered connector inserted between adjacent rows: N conditions -> N-1 connectors,
+  // a single condition -> none. The chosen value is stored on the preceding row's
+  // data-logic so it survives add/remove re-renders.
+  function refreshCondLogic(container) {
+    container.querySelectorAll(".irr-cond-connector").forEach((c) => c.remove());
+    const rows = [...container.querySelectorAll(".irr-form-row")];
+    rows.forEach((row, i) => {
+      if (i >= rows.length - 1) return;
+      const logic = row.dataset.logic === "OR" ? "OR" : "AND";
+      const conn = document.createElement("div");
+      conn.className = "irr-cond-connector";
+      conn.innerHTML = `<select class="f-logic"><option value="AND"${logic !== "OR" ? " selected" : ""}>AND</option><option value="OR"${logic === "OR" ? " selected" : ""}>OR</option></select>`;
+      const sel = conn.querySelector(".f-logic");
+      sel.addEventListener("change", () => { row.dataset.logic = sel.value; });
+      row.after(conn);
+    });
   }
 
   // Add row buttons
-  ["auto-f-init-add", "auto-f-error-add", "auto-f-set-true-add", "auto-f-set-false-add"].forEach(id => {
+  ["auto-f-init-add", "auto-f-deinit-add", "auto-f-error-add", "auto-f-set-true-add", "auto-f-set-false-add"].forEach(id => {
     $(`#${id}`)?.addEventListener("click", () => addFormRow($(`#${id.replace("-add", "")}`), "switch", {}));
   });
   $("#auto-f-cond-add")?.addEventListener("click", () => addFormRow($("#auto-f-cond"), "condition", {}));
@@ -924,7 +1250,7 @@
   });
 
   function collectFormData() {
-    const name = $("#auto-f-name").value.trim();
+    const name = $("#auto-f-name").value.trim().slice(0, 35);
     if (!name) { alert("Name is required"); return null; }
     const days = [...$("#auto-f-days").querySelectorAll(".irr-day-btn.active")].map(b => b.dataset.day);
 
@@ -934,11 +1260,23 @@
       return { switchCmdTopic: sel?.value || "", switchStateTopic: opt?.dataset.state || "", switchName: opt?.dataset.name || "", state: r.querySelector(".f-state")?.value || "OFF" };
     });
 
-    const conds = [...$("#auto-f-cond").querySelectorAll(".irr-form-row")].map(r => {
+    // Collect a single condition row. The operator dropdown (.f-op) is always present.
+    // Analog sensors provide a numeric input (.f-val); binary sensors an ON/OFF selector (.f-state).
+    const collectCondRow = (r) => {
       const sel = r.querySelector(".f-sensor");
       const opt = sel?.selectedOptions[0];
-      return { sensorStateTopic: sel?.value || "", sensorName: opt?.dataset.name || "", value: r.querySelector(".f-state")?.value || "OFF", logic: r.querySelector(".f-logic")?.value || "AND" };
-    });
+      const valInput = r.querySelector(".f-val");
+      const stateSel = r.querySelector(".f-state");
+      return {
+        sensorStateTopic: sel?.value || "",
+        sensorName: opt?.dataset.name || "",
+        op: r.querySelector(".f-op")?.value || "==",
+        value: valInput ? (valInput.value ?? "") : (stateSel?.value || "OFF"),
+        logic: r.dataset.logic || "AND"
+      };
+    };
+
+    const conds = [...$("#auto-f-cond").querySelectorAll(".irr-form-row")].map(r => collectCondRow(r));
 
     const actions = [...$("#auto-f-actions").querySelectorAll(".irr-form-row")].map(r => {
       const sel = r.querySelector(".f-switch");
@@ -976,11 +1314,7 @@
       ai_custom_rules: editAuto?.schedule?.ai_custom_rules || "",
       setIfTrue: collectSwitchRows("auto-f-set-true"),
       setIfFalse: collectSwitchRows("auto-f-set-false"),
-      conditions: [...$("#auto-f-sched-cond").querySelectorAll(".irr-form-row")].map(r => {
-        const sel = r.querySelector(".f-sensor");
-        const opt = sel?.selectedOptions[0];
-        return { sensorStateTopic: sel?.value || "", sensorName: opt?.dataset.name || "", value: r.querySelector(".f-state")?.value || "OFF", logic: r.querySelector(".f-logic")?.value || "AND" };
-      })
+      conditions: [...$("#auto-f-sched-cond").querySelectorAll(".irr-form-row")].map(r => collectCondRow(r))
     };
     const latStr = $("#auto-f-lat").value;
     const lonStr = $("#auto-f-lon").value;
@@ -993,6 +1327,7 @@
       schedule: schedObj,
       condition: conds,
       initialization: collectSwitchRows("auto-f-init"),
+      deinitialization: collectSwitchRows("auto-f-deinit"),
       actions,
       errorState: collectSwitchRows("auto-f-error"),
       bufferTime: parseInt($("#auto-f-buffer")?.value || "5", 10),
@@ -1000,10 +1335,224 @@
     };
   }
 
+  // ─── Switch conflict validation ─────────────────────────────────────────
+  // A physical switch must not be driven by two automations whose schedules
+  // overlap in day + time — that causes state "drift". Sensors may be shared
+  // freely, and the Error State section is exempt (a safety shutoff may reuse
+  // any switch). Switches are considered across Initialization, Set-if-True,
+  // Set-if-False and Actions.
+  const SWITCH_CONTAINERS = ["auto-f-init", "auto-f-deinit", "auto-f-set-true", "auto-f-set-false", "auto-f-actions"];
+  // A physical switch must not be driven by two automations whose schedules
+  function _schedIntervals(sched) {
+    // Return [startMin, endMin) intervals within a day (matches backend check_schedule).
+    sched = sched || {};
+    if (sched.is24hr) return [[0, 1440]];
+    let ranges = sched.timeRanges || [];
+    if (!ranges.length && (sched.startTime || sched.endTime)) {
+      ranges = [{ start: sched.startTime, end: sched.endTime }];
+    }
+    const out = [];
+    for (const r of ranges) {
+      if (!r || !r.start || !r.end) continue;
+      const [sh, sm] = String(r.start).split(":").map(Number);
+      const [eh, em] = String(r.end).split(":").map(Number);
+      const s = sh * 60 + sm, e = eh * 60 + em;
+      if (isNaN(s) || isNaN(e)) continue;
+      if (s < e) out.push([s, e]);
+      else if (s > e) { out.push([s, 1440]); out.push([0, e]); } // wraps past midnight
+      else out.push([0, 1440]); // start == end -> treat as all-day
+    }
+    // Backend treats a non-24hr schedule with no usable range as the whole day.
+    return out.length ? out : [[0, 1440]];
+  }
+
+  // Map an automation's schedule into a set of absolute intervals over the week,
+  // expressed in UTC minutes [0, 10080). This makes the overlap check correct
+  // across different timezones (two automations in different UTC offsets are
+  // compared at the same real-world instant) as well as across midnight and the
+  // week boundary. utcOffset follows JS getTimezoneOffset (utc = local + offset,
+  // e.g. UTC+5:30 = -330), matching the backend's _get_auto_now.
+  const _WEEK_MINS = 7 * 1440;
+  const _DAY_INDEX = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+
+  function _pushWeekInterval(out, start, end) {
+    // start < end, length <= 1440. Rotate into [0, _WEEK_MINS) and split on wrap.
+    const len = end - start;
+    let s = ((start % _WEEK_MINS) + _WEEK_MINS) % _WEEK_MINS;
+    let e = s + len;
+    if (e <= _WEEK_MINS) out.push([s, e]);
+    else { out.push([s, _WEEK_MINS]); out.push([0, e - _WEEK_MINS]); }
+  }
+
+  function _weeklyUtcIntervals(sched) {
+    sched = sched || {};
+    const days = sched.days || [];
+    if (!days.length) return []; // never runs
+    const offset = Number.isFinite(+sched.utcOffset) ? (+sched.utcOffset | 0) : 0;
+    const pieces = _schedIntervals(sched); // within-day local minute pieces
+    const out = [];
+    for (const d of days) {
+      const di = _DAY_INDEX[d];
+      if (di === undefined) continue;
+      for (const [ps, pe] of pieces) {
+        // Local weekly minutes -> UTC weekly minutes (utc = local + offset).
+        _pushWeekInterval(out, di * 1440 + ps + offset, di * 1440 + pe + offset);
+      }
+    }
+    return out;
+  }
+
+  function schedulesOverlap(a, b) {
+    const ia = _weeklyUtcIntervals(a), ib = _weeklyUtcIntervals(b);
+    if (!ia.length || !ib.length) return false;
+    return ia.some(([s1, e1]) => ib.some(([s2, e2]) => s1 < e2 && s2 < e1));
+  }
+
+  function switchTopicsOfAuto(auto) {
+    const set = new Set();
+    const add = (arr) => (arr || []).forEach(x => { if (x && x.switchCmdTopic) set.add(x.switchCmdTopic); });
+    add(auto.initialization);
+    add(auto.deinitialization);
+    add(auto.actions);
+    add(auto.schedule?.setIfTrue);
+    add(auto.schedule?.setIfFalse);
+    return set; // Error State intentionally excluded
+  }
+
+  function _collectScheduleLite() {
+    const daysEl = $("#auto-f-days");
+    const days = daysEl ? [...daysEl.querySelectorAll(".irr-day-btn.active")].map(b => b.dataset.day) : [];
+    const is24hr = !!$("#auto-f-24hr")?.checked;
+    const listEl = $("#auto-f-times-list");
+    const timeRanges = listEl ? [...listEl.querySelectorAll(".irr-form-row")].map(r => ({
+      start: r.querySelector(".f-start")?.value || "",
+      end: r.querySelector(".f-end")?.value || ""
+    })) : [];
+    const utcOffset = parseInt($("#auto-f-tz")?.value, 10) || 0;
+    return { days, is24hr, timeRanges, utcOffset };
+  }
+
+  // Highlight conflicting switch selects, toggle the warning banner, and return true.
+  // Saving is always allowed, this is just a warning.
+  function validateSwitchConflicts() {
+    const warnEl = $("#auto-modal-warning");
+    SWITCH_CONTAINERS.forEach(cid => {
+      $(`#${cid}`)?.querySelectorAll(".f-switch.warning-conflict").forEach(el => el.classList.remove("warning-conflict"));
+    });
+
+    const sched = _collectScheduleLite();
+
+    // switchCmdTopic -> Set of other automation names overlapping in schedule
+    const topicToAutos = new Map();
+    for (const id in _autos) {
+      if (id === _editId) continue;
+      const other = _autos[id];
+      if (!schedulesOverlap(sched, other.schedule || {})) continue;
+      for (const t of switchTopicsOfAuto(other)) {
+        if (!topicToAutos.has(t)) topicToAutos.set(t, new Set());
+        topicToAutos.get(t).add(other.name || "Unnamed");
+      }
+    }
+
+    const conflicts = new Map(); // switchName -> Set(other automation names)
+    SWITCH_CONTAINERS.forEach(cid => {
+      $(`#${cid}`)?.querySelectorAll(".f-switch").forEach(sel => {
+        const topic = sel.value;
+        if (topic && topicToAutos.has(topic)) {
+          sel.classList.add("warning-conflict");
+          const swName = sel.selectedOptions[0]?.dataset.name || topic;
+          if (!conflicts.has(swName)) conflicts.set(swName, new Set());
+          topicToAutos.get(topic).forEach(n => conflicts.get(swName).add(n));
+        }
+      });
+    });
+
+    if (!warnEl) return true;
+    if (conflicts.size === 0) {
+      warnEl.classList.add("hidden");
+      warnEl.classList.remove("warning");
+      warnEl.innerHTML = "";
+      return true;
+    }
+    const parts = [...conflicts.entries()].map(([sw, autos]) =>
+      `“${escHtml(sw)}” is used by ${escHtml([...autos].join(", "))}`);
+    warnEl.classList.add("warning");
+    warnEl.classList.remove("hidden");
+    warnEl.innerHTML = `<span class="material-symbols-outlined">warning</span><span>${parts.join("; ")} during an overlapping time window. This is allowed, but may cause conflicts if both are turned on.</span>`;
+    return true;
+  }
+
+  // Validates an automation before it is turned ON (status -> ON).
+  // Checks only against other automations that are already ON.
+  // Returns a Map of switchCmdTopic -> Set(other automation names).
+  function validateRunConflicts(autoToRun) {
+    const conflicts = new Map();
+    // Re-use the existing logic to calculate its schedule
+    // The auto obj might not have timeRanges formatted exactly like the modal's DOM extraction,
+    // but _weeklyUtcIntervals expects the raw backend auto.schedule object!
+    const schedToRun = autoToRun.schedule || {};
+    
+    // switchCmdTopic -> Set of other automation names overlapping in schedule
+    for (const id in _autos) {
+      if (id == autoToRun.id) continue;
+      const other = _autos[id];
+      if (other.status !== "ON") continue;
+      
+      if (!schedulesOverlap(schedToRun, other.schedule || {})) continue;
+      
+      const otherTopics = switchTopicsOfAuto(other);
+      const myTopics = switchTopicsOfAuto(autoToRun);
+      
+      for (const t of myTopics) {
+        if (otherTopics.has(t)) {
+          if (!conflicts.has(t)) conflicts.set(t, new Set());
+          conflicts.get(t).add(other.name || "Unnamed");
+        }
+      }
+    }
+    
+    // We want to map topics to names, or map switchNames to names?
+    // In updateCardDetails we use topics to find DOM nodes, and we map to names for the error string.
+    // We can just return a Map of switchNames -> Set(other names), AND return the topics.
+    // Let's return a Map of switchName -> Set(other names).
+    const conflictsByName = new Map();
+    for (const t of conflicts.keys()) {
+      // Find the name of this switch from autoToRun
+      let swName = t;
+      const check = (arr) => (arr||[]).forEach(x => { if (x.switchCmdTopic === t && x.switchName) swName = x.switchName; });
+      check(autoToRun.initialization);
+      check(autoToRun.deinitialization);
+      check(autoToRun.actions);
+      check(autoToRun.schedule?.setIfTrue);
+      check(autoToRun.schedule?.setIfFalse);
+      
+      if (!conflictsByName.has(swName)) conflictsByName.set(swName, new Set());
+      conflicts.get(t).forEach(n => conflictsByName.get(swName).add(n));
+    }
+    
+    return {
+       size: conflicts.size,
+       topics: Array.from(conflicts.keys()),
+       entries: () => conflictsByName.entries()
+    };
+  }
+
+  // Keep the highlights/banner in sync as the user edits switches, days, times or the 24-hour toggle.
+  const _maybeLiveValidate = () => { validateSwitchConflicts(); };
+  modalOverlay?.addEventListener("change", _maybeLiveValidate);
+  modalOverlay?.addEventListener("input", _maybeLiveValidate);
+  modalOverlay?.addEventListener("click", (e) => {
+    if (e.target.classList?.contains("irr-day-btn") || e.target.closest(".irr-remove-btn") || e.target.closest(".irr-add-btn")) {
+      // Small timeout to allow DOM changes (like adding a row or toggling a class) to settle
+      setTimeout(validateSwitchConflicts, 0);
+    }
+  });
+
   // Save
   $("#auto-modal-save")?.addEventListener("click", () => {
     const data = collectFormData();
     if (!data) return;
+    if (!validateSwitchConflicts()) { return; }
     if (_editId) {
       data.id = _editId;
       socket.emit("update_automation", data);
@@ -1018,6 +1567,113 @@
   $("#auto-modal-close")?.addEventListener("click", closeModal);
   $("#auto-modal-cancel")?.addEventListener("click", closeModal);
   modalOverlay?.addEventListener("click", (e) => { if (e.target === modalOverlay) closeModal(); });
+
+  // Automation name search filter
+  searchInput?.addEventListener("input", () => {
+    _searchQuery = (searchInput.value || "").trim().toLowerCase();
+    updateClearFiltersBtn();
+    renderList();
+  });
+
+  // Reflect the current _statusFilter set onto the dropdown checkboxes + trigger label.
+  function syncFilterDropdown() {
+    if (!filterDDMenu) return;
+    const isAll = _statusFilter.has("all") || _statusFilter.size === 0;
+    filterDDMenu.querySelectorAll(".irr-filter-dd-cb").forEach((cb) => {
+      cb.checked = cb.value === "all" ? isAll : (!isAll && _statusFilter.has(cb.value));
+    });
+    if (filterDDLabel) {
+      if (isAll) {
+        filterDDLabel.textContent = "All";
+      } else if (_statusFilter.size === 1) {
+        const v = [..._statusFilter][0];
+        filterDDLabel.textContent = v.charAt(0).toUpperCase() + v.slice(1);
+      } else {
+        filterDDLabel.textContent = `${_statusFilter.size} selected`;
+      }
+    }
+  }
+
+  // Position the (fixed) menu directly under the trigger. Fixed positioning
+  // lets it escape the list panel's overflow:hidden so every option is visible.
+  function positionFilterMenu() {
+    if (!filterDDTrigger || !filterDDMenu) return;
+    const r = filterDDTrigger.getBoundingClientRect();
+    filterDDMenu.style.top = (r.bottom + 4) + "px";
+    filterDDMenu.style.left = r.left + "px";
+    filterDDMenu.style.minWidth = r.width + "px";
+  }
+  function closeFilterMenu() {
+    filterDDMenu?.classList.add("hidden");
+    filterDDTrigger?.setAttribute("aria-expanded", "false");
+  }
+
+  // Open / close the filter dropdown.
+  filterDDTrigger?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const willOpen = filterDDMenu.classList.contains("hidden");
+    if (willOpen) {
+      positionFilterMenu();
+      filterDDMenu.classList.remove("hidden");
+      filterDDTrigger.setAttribute("aria-expanded", "true");
+    } else {
+      closeFilterMenu();
+    }
+  });
+  // Close on outside click.
+  document.addEventListener("click", (e) => {
+    if (filterDD && !filterDD.contains(e.target)) closeFilterMenu();
+  });
+  // A fixed menu doesn't follow scroll — close it instead (capture inner scrolls too).
+  window.addEventListener("scroll", () => {
+    if (!filterDDMenu?.classList.contains("hidden")) closeFilterMenu();
+  }, true);
+  window.addEventListener("resize", closeFilterMenu);
+
+  // Automation status/state filter (multi-select checkboxes, OR logic).
+  // "All" is exclusive: it clears the specific filters and shows everything.
+  filterDDMenu?.addEventListener("change", (e) => {
+    const cb = e.target;
+    if (!cb.classList.contains("irr-filter-dd-cb")) return;
+    if (cb.value === "all") {
+      _statusFilter = new Set(["all"]);
+    } else {
+      const checked = [...filterDDMenu.querySelectorAll(".irr-filter-dd-cb")]
+        .filter((x) => x.checked && x.value !== "all")
+        .map((x) => x.value);
+      // No specific selection falls back to "All" so the list stays populated.
+      _statusFilter = checked.length ? new Set(checked) : new Set(["all"]);
+    }
+    syncFilterDropdown();
+    updateClearFiltersBtn();
+    renderList();
+  });
+
+  // Clear button next to the dropdown: reset the filter and select all.
+  filterClearBtn?.addEventListener("click", () => {
+    _statusFilter = new Set(["all"]);
+    syncFilterDropdown();
+    updateClearFiltersBtn();
+    renderList();
+  });
+
+  // Show the clear button only when a search term or non-default filter is active.
+  function updateClearFiltersBtn() {
+    if (!clearFiltersBtn) return;
+    const active = _searchQuery !== "" || !_statusFilter.has("all");
+    clearFiltersBtn.classList.toggle("hidden", !active);
+  }
+
+  // Clear all automation filters (search box + status filter).
+  clearFiltersBtn?.addEventListener("click", () => {
+    _searchQuery = "";
+    _statusFilter = new Set(["all"]);
+    if (searchInput) searchInput.value = "";
+    syncFilterDropdown();
+    updateClearFiltersBtn();
+    renderList();
+    searchInput?.focus();
+  });
 
   // ─── Socket events ───
   socket.on("automations_list", (list) => {

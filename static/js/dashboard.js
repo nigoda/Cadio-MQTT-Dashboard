@@ -49,6 +49,7 @@
   const statusDotMob  = $("#status-indicator-mobile");
   const statusText    = $("#status-text");
   const deviceCount   = $("#device-count");
+  const userEmailEl   = $("#user-email-display");
 
   const statusBadges      = $("#status-badges");
   const overviewDevices   = $("#overview-devices");
@@ -57,6 +58,11 @@
   const sensorsDevices    = $("#sensors-devices");
   const sensorsBadges     = $("#sensors-badges");
   const sensorCharts      = $("#sensor-charts");
+
+  const overviewSearch    = $("#overview-search");
+  const lightsSearch      = $("#lights-search");
+  const switchesSearch    = $("#switches-search");
+  const sensorsSearch     = $("#sensors-search");
 
   const logBody       = $("#log-body");
   const logFilter     = $("#log-filter");
@@ -73,6 +79,11 @@
   // -------------------------------------------------------
   // Socket.IO
   // -------------------------------------------------------
+  // Default transports (polling first, then upgrade to WebSocket). Both work under
+  // eventlet: WebSocket-capable networks upgrade; networks that block WebSocket stay
+  // on long-polling, which is fine for real browsers (their engine.io parser has no
+  // per-batch packet cap, unlike python-engineio). Do NOT force websocket-only — that
+  // strands clients on WS-hostile networks with no fallback. See docs/HANDOFF.md.
   const socket = io();
   window.socket = socket; // Expose for other JS files (automation.js, settings.js)
 
@@ -82,8 +93,14 @@
     const savedEmail = localStorage.getItem("cadio_email") || loginEmail.value;
     const savedPass = localStorage.getItem("cadio_pass") || loginPass.value;
     if (savedEmail && savedPass) {
-      socket.emit("login", { email: savedEmail, password: savedPass });
+      socket.emit("login", { email: savedEmail, password: savedPass, auto: true, token: localStorage.getItem("cadio_session_token") });
     }
+  });
+
+  // Store the per-device session token so refreshes/reconnects reuse the same
+  // session row instead of creating a new one each time.
+  socket.on("session_token", (d) => {
+    if (d && d.token) localStorage.setItem("cadio_session_token", d.token);
   });
 
   // Force reconnection when app returns to foreground from iOS background freeze
@@ -116,7 +133,7 @@
     // Store credentials for auto-reconnect on page refresh
     localStorage.setItem("cadio_email", email);
     localStorage.setItem("cadio_pass", pass);
-    socket.emit("login", { email, password: pass });
+    socket.emit("login", { email, password: pass, token: localStorage.getItem("cadio_session_token") });
   });
 
   // Auto-login from localStorage on page load / reconnect
@@ -128,7 +145,7 @@
         loginSubmitBtn.disabled = true;
         loginSubmitBtn.textContent = "Logging In...";
       }
-      socket.emit("login", { email: loginEmail.value, password: loginPass.value });
+      socket.emit("login", { email: loginEmail.value, password: loginPass.value, token: localStorage.getItem("cadio_session_token") });
       return;
     }
     // Priority 2: saved credentials
@@ -141,7 +158,7 @@
         loginSubmitBtn.disabled = true;
         loginSubmitBtn.textContent = "Logging In...";
       }
-      socket.emit("login", { email: savedEmail, password: savedPass });
+      socket.emit("login", { email: savedEmail, password: savedPass, auto: true, token: localStorage.getItem("cadio_session_token") });
     }
   })();
 
@@ -162,13 +179,26 @@
     // 2. Clear credentials from localStorage
     localStorage.removeItem("cadio_email");
     localStorage.removeItem("cadio_pass");
+    localStorage.removeItem("cadio_session_token");
 
     // 3. Clear pre-filled input values to prevent Flask auto-login
     if (loginEmail) loginEmail.value = "";
     if (loginPass) loginPass.value = "";
 
-    // 4. Redirect to /logout to clear Flask session and show the message
-    window.location.href = "/logout?msg=" + encodeURIComponent(data.message || "Logged out globally.");
+    // 4. Unsubscribe Web Push on this device so notifications stop here too
+    const redirect = () => {
+      window.location.href =
+        "/logout?msg=" + encodeURIComponent(data.message || "Logged out globally.");
+    };
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.ready
+        .then(reg => reg.pushManager.getSubscription())
+        .then(sub => (sub ? sub.unsubscribe() : null))
+        .catch(e => console.error("Error unsubscribing push on force logout:", e))
+        .finally(redirect);
+    } else {
+      redirect();
+    }
   });
   socket.on("mqtt_status", (data) => {
     const connected = data.connected;
@@ -180,6 +210,13 @@
     if (connected && data.message === "Connected") {
       loginOverlay.classList.add("hidden");
       appEl.classList.remove("hidden");
+
+      // Show the logged-in user's email in the sidebar
+      const currentEmail = loginEmail.value || localStorage.getItem("cadio_email") || "";
+      if (userEmailEl && currentEmail) {
+        userEmailEl.textContent = currentEmail;
+        userEmailEl.title = currentEmail;
+      }
       
       const loginBtn = document.getElementById("login-submit-btn");
       if (loginBtn) {
@@ -191,6 +228,14 @@
       socket.emit("get_api_settings");
       // Auto-subscribe/sync Web Push notifications now that the user is authenticated
       setTimeout(subscribeUserToPush, 2000);
+
+      // If the Logbook tab is open, (re)load the logged-in devices list now that
+      // the socket is authenticated — the initial request on tab-open may have
+      // fired before login completed and returned an empty list.
+      const logTabEl = document.getElementById("tab-log");
+      if (logTabEl && logTabEl.classList.contains("active")) {
+        setTimeout(() => { try { requestUserSessions(); } catch (e) {} }, 300);
+      }
     }
     if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
       const msg = data.message.toLowerCase();
@@ -491,10 +536,10 @@
       typeGroups[bucket].push(e);
     }
 
-    renderOverviewByDevice(byDevice);
-    renderTypeTabByDevice(lightsDevices, byDevice, ["light"], true);
-    renderTypeTabByDevice(switchesDevices, byDevice, ["switch"], true);
-    renderTypeTabByDevice(sensorsDevices, byDevice, ["sensor", "binary_sensor"], false);
+    renderOverviewByDevice(byDevice, searchTerm(overviewSearch));
+    renderTypeTabByDevice(lightsDevices, byDevice, ["light"], true, searchTerm(lightsSearch));
+    renderTypeTabByDevice(switchesDevices, byDevice, ["switch"], true, searchTerm(switchesSearch));
+    renderTypeTabByDevice(sensorsDevices, byDevice, ["sensor", "binary_sensor"], false, searchTerm(sensorsSearch));
     renderBadges(statusBadges, typeGroups);
     renderSensorBadges(sensorsBadges, typeGroups.sensor);
     renderAllEntitiesList(typeGroups);
@@ -511,16 +556,29 @@
     return `${name} (${serial})`;
   }
 
-  function renderOverviewByDevice(byDevice) {
+  // Search term (lowercased) for a given tab's search input.
+  function searchTerm(input) {
+    return input && input.value ? input.value.trim().toLowerCase() : "";
+  }
+
+  // Filter a device's entity list by a search term. If the device's own name/serial
+  // matches, all its entities are kept; otherwise only entities whose name matches.
+  function filterEntitiesBySearch(serial, list, term) {
+    if (!term) return list;
+    if (deviceLabel(serial).toLowerCase().includes(term)) return list;
+    return list.filter((e) => (e.name || "").toLowerCase().includes(term));
+  }
+
+  function renderOverviewByDevice(byDevice, term) {
     if (!overviewDevices) return;
     const serials = Object.keys(byDevice);
     if (serials.length === 0) {
       overviewDevices.innerHTML = '<div class="ha-card"><div class="ha-empty-row">Waiting for devices…</div></div>';
       return;
     }
-    overviewDevices.innerHTML = serials.map((serial) => {
+    const html = serials.map((serial) => {
       const grp = byDevice[serial];
-      const allEntities = [...grp.light, ...grp.switch, ...grp.binary_sensor, ...grp.sensor, ...grp.other];
+      const allEntities = filterEntitiesBySearch(serial, [...grp.light, ...grp.switch, ...grp.binary_sensor, ...grp.sensor, ...grp.other], term);
       if (allEntities.length === 0) return "";
       const dev = devices[serial] || {};
       const subtitle = [dev.model, dev.sw_version].filter(Boolean).join(" · ");
@@ -536,6 +594,7 @@
           </div>
         </div>`;
     }).join("");
+    overviewDevices.innerHTML = html || `<div class="ha-card"><div class="ha-empty-row">No devices match your search.</div></div>`;
     // Bind toggle events
     overviewDevices.querySelectorAll(".ha-toggle input").forEach((input) => {
       input.addEventListener("change", onToggle);
@@ -544,7 +603,7 @@
     bindEntityClicks(overviewDevices);
   }
 
-  function renderTypeTabByDevice(container, byDevice, types, showToggle) {
+  function renderTypeTabByDevice(container, byDevice, types, showToggle, term) {
     if (!container) return;
     const typeArr = Array.isArray(types) ? types : [types];
     const serials = Object.keys(byDevice).filter((s) => typeArr.some((t) => byDevice[s][t].length > 0));
@@ -552,8 +611,8 @@
       container.innerHTML = '<div class="ha-card"><div class="ha-empty-row">No entities yet…</div></div>';
       return;
     }
-    container.innerHTML = serials.map((serial) => {
-      const list = typeArr.flatMap((t) => byDevice[serial][t] || []);
+    const html = serials.map((serial) => {
+      const list = filterEntitiesBySearch(serial, typeArr.flatMap((t) => byDevice[serial][t] || []), term);
       if (list.length === 0) return "";
       return `
         <div class="ha-card">
@@ -566,6 +625,7 @@
           </div>
         </div>`;
     }).join("");
+    container.innerHTML = html || `<div class="ha-card"><div class="ha-empty-row">No entities match your search.</div></div>`;
     container.querySelectorAll(".ha-toggle input").forEach((input) => {
       input.addEventListener("change", onToggle);
     });
@@ -983,10 +1043,84 @@
   }
 
   if (logFilter) logFilter.addEventListener("input", renderLogTable);
+
+  // Device search inputs (Overview / Lights / Switches / Sensors) → re-render filtered lists
+  [overviewSearch, lightsSearch, switchesSearch, sensorsSearch].forEach((input) => {
+    if (input) input.addEventListener("input", renderAll);
+  });
   if (btnClearLog) btnClearLog.addEventListener("click", () => {
     logEntries.length = 0;
     renderLogTable();
   });
+
+  // -------------------------------------------------------
+  // Logged-in Devices (user login sessions)
+  // -------------------------------------------------------
+  const sessionsList = $("#sessions-list");
+  const btnRefreshSessions = $("#btn-refresh-sessions");
+
+  function requestUserSessions() {
+    if (!sessionsList) return;
+    sessionsList.innerHTML = '<div class="ha-empty-row">Loading devices…</div>';
+    if (socket) socket.emit("list_user_sessions");
+  }
+
+  function fmtSessionTime(s) {
+    if (!s) return "—";
+    const d = new Date(s.endsWith("Z") || s.includes("+") ? s : s.replace(" ", "T") + "Z");
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleString();
+  }
+
+  function renderUserSessions(sessions) {
+    if (!sessionsList) return;
+    if (!sessions || sessions.length === 0) {
+      sessionsList.innerHTML = '<div class="ha-empty-row">No active devices.</div>';
+      return;
+    }
+    sessionsList.innerHTML = sessions.map((s) => {
+      const badges = [];
+      if (s.current) badges.push('<span class="ha-session-badge current">This device</span>');
+      badges.push(`<span class="ha-session-badge ${s.online ? "online" : "offline"}">${s.online ? "Online" : "Offline"}</span>`);
+      const logoutBtn = s.current
+        ? `<button class="ha-btn-text ha-session-logout" data-id="${escHtml(s.id)}" title="Log out this device">Log out</button>`
+        : `<button class="ha-btn-text ha-session-logout danger" data-id="${escHtml(s.id)}" title="Log out this device">Log out</button>`;
+      return `
+        <div class="ha-session-row">
+          <div class="ha-session-info">
+            <div class="ha-session-device">
+              <span class="material-symbols-outlined">${s.device.includes("Android") || s.device.includes("iOS") ? "smartphone" : "computer"}</span>
+              <span>${escHtml(s.device)}</span>
+              ${badges.join(" ")}
+            </div>
+            <div class="ha-session-meta">Signed in: ${escHtml(fmtSessionTime(s.created_at))}</div>
+          </div>
+          ${logoutBtn}
+        </div>`;
+    }).join("");
+
+    sessionsList.querySelectorAll(".ha-session-logout").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id;
+        const isCurrent = btn.classList.contains("ha-session-logout") && !btn.classList.contains("danger");
+        const msg = isCurrent
+          ? "Log out this device? You will be returned to the login screen."
+          : "Log out the selected device? It will be signed out immediately.";
+        if (!confirm(msg)) return;
+        btn.disabled = true;
+        socket.emit("logout_device", { id });
+      });
+    });
+  }
+
+  if (socket) {
+    socket.on("user_sessions", (data) => renderUserSessions(data && data.sessions));
+    socket.on("user_sessions_error", (data) => {
+      if (data && data.message) alert(data.message);
+      requestUserSessions();
+    });
+  }
+  if (btnRefreshSessions) btnRefreshSessions.addEventListener("click", requestUserSessions);
 
   // -------------------------------------------------------
   // Publish + Developer Live Log
@@ -1099,7 +1233,7 @@
     localStorage.setItem("user_active_tab", tabId);
 
     // Lazy renders
-    if (tabId === "log") renderLogTable();
+    if (tabId === "log") { renderLogTable(); requestUserSessions(); }
     if (tabId === "developer") renderDevLog();
     if (tabId === "history") renderAll();
     if (tabId === "api") {
@@ -1142,7 +1276,61 @@
   const btnLogout = document.getElementById("btn-logout");
   const confirmModal = document.getElementById("ha-confirm-modal");
   const confirmBtnLogout = document.getElementById("confirm-logout");
+  const confirmBtnLogoutDevice = document.getElementById("confirm-logout-device");
   const confirmBtnCancel = document.getElementById("confirm-cancel");
+
+  // Shared logout flow. `socketEvent` is "logout" (all devices) or
+  // "logout_this_device" (this device only); `msg` is the confirmation shown
+  // on the login screen after redirect.
+  function performLogout(socketEvent, msg) {
+    // Unsubscribe Web Push notifications on THIS device (both logout kinds
+    // sign this device out, so its push subscription should go either way).
+    // We hold the redirect until this completes so the /api/push/unsubscribe
+    // request isn't aborted by navigation (which would leave a live sub that
+    // keeps delivering notifications after logout).
+    const cleanupPush = () => {
+      if (!navigator.serviceWorker) return Promise.resolve();
+      return navigator.serviceWorker.ready
+        .then(reg => reg.pushManager.getSubscription())
+        .then(sub => {
+          if (!sub) return null;
+          return fetch("/api/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: sub.endpoint })
+          })
+            .catch(e => console.error("Error notifying server of unsubscription:", e))
+            .then(() => sub.unsubscribe())
+            .catch(e => console.error("Error unsubscribing push:", e));
+        })
+        .catch(e => console.error("Error getting push subscription on logout:", e));
+    };
+
+    // 1. Tell the server which logout to perform
+    if (socket) socket.emit(socketEvent);
+
+    // 2. Clear local data
+    localStorage.removeItem("cadio_email");
+    localStorage.removeItem("cadio_pass");
+    localStorage.removeItem("cadio_session_token");
+
+    // 3. UI Cleanup
+    appEl.classList.add("hidden");
+    loginOverlay.classList.remove("hidden");
+    loginPass.value = "";
+    loginError.classList.add("hidden");
+    if (statusText) statusText.textContent = "Disconnected";
+
+    // 4. Close modal
+    confirmModal.classList.remove("active");
+    confirmModal.style.display = "none";
+
+    // 5. Final Reset (Redirect to clear Flask session and show confirmation)
+    //    only after push cleanup has finished.
+    cleanupPush().finally(() => {
+      window.location.href = "/logout?msg=" + encodeURIComponent(msg);
+    });
+  }
 
   if (btnLogout && confirmModal) {
     btnLogout.onclick = () => {
@@ -1158,47 +1346,13 @@
     }
 
     if (confirmBtnLogout) {
-      confirmBtnLogout.onclick = () => {
-        // Unsubscribe Web Push notifications if active on this device
-        if (navigator.serviceWorker) {
-          navigator.serviceWorker.ready.then(reg => {
-            reg.pushManager.getSubscription().then(sub => {
-              if (sub) {
-                fetch("/api/push/unsubscribe", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ endpoint: sub.endpoint })
-                }).then(() => {
-                  sub.unsubscribe().catch(e => console.error("Error unsubscribing push:", e));
-                }).catch(e => console.error("Error notifying server of unsubscription:", e));
-              }
-            }).catch(e => console.error("Error getting push subscription on logout:", e));
-          });
-        }
+      confirmBtnLogout.onclick = () =>
+        performLogout("logout", "You have logged out of all devices.");
+    }
 
-        // 1. Tell the server to kill all sessions
-        if (socket) socket.emit("logout");
-
-        // 2. Clear local data
-        localStorage.removeItem("cadio_email");
-        localStorage.removeItem("cadio_pass");
-        
-        // 3. UI Cleanup
-        appEl.classList.add("hidden");
-        loginOverlay.classList.remove("hidden");
-        loginPass.value = "";
-        loginError.classList.add("hidden");
-        if (statusText) statusText.textContent = "Disconnected";
-        
-        // 4. Close modal
-        confirmModal.classList.remove("active");
-        confirmModal.style.display = "none";
-        
-        // 5. Final Reset (Redirect to clear Flask session and show confirmation)
-        setTimeout(() => {
-          window.location.href = "/logout?msg=" + encodeURIComponent("You have logged out successfully.");
-        }, 150);
-      };
+    if (confirmBtnLogoutDevice) {
+      confirmBtnLogoutDevice.onclick = () =>
+        performLogout("logout_this_device", "You have logged out of this device.");
     }
   }
 
