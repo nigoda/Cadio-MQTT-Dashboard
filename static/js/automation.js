@@ -338,10 +338,34 @@
       });
     });
     autoList.querySelectorAll(".ha-toggle input").forEach(inp => {
-      inp.addEventListener("change", (e) => {
+      inp.onchange = (e) => {
         e.stopPropagation();
-        socket.emit("toggle_automation", { id: inp.dataset.id, status: inp.checked ? "ON" : "OFF" });
-      });
+        const a = _autos[inp.dataset.id];
+        if (!a) return;
+        const isTurningOn = inp.checked;
+        if (!isTurningOn) {
+          socket.emit("toggle_automation", { id: a.id, status: "OFF" });
+          return;
+        }
+
+        inp.disabled = true; // disable while checking
+        const conflictsMap = validateRunConflicts(a);
+        inp.disabled = false;
+
+        if (conflictsMap.size > 0) {
+          inp.checked = false; // revert visual toggle
+          const parts = [...conflictsMap.entries()].map(([swName, otherAutos]) => 
+             `"${swName}" is actively used by ${[...otherAutos].join(", ")}`
+          );
+          if (window.showToastNotification) {
+             window.showToastNotification("Hardware Conflict", `Cannot run: ${parts.join("; ")}`, "error");
+          } else {
+             alert(`Cannot run: ${parts.join("; ")}`);
+          }
+        } else {
+          socket.emit("toggle_automation", { id: a.id, status: "ON" });
+        }
+      };
     });
   }
 
@@ -661,18 +685,63 @@
     const toggle = $("#irr-status-toggle");
     toggle.checked = auto.status === "ON";
     $(".toggle-text-on").textContent = auto.status === "ON" ? "ON" : "OFF";
-    toggle.onchange = () => socket.emit("toggle_automation", { id: auto.id, status: toggle.checked ? "ON" : "OFF" });
+    
+    // Clear previous errors/highlights
+    const errEl = $("#irr-run-error");
+    if (errEl) errEl.style.display = "none";
+    document.querySelectorAll(".irr-sw-row.conflict").forEach(el => el.classList.remove("conflict"));
+
+    toggle.onchange = (e) => {
+      const isTurningOn = toggle.checked;
+      if (!isTurningOn) {
+        // Turning OFF is always safe
+        socket.emit("toggle_automation", { id: auto.id, status: "OFF" });
+        return;
+      }
+
+      // Turning ON - run validation
+      const loadingEl = $("#irr-status-loading");
+      if (loadingEl) loadingEl.style.display = "block";
+      toggle.disabled = true;
+
+      const conflictsMap = validateRunConflicts(auto);
+      if (loadingEl) loadingEl.style.display = "none";
+      toggle.disabled = false;
+
+      if (conflictsMap.size > 0) {
+        toggle.checked = false; // revert toggle visually
+        const switchTopics = conflictsMap.topics;
+        
+        const parts = [...conflictsMap.entries()].map(([swName, otherAutos]) => 
+            `“${escHtml(swName)}” is actively used by ${escHtml([...otherAutos].join(", "))}`
+        );
+        if (errEl) {
+          errEl.style.display = "flex";
+          errEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>Cannot run: ${parts.join("; ")}</span>`;
+        }
+        
+        // Apply red borders to the rows
+        switchTopics.forEach(t => {
+            document.querySelectorAll(`.irr-sw-row[data-topic="${t}"]`).forEach(el => el.classList.add("conflict"));
+        });
+        
+      } else {
+        if (errEl) errEl.style.display = "none";
+        socket.emit("toggle_automation", { id: auto.id, status: "ON" });
+      }
+    };
+    toggle.onclick = null;
 
     // Init
     const initBody = $("#irr-init-body");
     const inits = auto.initialization || [];
-    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
 
     // Deinit
     const deinitBody = $("#irr-deinit-body");
     if (deinitBody) {
       const deinits = auto.deinitialization || [];
-      deinitBody.innerHTML = deinits.map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+      deinitBody.innerHTML = deinits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
     }
 
     // Condition
@@ -696,7 +765,7 @@
       let status = "⏳ Pending";
       if (i < idx) status = "✔ Done";
       if (isActive) status = "▶ " + (rt.state === "ACTION_RUN" ? "Running" : "Processing");
-      return `<tr class="${isActive ? "active-action" : ""}"><td>${i + 1}</td><td>${escHtml(a.switchName || "Switch")}</td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
+      return `<tr class="${isActive ? "active-action irr-sw-row" : "irr-sw-row"}" data-topic="${escHtml(a.switchCmdTopic || "")}"><td>${i + 1}</td><td>${escHtml(a.switchName || "Switch")}</td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
     }).join("")}</tbody></table>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No actions configured</span>';
 
     // Error state
@@ -752,12 +821,12 @@
       </div>
     </div>${schedCondHTML}`;
 
-    const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+    const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
     const setFalseHTML = (sched.setIfFalse || []).map(i => {
       const topic = i.switchCmdTopic || "";
       const isYielded = (auto.runtime?.yielded_switches || []).includes(topic);
       const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active automation">warning</span>` : "";
-      return `<div class="irr-sw-row"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
     }).join("");
 
     if (setTrueHTML || setFalseHTML) {
@@ -921,7 +990,7 @@
 
     // Reset conflict validation state (rows are freshly rendered, so any old
     // red outlines are gone; just clear the banner and the live-check flag).
-    _liveValidate = false;
+    $("#auto-modal-warning")?.classList.add("hidden");
     const warnEl = $("#auto-modal-warning");
     if (warnEl) { warnEl.classList.add("hidden"); warnEl.innerHTML = ""; }
 
@@ -1273,8 +1342,7 @@
   // any switch). Switches are considered across Initialization, Set-if-True,
   // Set-if-False and Actions.
   const SWITCH_CONTAINERS = ["auto-f-init", "auto-f-deinit", "auto-f-set-true", "auto-f-set-false", "auto-f-actions"];
-  let _liveValidate = false; // once a save is blocked, re-check on every edit
-
+  // A physical switch must not be driven by two automations whose schedules
   function _schedIntervals(sched) {
     // Return [startMin, endMin) intervals within a day (matches backend check_schedule).
     sched = sched || {};
@@ -1364,12 +1432,12 @@
     return { days, is24hr, timeRanges, utcOffset };
   }
 
-  // Highlight conflicting switch selects, toggle the warning banner, and return
-  // true only when there are NO conflicts (i.e. saving is allowed).
+  // Highlight conflicting switch selects, toggle the warning banner, and return true.
+  // Saving is always allowed, this is just a warning.
   function validateSwitchConflicts() {
     const warnEl = $("#auto-modal-warning");
     SWITCH_CONTAINERS.forEach(cid => {
-      $(`#${cid}`)?.querySelectorAll(".f-switch.conflict").forEach(el => el.classList.remove("conflict"));
+      $(`#${cid}`)?.querySelectorAll(".f-switch.warning-conflict").forEach(el => el.classList.remove("warning-conflict"));
     });
 
     const sched = _collectScheduleLite();
@@ -1391,7 +1459,7 @@
       $(`#${cid}`)?.querySelectorAll(".f-switch").forEach(sel => {
         const topic = sel.value;
         if (topic && topicToAutos.has(topic)) {
-          sel.classList.add("conflict");
+          sel.classList.add("warning-conflict");
           const swName = sel.selectedOptions[0]?.dataset.name || topic;
           if (!conflicts.has(swName)) conflicts.set(swName, new Set());
           topicToAutos.get(topic).forEach(n => conflicts.get(swName).add(n));
@@ -1399,28 +1467,84 @@
       });
     });
 
-    if (!warnEl) return conflicts.size === 0;
+    if (!warnEl) return true;
     if (conflicts.size === 0) {
       warnEl.classList.add("hidden");
+      warnEl.classList.remove("warning");
       warnEl.innerHTML = "";
       return true;
     }
     const parts = [...conflicts.entries()].map(([sw, autos]) =>
-      `“${escHtml(sw)}” is already used by ${escHtml([...autos].join(", "))}`);
-    warnEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>${parts.join("; ")} during an overlapping time window. Change or remove the highlighted switch(es) before saving.</span>`;
+      `“${escHtml(sw)}” is used by ${escHtml([...autos].join(", "))}`);
+    warnEl.classList.add("warning");
     warnEl.classList.remove("hidden");
-    return false;
+    warnEl.innerHTML = `<span class="material-symbols-outlined">warning</span><span>${parts.join("; ")} during an overlapping time window. This is allowed, but may cause conflicts if both are turned on.</span>`;
+    return true;
   }
 
-  // Once a save has been blocked, keep the highlights/banner in sync as the user
-  // edits switches, days, times or the 24-hour toggle.
-  const _maybeLiveValidate = () => { if (_liveValidate) validateSwitchConflicts(); };
+  // Validates an automation before it is turned ON (status -> ON).
+  // Checks only against other automations that are already ON.
+  // Returns a Map of switchCmdTopic -> Set(other automation names).
+  function validateRunConflicts(autoToRun) {
+    const conflicts = new Map();
+    // Re-use the existing logic to calculate its schedule
+    // The auto obj might not have timeRanges formatted exactly like the modal's DOM extraction,
+    // but _weeklyUtcIntervals expects the raw backend auto.schedule object!
+    const schedToRun = autoToRun.schedule || {};
+    
+    // switchCmdTopic -> Set of other automation names overlapping in schedule
+    for (const id in _autos) {
+      if (id == autoToRun.id) continue;
+      const other = _autos[id];
+      if (other.status !== "ON") continue;
+      
+      if (!schedulesOverlap(schedToRun, other.schedule || {})) continue;
+      
+      const otherTopics = switchTopicsOfAuto(other);
+      const myTopics = switchTopicsOfAuto(autoToRun);
+      
+      for (const t of myTopics) {
+        if (otherTopics.has(t)) {
+          if (!conflicts.has(t)) conflicts.set(t, new Set());
+          conflicts.get(t).add(other.name || "Unnamed");
+        }
+      }
+    }
+    
+    // We want to map topics to names, or map switchNames to names?
+    // In updateCardDetails we use topics to find DOM nodes, and we map to names for the error string.
+    // We can just return a Map of switchNames -> Set(other names), AND return the topics.
+    // Let's return a Map of switchName -> Set(other names).
+    const conflictsByName = new Map();
+    for (const t of conflicts.keys()) {
+      // Find the name of this switch from autoToRun
+      let swName = t;
+      const check = (arr) => (arr||[]).forEach(x => { if (x.switchCmdTopic === t && x.switchName) swName = x.switchName; });
+      check(autoToRun.initialization);
+      check(autoToRun.deinitialization);
+      check(autoToRun.actions);
+      check(autoToRun.schedule?.setIfTrue);
+      check(autoToRun.schedule?.setIfFalse);
+      
+      if (!conflictsByName.has(swName)) conflictsByName.set(swName, new Set());
+      conflicts.get(t).forEach(n => conflictsByName.get(swName).add(n));
+    }
+    
+    return {
+       size: conflicts.size,
+       topics: Array.from(conflicts.keys()),
+       entries: () => conflictsByName.entries()
+    };
+  }
+
+  // Keep the highlights/banner in sync as the user edits switches, days, times or the 24-hour toggle.
+  const _maybeLiveValidate = () => { validateSwitchConflicts(); };
   modalOverlay?.addEventListener("change", _maybeLiveValidate);
   modalOverlay?.addEventListener("input", _maybeLiveValidate);
   modalOverlay?.addEventListener("click", (e) => {
-    if (!_liveValidate) return;
-    if (e.target.classList?.contains("irr-day-btn") || e.target.closest(".irr-remove-btn")) {
-      validateSwitchConflicts();
+    if (e.target.classList?.contains("irr-day-btn") || e.target.closest(".irr-remove-btn") || e.target.closest(".irr-add-btn")) {
+      // Small timeout to allow DOM changes (like adding a row or toggling a class) to settle
+      setTimeout(validateSwitchConflicts, 0);
     }
   });
 
@@ -1428,7 +1552,7 @@
   $("#auto-modal-save")?.addEventListener("click", () => {
     const data = collectFormData();
     if (!data) return;
-    if (!validateSwitchConflicts()) { _liveValidate = true; return; }
+    if (!validateSwitchConflicts()) { return; }
     if (_editId) {
       data.id = _editId;
       socket.emit("update_automation", data);

@@ -207,8 +207,11 @@ def get_7_day_forecast(lat=DEFAULT_LAT, lon=DEFAULT_LON):
     combined.update(result.get("forecast", {}))
     return combined
 
-def build_automation_context(auto_id, auto_data):
+def build_automation_context(auto_id, auto_data, occupied_days=None):
     """Extracts relevant info from an automation config for the AI."""
+    if occupied_days is None:
+        occupied_days = []
+    
     total_duration = 0
     for action in auto_data.get("actions", []):
         try:
@@ -256,7 +259,8 @@ def build_automation_context(auto_id, auto_data):
         "lat": sched.get("lat"),
         "lon": sched.get("lon"),
         "ai_thresholds": sched.get("ai_thresholds", {}),
-        "ai_custom_rules": sched.get("ai_custom_rules", "")
+        "ai_custom_rules": sched.get("ai_custom_rules", ""),
+        "occupied_days": occupied_days
     }
 
 def get_ai_schedule_decision(weather_data, auto_context, timeout=60):
@@ -295,9 +299,18 @@ def get_ai_schedule_decision(weather_data, auto_context, timeout=60):
     if custom_rules:
         custom_rules_section = f"\n11. USER CUSTOM GUIDELINES (Strictly prioritize these custom instructions and override default rules if they conflict):\n{custom_rules}\n"
 
+    occupied_days = auto_context.get("occupied_days", [])
+    occupied_days_section = ""
+    if occupied_days:
+        occupied_days_section = f"\nCRITICAL: The following days are ALREADY OCCUPIED by higher-priority automations and MUST NOT be selected under any circumstances: {', '.join(occupied_days)}\n"
+
     system_prompt = "You are an expert Agronomist AI that decides optimal irrigation schedules. Analyze weather data and output ONLY valid raw JSON."
     user_prompt = f"""TODAY is {today_day}, {today_str}.
 Decide the optimal days to run irrigation for the UPCOMING 7 days based on ALL the data below.
+{occupied_days_section}
+### 1. Automation Profile (What we are watering)
+- **ID**: {auto_context['automation_id']}
+- **Name**: {auto_context['name']}
 
 RULES:
 1. Do NOT schedule irrigation on days with heavy rain (> {rain_th}mm precipitation) or high probability of rain.

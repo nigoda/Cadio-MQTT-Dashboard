@@ -351,15 +351,18 @@
                                 </div>
                                 <div class="irr-state-cell irr-status-cell" style="justify-content:center;">
                                     <span class="irr-label" style="margin-bottom:2px">Status</span>
-                                    <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap"
-                                        style="margin: 0 12px;">
-                                        <input type="checkbox" id="irr-status-toggle">
-                                        <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
-                                        <span class="ha-toggle-thumb"></span>
-                                    </label>
+                                    <div style="display:flex; align-items:center; gap:8px;">
+                                        <label class="ha-toggle irr-custom-toggle" id="irr-toggle-wrap" style="margin: 0;">
+                                            <input type="checkbox" id="irr-status-toggle">
+                                            <span class="ha-toggle-track"><span class="toggle-text-on">ON</span></span>
+                                            <span class="ha-toggle-thumb"></span>
+                                        </label>
+                                        <div id="irr-status-loading" class="ha-spinner" style="display:none; width:16px; height:16px; border-width:2px; border-top-color:var(--ha-primary)"></div>
+                                    </div>
                                     <span class="irr-cell-sub irr-status-desc" style="margin-top:2px">Automation Enabled</span>
                                 </div>
                             </div>
+                            <div id="irr-run-error" class="irr-run-error-banner" style="display:none;"></div>
                             <!-- Sections grid -->
                             <div class="irr-sections-grid">
                                 <div class="irr-section" id="irr-init-section">
@@ -971,6 +974,21 @@ NO     → Device is offline (Last Will message from broker)</pre>
                             </div>
 
                             <button id="btn-save-settings" class="ha-btn-primary" style="width: 100%; border-radius: 12px; height: 48px; font-weight: 500;">Save Personal Key</button>
+                        </div>
+                    </div>
+
+                    <!-- Global AI Priority List -->
+                    <div class="ha-card">
+                        <div class="ha-card-header">
+                            <span class="material-symbols-outlined">sort</span> Global AI Priority List
+                        </div>
+                        <div class="ha-api-section">
+                            <p style="color:var(--ha-text-secondary); font-size:0.9rem; margin-bottom:15px;">
+                                Rearrange automations to control which ones the AI schedules first. Higher in the list means higher priority.
+                            </p>
+                            <div id="ai-priority-list" style="display:flex; flex-direction:column; gap:8px;">
+                                <!-- Rendered dynamically by settings.js -->
+                            </div>
                         </div>
                     </div>
                 </div>

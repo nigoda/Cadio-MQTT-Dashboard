@@ -1800,7 +1800,7 @@ def _emit_auto_update(auto):
         socketio.emit("automation_update", {"automation": safe, "logs": logs})
 
 
-def engine_tick(auto, active_overrides=None):
+def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
     """Execute one tick of the state machine for an automation."""
     rt = auto["runtime"]
     state = rt["state"]
@@ -2036,12 +2036,13 @@ def engine_tick(auto, active_overrides=None):
             topic = item.get("switchCmdTopic", "")
             
             # Global Priority Check:
-            # If this automation is enforcing setIfFalse (because its schedule is inactive),
-            # but another automation has an active claim (action or setIfTrue) on this exact
-            # switch, we must yield and skip enforcement so they don't fight.
-            if not sched_is_true and active_overrides and topic in active_overrides:
-                yielded_this_tick.append(topic)
-                continue
+            # We ONLY yield if we are enforcing setIfFalse (inactive schedule).
+            # If we are enforcing setIfTrue, we never yield (it strictly overrides everything).
+            if not sched_is_true:
+                if (sequence_overrides and topic in sequence_overrides) or \
+                   (schedule_overrides and topic in schedule_overrides):
+                    yielded_this_tick.append(topic)
+                    continue
                 
             last_sent_key = f"_last_sent_{topic}"
             retry_key = f"_retry_{topic}"
@@ -2060,8 +2061,10 @@ def engine_tick(auto, active_overrides=None):
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[last_sent_key] = now
                     rt[retry_key] = retries + 1
-                    level = "info" if retries == 0 else "warning"
-                    _auto_log(auto_id, f"Scheduler background enforce: {item.get('switchName')} → {item.get('state')} (Attempt {retries + 1}/{MAX_RETRIES})", level)
+                    if retries == 0:
+                        _auto_log(auto_id, f"Scheduler drift detected on {item.get('switchName', topic)} — correcting to {item.get('state')}", "warning")
+                    else:
+                        _auto_log(auto_id, f"Scheduler drift correction retry {retries + 1}/{MAX_RETRIES} on {item.get('switchName', topic)} → {item.get('state')}", "warning")
                     _emit_auto_update(auto)
             else:
                 if retry_key in rt:
@@ -2730,34 +2733,36 @@ def _engine_loop():
     _last_db_save = time.time()
     while _engine_running:
         # Build global active overrides per session
-        active_overrides = collections.defaultdict(set)
+        sequence_overrides = collections.defaultdict(set)
+        schedule_overrides = collections.defaultdict(set)
         try:
             for session, auto_id, auto in session_mgr.get_all_automations():
                 state = auto.get("runtime", {}).get("state", "IDLE")
-                # 1. Any currently executing action claims the switch
-                actions = auto.get("actions", [])
-                idx = auto.get("runtime", {}).get("currentActionIndex", 0)
-                if state in ("ACTION_RUN", "ACTION_SET", "ACTION_DRIFT_VERIFY", "OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY"):
-                    if idx < len(actions):
-                        ctrl = actions[idx].get("switchCmdTopic", "") or actions[idx].get("switchStateTopic", "")
-                        if ctrl: active_overrides[session.email].add(ctrl)
-                    if state in ("OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY") and len(actions) > 0:
-                        next_idx = (idx + 1) % len(actions)
-                        ctrl = actions[next_idx].get("switchCmdTopic", "") or actions[next_idx].get("switchStateTopic", "")
-                        if ctrl: active_overrides[session.email].add(ctrl)
+                # 1. Any currently executing automation claims ALL its switches (actions, init, deinit)
+                if state not in ("IDLE", "ERROR", "ERROR_SET", "ERROR_VERIFY", "PAUSED_NETWORK"):
+                    for item in auto.get("actions", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: sequence_overrides[session.email].add(ctrl)
+                    for item in auto.get("initialization", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: sequence_overrides[session.email].add(ctrl)
+                    for item in auto.get("deinitialization", []):
+                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                        if ctrl: sequence_overrides[session.email].add(ctrl)
                 
-                # 2. Any active schedule's setIfTrue claims the switch
+                
+                # 2. Any active schedule's setIfTrue claims the switch as a schedule override
                 if check_schedule(auto):
                     for item in auto.get("schedule", {}).get("setIfTrue", []):
                         ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                        if ctrl: active_overrides[session.email].add(ctrl)
+                        if ctrl: schedule_overrides[session.email].add(ctrl)
         except Exception as e:
             logging.error(f"[ENGINE] Error building active overrides: {e}")
 
         # Tick all session-based automations (multi-tenant)
         for session, auto_id, auto in session_mgr.get_all_automations():
             try:
-                engine_tick(auto, active_overrides.get(session.email, set()))
+                engine_tick(auto, sequence_overrides.get(session.email, set()), schedule_overrides.get(session.email, set()))
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
         # Periodic DB save every 60 seconds
@@ -2874,6 +2879,46 @@ def _ai_scheduler_loop():
         time.sleep(60)  # check every minute
 
 
+def _schedules_overlap(a, b):
+    """Check if two automations overlap in time ranges AND share at least one switch."""
+    def get_switches(auto):
+        switches = set()
+        for x in auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("actions", []):
+            if "switchCmdTopic" in x: switches.add(x["switchCmdTopic"])
+        return switches
+
+    if not get_switches(a).intersection(get_switches(b)):
+        return False
+        
+    sched_a = a.get("schedule", {})
+    sched_b = b.get("schedule", {})
+    
+    if sched_a.get("is24hr") or sched_b.get("is24hr"):
+        return True
+        
+    def parse_time(t_str):
+        if not t_str: return 0
+        try:
+            h, m = t_str.split(":")
+            return int(h) * 60 + int(m)
+        except:
+            return 0
+            
+    ra = sched_a.get("timeRanges", [])
+    rb = sched_b.get("timeRanges", [])
+    if not ra or not rb:
+        return False
+        
+    for rangeA in ra:
+        for rangeB in rb:
+            sA = parse_time(rangeA.get("start", "00:00"))
+            eA = parse_time(rangeA.get("end", "23:59"))
+            sB = parse_time(rangeB.get("start", "00:00"))
+            eB = parse_time(rangeB.get("end", "23:59"))
+            if sA <= eB and sB <= eA:
+                return True
+    return False
+
 def _run_ai_for_automation(auto_id):
     """Helper to run the AI engine for a single automation."""
     global _ai_running_set
@@ -2943,7 +2988,16 @@ def _run_ai_for_automation(auto_id):
             _emit_auto_update(auto)
             return
 
-        ctx = build_automation_context(auto_id, auto)
+        occupied_days = set()
+        all_autos = list(session_mgr.get_all_automations())
+        for other_sess, other_id, other_auto in all_autos:
+            if other_id == auto_id: continue
+            if other_auto.get("status") != "ON": continue
+            if _schedules_overlap(auto, other_auto):
+                days = other_auto.get("schedule", {}).get("days", [])
+                occupied_days.update(days)
+
+        ctx = build_automation_context(auto_id, auto, list(occupied_days))
         decision = get_ai_schedule_decision(weather_data, ctx)
         if not decision:
             _auto_log(auto_id, "AI failed: model returned no decision", level="error")
@@ -3036,8 +3090,12 @@ def _run_ai_for_automation(auto_id):
 
 
 def _run_ai_for_all_automations():
-    """Run the AI agent for every automation that has ai_enabled=True."""
-    for session, auto_id, auto in session_mgr.get_all_automations():
+    """Run the AI agent for every automation that has ai_enabled=True, ordered by ai_priority."""
+    all_autos = list(session_mgr.get_all_automations())
+    # Sort by ai_priority (default 99999), lower number = higher priority (executes first)
+    all_autos.sort(key=lambda x: x[2].get("ai_priority", 99999))
+    
+    for session, auto_id, auto in all_autos:
         _run_ai_for_automation(auto_id)
 
 
@@ -3135,6 +3193,23 @@ def handle_update_api_settings(data):
     emit("api_settings", safe_settings)
     
     emit("log_message", {"entity": "System", "state": "API Settings Updated"})
+
+@socketio.on("update_ai_priority")
+def handle_update_ai_priority(data):
+    import db
+    user_email = _get_user_email()
+    id_priority_map = data.get("priorities", {})
+    if id_priority_map:
+        db.update_automation_priorities(user_email, id_priority_map)
+        
+        # Also update in-memory session
+        sess = session_mgr.get_session_by_sid(request.sid)
+        if sess:
+            for auto_id, prio in id_priority_map.items():
+                if auto_id in sess.automations:
+                    sess.automations[auto_id]["ai_priority"] = prio
+        
+        emit("log_message", {"entity": "System", "state": "AI Priorities Updated"})
 
 
 @socketio.on("create_automation")

@@ -1588,6 +1588,35 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
   border-color: var(--ha-red);
   box-shadow: 0 0 0 1px var(--ha-red);
 }
+/* Orange outline for edit-time warnings */
+.irr-form-row select.f-switch.warning-conflict {
+  border-color: var(--ha-warning, #ff9800);
+  box-shadow: 0 0 0 1px var(--ha-warning, #ff9800);
+}
+.irr-modal-warning.warning {
+  background: rgba(255, 152, 0, 0.1);
+  color: var(--ha-warning, #ff9800);
+  border: 1px solid rgba(255, 152, 0, 0.2);
+}
+.irr-run-error-banner {
+  background: rgba(244, 67, 54, 0.1);
+  color: var(--ha-red);
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  border: 1px solid rgba(244, 67, 54, 0.2);
+}
+.irr-run-error-banner .material-symbols-outlined { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+.irr-sw-row.conflict {
+  border: 1px solid var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+  border-radius: 4px;
+}
 /* Modal Card Layout */
 .irr-modal-card {
   background: var(--ha-surface, #1c2333);

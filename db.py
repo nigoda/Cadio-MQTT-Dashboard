@@ -160,6 +160,8 @@ def _migrate_columns(conn):
         ("users", "blocked_at", "TEXT"),
         # Legacy columns we need for migration
         ("users", "api_key_b64", "TEXT DEFAULT ''"),
+        # Automations AI priority
+        ("automations", "ai_priority", "INTEGER DEFAULT 99999"),
     ]
     for table, column, col_type in migrations:
         try:
@@ -506,7 +508,7 @@ def _auto_to_row(user_email, auto):
     runtime = auto.get("runtime", {})
     config = {}
     for k, v in auto.items():
-        if k not in ("id", "name", "description", "status", "runtime", "logs"):
+        if k not in ("id", "name", "description", "status", "runtime", "logs", "ai_priority"):
             config[k] = v
     return (
         auto["id"],
@@ -516,6 +518,7 @@ def _auto_to_row(user_email, auto):
         auto.get("status", "OFF"),
         json.dumps(config, default=str),
         json.dumps(runtime, default=str),
+        auto.get("ai_priority", 99999),
         datetime.utcnow().isoformat(),
     )
 
@@ -527,6 +530,7 @@ def _row_to_auto(row):
         "name": row["name"],
         "description": row["description"],
         "status": row["status"],
+        "ai_priority": row["ai_priority"] if "ai_priority" in row.keys() else 99999,
     }
     config = json.loads(row["config_json"] or "{}")
     auto.update(config)
@@ -540,14 +544,15 @@ def save_automation(user_email, auto):
     conn = _get_conn()
     vals = _auto_to_row(user_email, auto)
     conn.execute(
-        """INSERT INTO automations (id, user_email, name, description, status, config_json, runtime_json, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """INSERT INTO automations (id, user_email, name, description, status, config_json, runtime_json, ai_priority, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
                name = excluded.name,
                description = excluded.description,
                status = excluded.status,
                config_json = excluded.config_json,
                runtime_json = excluded.runtime_json,
+               ai_priority = excluded.ai_priority,
                updated_at = excluded.updated_at""",
         vals
     )
@@ -581,6 +586,20 @@ def delete_automation(auto_id):
     conn = _get_conn()
     conn.execute("DELETE FROM automation_logs WHERE automation_id = ?", (auto_id,))
     conn.execute("DELETE FROM automations WHERE id = ?", (auto_id,))
+    conn.commit()
+
+
+def update_automation_priorities(user_email, id_priority_map):
+    """Bulk update ai_priority for multiple automations."""
+    user_email = user_email.lower()
+    conn = _get_conn()
+    now = datetime.utcnow().isoformat()
+    # Using executemany for bulk update
+    data = [(priority, now, auto_id, user_email) for auto_id, priority in id_priority_map.items()]
+    conn.executemany(
+        "UPDATE automations SET ai_priority = ?, updated_at = ? WHERE id = ? AND user_email = ?",
+        data
+    )
     conn.commit()
 
 
