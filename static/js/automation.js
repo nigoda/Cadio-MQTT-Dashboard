@@ -790,7 +790,7 @@
       const isYielded = isActionPhase && (auto.runtime?.yielded_switches || []).includes(topic);
       const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
 
-      return `<tr class="${isActive ? "active-action irr-sw-row" : "irr-sw-row"}" data-topic="${escHtml(topic)}"><td>${i + 1}</td><td><span style="display:inline-flex;align-items:center;">${escHtml(a.switchName || "Switch")}${yieldIcon}</span></td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
+      return `<tr class="${isActive ? "active-action" : ""}" data-topic="${escHtml(topic)}"><td>${i + 1}</td><td><span style="display:inline-flex;align-items:center;">${escHtml(a.switchName || "Switch")}${yieldIcon}</span></td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
     }).join("")}</tbody></table>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No actions configured</span>';
 
     // Error state
