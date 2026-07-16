@@ -925,7 +925,30 @@
     const logEl = $("#irr-activity-log");
     const logs = auto.logs || [];
     logEl.innerHTML = logs.length > 0 ? `<div class="irr-log-list">${logs.slice(0, 15).map(l => {
-      const t = l.ts ? new Date(l.ts).toLocaleTimeString() : "";
+      let t = "";
+      if (l.ts) {
+        // Parse the timestamp. If the backend sent a naive string, append 'Z' so JS treats it as absolute UTC.
+        // If it already has a Z or offset, it will parse correctly.
+        let tsStr = l.ts;
+        if (!tsStr.endsWith("Z") && !tsStr.includes("+") && !tsStr.includes("-", 10)) {
+            tsStr += "Z"; 
+        }
+        const utcMs = new Date(tsStr).getTime();
+        
+        if (!isNaN(utcMs)) {
+            // Apply the automation's timezone offset
+            const offsetMins = auto?.schedule?.utcOffset ?? new Date().getTimezoneOffset();
+            const targetMs = utcMs - (offsetMins * 60000);
+            const d = new Date(targetMs);
+            
+            let h = d.getUTCHours();
+            let m = d.getUTCMinutes();
+            let s = d.getUTCSeconds();
+            const ampm = h >= 12 ? 'pm' : 'am';
+            h = h % 12 || 12;
+            t = `${h}:${m < 10 ? '0'+m : m}:${s < 10 ? '0'+s : s} ${ampm}`;
+        }
+      }
       return `<div class="irr-log-entry"><span class="irr-log-dot ${l.level || 'info'}"></span><span class="irr-log-time">${escHtml(t)}</span><span>${escHtml(l.msg || "")}</span></div>`;
     }).join("")}</div>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No activity yet</span>';
 

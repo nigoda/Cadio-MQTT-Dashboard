@@ -1373,8 +1373,10 @@ def _auto_log(auto_id, message, level="info"):
     if not auto:
         auto = automations.get(auto_id)
 
-    now = _get_auto_now(auto)
-    entry = {"ts": now.isoformat(), "msg": message, "level": level}
+    # We log absolute UTC time so the frontend can dynamically shift it 
+    # to the automation's currently configured timezone, even if it changes later.
+    now_utc = datetime.utcnow()
+    entry = {"ts": now_utc.isoformat() + "Z", "msg": message, "level": level}
 
     if sess:
         if auto_id not in sess.automation_logs:
