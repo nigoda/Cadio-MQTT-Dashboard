@@ -1836,11 +1836,23 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 return
             if idx < len(deinits):
                 item = deinits[idx]
-                _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"), auto)
-                rt["verifyStart"] = now
-                rt["state"] = "DEINIT_VERIFY_INDIVIDUAL"
-                _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} sent → DEINIT_VERIFY_INDIVIDUAL")
-                _emit_auto_update(auto)
+                topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                if schedule_overrides and topic in schedule_overrides:
+                    _auto_log(auto_id, f"Yielding DEINIT on {item.get('switchName', 'switch')} to active schedule", "warning")
+                    if "deinit_yielded" not in rt:
+                        rt["deinit_yielded"] = []
+                    rt["deinit_yielded"].append(topic)
+                    
+                    rt["currentDeinitIndex"] = idx + 1
+                    rt["state"] = "DEINIT_SET"
+                    rt["retryCount"] = 0
+                    _emit_auto_update(auto)
+                else:
+                    _mqtt_set_switch(topic, item.get("state", "OFF"), auto)
+                    rt["verifyStart"] = now
+                    rt["state"] = "DEINIT_VERIFY_INDIVIDUAL"
+                    _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} sent → DEINIT_VERIFY_INDIVIDUAL")
+                    _emit_auto_update(auto)
             else:
                 rt["verifyStart"] = now
                 rt["state"] = "DEINIT_VERIFY_ALL"
@@ -1852,11 +1864,15 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             idx = rt.get("currentDeinitIndex", 0)
             if idx < len(deinits):
                 item = deinits[idx]
-                if _verify_switches([item], auto):
+                topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                yielded = rt.get("deinit_yielded", [])
+                
+                if topic in yielded or _verify_switches([item], auto):
                     rt["currentDeinitIndex"] = idx + 1
                     rt["state"] = "DEINIT_SET"
                     rt["retryCount"] = 0
-                    _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} verified")
+                    if topic not in yielded:
+                        _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} verified")
                     _emit_auto_update(auto)
                 elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
                     rt["retryCount"] = rt.get("retryCount", 0) + 1
@@ -1864,6 +1880,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                         # Status is already OFF; don't network-pause — just settle to IDLE.
                         rt["state"] = "IDLE"
                         rt["currentDeinitIndex"] = 0
+                        rt.pop("deinit_yielded", None)
                         _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} not responding → IDLE", "warning")
                         _emit_auto_update(auto)
                     else:
@@ -1875,7 +1892,10 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             return
 
         if state == "DEINIT_VERIFY_ALL":
-            if not deinits or _verify_switches(deinits, auto):
+            yielded = rt.get("deinit_yielded", [])
+            active_deinits = [sw for sw in deinits if (sw.get("switchCmdTopic", "") or sw.get("switchStateTopic", "")) not in yielded]
+            
+            if not active_deinits or _verify_switches(active_deinits, auto):
                 rt["state"] = "IDLE"
                 rt["currentDeinitIndex"] = 0
                 rt["currentActionIndex"] = 0
@@ -1883,6 +1903,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 rt["remainingTime"] = None
                 rt["retryCount"] = 0
                 rt["pauseReason"] = None
+                rt.pop("deinit_yielded", None)
                 _auto_log(auto_id, "All deinitialization verified → IDLE")
                 _emit_auto_update(auto)
             elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
@@ -1890,6 +1911,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 if rt["retryCount"] >= MAX_RETRIES:
                     rt["state"] = "IDLE"
                     rt["currentDeinitIndex"] = 0
+                    rt.pop("deinit_yielded", None)
                     _auto_log(auto_id, "Bulk deinit not responding → IDLE", "warning")
                     _emit_auto_update(auto)
                 else:
@@ -2746,9 +2768,8 @@ def _engine_loop():
                     for item in auto.get("initialization", []):
                         ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
                         if ctrl: sequence_overrides[session.email].add(ctrl)
-                    for item in auto.get("deinitialization", []):
-                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                        if ctrl: sequence_overrides[session.email].add(ctrl)
+                    # NOTE: We DO NOT add deinitialization to sequence_overrides.
+                    # This allows active schedules to enforce their ON state without yielding to DEINIT.
                 
                 
                 # 2. Any active schedule's setIfTrue claims the switch as a schedule override
