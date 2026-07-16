@@ -1564,8 +1564,15 @@ def _enter_network_pause(auto, rt, now, resume_state, reason="not_obeying", retr
 
 def _resume_network_pause(auto, rt, now):
     """Restore frozen timers and resume from the pre-pause state."""
-    rt["state"] = rt.get("prePauseNetwork", "IDLE")
-    rt["isNetworkRetry"] = True
+    resume_state = rt.get("prePauseNetwork", "IDLE")
+    rt["state"] = resume_state
+    
+    # Only mask the UI state as retrying if we are actively retrying a command/verification
+    if resume_state.endswith("_SET") or "VERIFY" in resume_state:
+        rt["isNetworkRetry"] = True
+    else:
+        rt.pop("isNetworkRetry", None)
+        
     if rt.get("remainingTime") is not None:
         rt["timerStart"] = now
     if rt.get("remainingBuffer") is not None:
