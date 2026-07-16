@@ -1558,6 +1558,7 @@ def _enter_network_pause(auto, rt, now, resume_state, reason="not_obeying", retr
 def _resume_network_pause(auto, rt, now):
     """Restore frozen timers and resume from the pre-pause state."""
     rt["state"] = rt.get("prePauseNetwork", "IDLE")
+    rt["isNetworkRetry"] = True
     if rt.get("remainingTime") is not None:
         rt["timerStart"] = now
     if rt.get("remainingBuffer") is not None:
@@ -1825,38 +1826,62 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
         deinits = auto.get("deinitialization", [])
 
         # Deinitialization runs once when the automation is switched OFF: set each
-        # switch, verify it individually, then verify them all together (same
-        # set→verify→verify-all pattern as Initialization) before settling to IDLE.
+        # switch, verify it individually, before settling to IDLE.
         if state == "DEINIT_SET":
             idx = rt.get("currentDeinitIndex", 0)
             if not deinits:
-                rt["verifyStart"] = now
-                rt["state"] = "DEINIT_VERIFY_ALL"
+                rt["state"] = "IDLE"
+                rt["currentDeinitIndex"] = 0
+                rt["currentActionIndex"] = 0
+                rt["timerStart"] = None
+                rt["remainingTime"] = None
+                rt["retryCount"] = 0
+                rt["pauseReason"] = None
                 _emit_auto_update(auto)
                 return
             if idx < len(deinits):
                 item = deinits[idx]
                 topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                if schedule_overrides and topic in schedule_overrides:
-                    _auto_log(auto_id, f"Yielding DEINIT on {item.get('switchName', 'switch')} to active schedule", "warning")
-                    if "deinit_yielded" not in rt:
-                        rt["deinit_yielded"] = []
-                    rt["deinit_yielded"].append(topic)
+                
+                # Check if ANY OTHER automation has claimed this switch
+                is_claimed_by_other = False
+                for other_id, claims in (sequence_overrides or {}).items():
+                    if other_id != auto_id and topic in claims:
+                        is_claimed_by_other = True
+                        break
+                for other_id, claims in (schedule_overrides or {}).items():
+                    if other_id != auto_id and topic in claims:
+                        is_claimed_by_other = True
+                        break
+
+                if is_claimed_by_other:
+                    _auto_log(auto_id, f"Yielding DEINIT on {item.get('switchName', 'switch')} to active sequence/schedule", "warning")
+                    if "yielded_switches" not in rt:
+                        rt["yielded_switches"] = []
+                    if topic not in rt["yielded_switches"]:
+                        rt["yielded_switches"].append(topic)
                     
                     rt["currentDeinitIndex"] = idx + 1
                     rt["state"] = "DEINIT_SET"
                     rt["retryCount"] = 0
                     _emit_auto_update(auto)
                 else:
+                    if topic in rt.get("yielded_switches", []):
+                        rt["yielded_switches"].remove(topic)
                     _mqtt_set_switch(topic, item.get("state", "OFF"), auto)
                     rt["verifyStart"] = now
                     rt["state"] = "DEINIT_VERIFY_INDIVIDUAL"
                     _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} sent → DEINIT_VERIFY_INDIVIDUAL")
                     _emit_auto_update(auto)
             else:
-                rt["verifyStart"] = now
-                rt["state"] = "DEINIT_VERIFY_ALL"
-                _auto_log(auto_id, "All individual deinitialization commands sent. Final bulk check → DEINIT_VERIFY_ALL")
+                rt["state"] = "IDLE"
+                rt["currentDeinitIndex"] = 0
+                rt["currentActionIndex"] = 0
+                rt["timerStart"] = None
+                rt["remainingTime"] = None
+                rt["retryCount"] = 0
+                rt["pauseReason"] = None
+                _auto_log(auto_id, "All individual deinitialization commands sent → IDLE")
                 _emit_auto_update(auto)
             return
 
@@ -1865,23 +1890,23 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             if idx < len(deinits):
                 item = deinits[idx]
                 topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                yielded = rt.get("deinit_yielded", [])
+                yielded = rt.get("yielded_switches", [])
                 
                 if topic in yielded or _verify_switches([item], auto):
                     rt["currentDeinitIndex"] = idx + 1
                     rt["state"] = "DEINIT_SET"
                     rt["retryCount"] = 0
+                    rt.pop("isNetworkRetry", None)
                     if topic not in yielded:
                         _auto_log(auto_id, f"Deinitialization {idx+1}/{len(deinits)} verified")
                     _emit_auto_update(auto)
                 elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
                     rt["retryCount"] = rt.get("retryCount", 0) + 1
                     if rt["retryCount"] >= MAX_RETRIES:
-                        # Status is already OFF; don't network-pause — just settle to IDLE.
-                        rt["state"] = "IDLE"
-                        rt["currentDeinitIndex"] = 0
-                        rt.pop("deinit_yielded", None)
-                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} not responding → IDLE", "warning")
+                        # Network issue: pause until it comes online or retry delay elapses
+                        _enter_network_pause(auto, rt, now, "DEINIT_SET", reason="not_obeying", retry=True)
+                        rt.pop("retryCount", None)
+                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} not responding → NETWORK ERROR PAUSED", "error")
                         _emit_auto_update(auto)
                     else:
                         rt["state"] = "DEINIT_SET"
@@ -1891,47 +1916,24 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 rt["state"] = "DEINIT_SET"
             return
 
-        if state == "DEINIT_VERIFY_ALL":
-            yielded = rt.get("deinit_yielded", [])
-            active_deinits = [sw for sw in deinits if (sw.get("switchCmdTopic", "") or sw.get("switchStateTopic", "")) not in yielded]
-            
-            if not active_deinits or _verify_switches(active_deinits, auto):
+
+
+        # If we are in a DEINIT_SET or DEINIT_VERIFY_INDIVIDUAL, we already processed and returned.
+        # If we are in PAUSED_NETWORK for deinit, we want to let it fall through to standard network pause logic.
+        if state == "PAUSED_NETWORK" and rt.get("prePauseNetwork") in ("DEINIT_SET", "DEINIT_VERIFY_INDIVIDUAL"):
+            pass # Fall through to Priority 1.05 and Priority 2
+        else:
+            # No deinitialization in progress → settle to IDLE
+            if state != "IDLE":
                 rt["state"] = "IDLE"
-                rt["currentDeinitIndex"] = 0
                 rt["currentActionIndex"] = 0
                 rt["timerStart"] = None
                 rt["remainingTime"] = None
                 rt["retryCount"] = 0
                 rt["pauseReason"] = None
-                rt.pop("deinit_yielded", None)
-                _auto_log(auto_id, "All deinitialization verified → IDLE")
+                _auto_log(auto_id, "Status OFF → IDLE")
                 _emit_auto_update(auto)
-            elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
-                rt["retryCount"] = rt.get("retryCount", 0) + 1
-                if rt["retryCount"] >= MAX_RETRIES:
-                    rt["state"] = "IDLE"
-                    rt["currentDeinitIndex"] = 0
-                    rt.pop("deinit_yielded", None)
-                    _auto_log(auto_id, "Bulk deinit not responding → IDLE", "warning")
-                    _emit_auto_update(auto)
-                else:
-                    rt["currentDeinitIndex"] = 0
-                    rt["state"] = "DEINIT_SET"
-                    _auto_log(auto_id, f"Bulk deinit verify failed, restarting sequence! Retry {rt['retryCount']}/{MAX_RETRIES}", "warning")
-                    _emit_auto_update(auto)
             return
-
-        # No deinitialization in progress → settle to IDLE
-        if state != "IDLE":
-            rt["state"] = "IDLE"
-            rt["currentActionIndex"] = 0
-            rt["timerStart"] = None
-            rt["remainingTime"] = None
-            rt["retryCount"] = 0
-            rt["pauseReason"] = None
-            _auto_log(auto_id, "Status OFF → IDLE")
-            _emit_auto_update(auto)
-        return
 
     # Priority 1.05: Broker connectivity. Without a live MQTT link to the broker we
     # can neither command nor verify switches, so a dropped connection must pause the
@@ -2051,18 +2053,30 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
         sched_is_true = check_schedule(auto)
         sched_cfg = auto.get("schedule", {})
         
-        enforce_list = sched_cfg.get("setIfTrue", []) if sched_is_true else sched_cfg.get("setIfFalse", [])
+        # New approach: don't enforce setIfTrue until INIT is completed
+        if sched_is_true and not rt.get("init_completed"):
+            enforce_list = []
+        else:
+            enforce_list = sched_cfg.get("setIfTrue", []) if sched_is_true else sched_cfg.get("setIfFalse", [])
         
         yielded_this_tick = []
         for item in enforce_list:
-            topic = item.get("switchCmdTopic", "")
+            topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+            if not topic: continue
             
-            # Global Priority Check:
-            # We ONLY yield if we are enforcing setIfFalse (inactive schedule).
-            # If we are enforcing setIfTrue, we never yield (it strictly overrides everything).
+            # Check if ANY OTHER automation claims this switch in its sequence or schedule
+            is_claimed_by_other = False
+            for other_id, claims in (sequence_overrides or {}).items():
+                if other_id != auto_id and topic in claims:
+                    is_claimed_by_other = True
+                    break
+            for other_id, claims in (schedule_overrides or {}).items():
+                if other_id != auto_id and topic in claims:
+                    is_claimed_by_other = True
+                    break
+
             if not sched_is_true:
-                if (sequence_overrides and topic in sequence_overrides) or \
-                   (schedule_overrides and topic in schedule_overrides):
+                if is_claimed_by_other:
                     yielded_this_tick.append(topic)
                     continue
                 
@@ -2102,8 +2116,8 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[ping_key] = now
 
-        if rt.get("yielded_switches", []) != yielded_this_tick:
-            rt["yielded_switches"] = yielded_this_tick
+        if rt.get("sched_yielded_switches", []) != yielded_this_tick:
+            rt["sched_yielded_switches"] = yielded_this_tick
             _emit_auto_update(auto)
 
     # Priority 1.5: Enforce Pause
@@ -2190,10 +2204,11 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
     # --- State transitions ---
 
     if state == "IDLE":
-        # Status just turned ON → run initialization immediately
-        rt["state"] = "INIT_SET"
+        # Status just turned ON → wait for condition and schedule
+        rt["state"] = "WAIT_CONDITION"
+        rt["init_completed"] = False
         rt["retryCount"] = 0
-        _auto_log(auto_id, "Status ON → INIT_SET (initialization runs unconditionally)")
+        _auto_log(auto_id, "Status ON → WAIT_CONDITION")
         _emit_auto_update(auto)
         return
 
@@ -2213,13 +2228,18 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                         _emit_auto_update(auto)
                     return
             
-            if not auto.get("actions"):
-                rt["state"] = "SCHEDULER_RUN"
-                _auto_log(auto_id, "Condition satisfied + Schedule active → SCHEDULER_RUN (No actions mode)")
+            if not rt.get("init_completed"):
+                rt["state"] = "INIT_SET"
+                rt["retryCount"] = 0
+                _auto_log(auto_id, "Condition satisfied + Schedule active → INIT_SET (First run only)")
             else:
-                rt["state"] = "ACTION_SET"
-                rt["currentActionIndex"] = 0
-                _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
+                if not auto.get("actions"):
+                    rt["state"] = "SCHEDULER_RUN"
+                    _auto_log(auto_id, "Condition satisfied + Schedule active → SCHEDULER_RUN (No actions mode)")
+                else:
+                    rt["state"] = "ACTION_SET"
+                    rt["currentActionIndex"] = 0
+                    _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
             _emit_auto_update(auto)
         return
 
@@ -2234,7 +2254,9 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             
         if idx < len(inits):
             item = inits[idx]
-            _mqtt_set_switch(item.get("switchCmdTopic", ""), item.get("state", "OFF"), auto)
+            topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+            
+            _mqtt_set_switch(topic, item.get("state", "ON"), auto)
             rt["verifyStart"] = now
             rt["state"] = "INIT_VERIFY_INDIVIDUAL"
             _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} sent → INIT_VERIFY_INDIVIDUAL")
@@ -2251,11 +2273,16 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
         idx = rt.get("currentInitIndex", 0)
         if idx < len(inits):
             item = inits[idx]
-            if _verify_switches([item], auto):
+            topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+            yielded = rt.get("yielded_switches", [])
+            
+            if topic in yielded or _verify_switches([item], auto):
                 rt["currentInitIndex"] = idx + 1
                 rt["state"] = "INIT_SET"
                 rt["retryCount"] = 0
-                _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} verified")
+                rt.pop("isNetworkRetry", None)
+                if topic not in yielded:
+                    _auto_log(auto_id, f"Initialization {idx+1}/{len(inits)} verified")
                 _emit_auto_update(auto)
             elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
                 rt["retryCount"] = rt.get("retryCount", 0) + 1
@@ -2271,7 +2298,12 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
 
     if state == "INIT_VERIFY_ALL":
         inits = auto.get("initialization", [])
-        if not inits or _verify_switches(inits, auto):
+        yielded = rt.get("yielded_switches", [])
+        active_inits = [sw for sw in inits if (sw.get("switchCmdTopic", "") or sw.get("switchStateTopic", "")) not in yielded]
+        
+        if not active_inits or _verify_switches(active_inits, auto):
+            rt["init_completed"] = True
+            rt.pop("isNetworkRetry", None)
             if rt.get("loopingToFirst"):
                 rt["bufferStart"] = now
                 rt["state"] = "BUFFER"
@@ -2279,7 +2311,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             else:
                 rt["state"] = "WAIT_CONDITION"
                 rt["retryCount"] = 0
-                _auto_log(auto_id, "Initialization verified → WAIT_CONDITION (awaiting condition + schedule)")
+                _auto_log(auto_id, "Initialization verified → WAIT_CONDITION")
             _emit_auto_update(auto)
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
             rt["retryCount"] = rt.get("retryCount", 0) + 1
@@ -2305,7 +2337,33 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             _emit_auto_update(auto)
             return
         action = actions[idx]
-        _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"), auto)
+        topic = action.get("switchCmdTopic", "") or action.get("switchStateTopic", "")
+
+        # Check if ANY OTHER automation has claimed this switch
+        is_claimed_by_other = False
+        for other_id, claims in (sequence_overrides or {}).items():
+            if other_id != auto_id and topic in claims:
+                is_claimed_by_other = True
+                break
+        for other_id, claims in (schedule_overrides or {}).items():
+            if other_id != auto_id and topic in claims:
+                is_claimed_by_other = True
+                break
+
+        if is_claimed_by_other:
+            if "yielded_switches" not in rt:
+                rt["yielded_switches"] = []
+            if topic not in rt["yielded_switches"]:
+                _auto_log(auto_id, f"Yielding ACTION on {action.get('switchName', 'switch')} to active sequence/schedule", "warning")
+                rt["yielded_switches"].append(topic)
+            
+            rt["state"] = "ACTION_SET" # Wait and try again next tick
+            _emit_auto_update(auto)
+            return
+        elif topic in rt.get("yielded_switches", []):
+            rt["yielded_switches"].remove(topic)
+
+        _mqtt_set_switch(topic, action.get("state", "ON"), auto)
         rt["verifyStart"] = now
         rt["state"] = "ACTION_VERIFY"
         _auto_log(auto_id, f"Action {idx+1}: Set {action.get('switchName','')} → {action.get('state','')}")
@@ -2317,10 +2375,12 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
         idx = rt.get("currentActionIndex", 0)
         action = actions[idx] if idx < len(actions) else {}
         if _verify_switches([action], auto):
+            rt.pop("isNetworkRetry", None)
             duration = action.get("duration", 0)
             rt["timerStart"] = now
             rt["remainingTime"] = duration
             rt["state"] = "ACTION_RUN"
+            rt.pop("isNetworkRetry", None)
             _auto_log(auto_id, f"Action {idx+1} verified → ACTION_RUN ({duration}s)")
             _emit_auto_update(auto)
         elif now - (rt.get("verifyStart") or now) > VERIFY_TIMEOUT:
@@ -2545,6 +2605,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
         switches_to_verify = [actions[next_idx]]
             
         if _verify_switches(switches_to_verify, auto):
+            rt.pop("isNetworkRetry", None)
             rt["bufferStart"] = now
             rt["state"] = "BUFFER"
             _auto_log(auto_id, f"Overlap transition verified → BUFFER")
@@ -2641,6 +2702,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
         idx = rt.get("currentActionIndex", 0)
         
         def _finish_revert():
+            rt.pop("isNetworkRetry", None)
             if rt.get("loopingToFirst"):
                 rt["loopingToFirst"] = False
                 if rt.pop("stopAfterRevert", False):
@@ -2737,6 +2799,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
     if state == "ERROR_VERIFY":
         err_states = auto.get("errorState", [])
         if not err_states or _verify_switches(err_states, auto):
+            rt.pop("isNetworkRetry", None)
             rt["state"] = "ERROR"
             _auto_log(auto_id, "Error state verified → ERROR (locked)", "error")
             _emit_auto_update(auto)
@@ -2755,35 +2818,53 @@ def _engine_loop():
     _last_db_save = time.time()
     while _engine_running:
         # Build global active overrides per session
-        sequence_overrides = collections.defaultdict(set)
-        schedule_overrides = collections.defaultdict(set)
+        sequence_overrides = collections.defaultdict(dict)
+        schedule_overrides = collections.defaultdict(dict)
         try:
-            for session, auto_id, auto in session_mgr.get_all_automations():
-                state = auto.get("runtime", {}).get("state", "IDLE")
-                # 1. Any currently executing automation claims ALL its switches (actions, init, deinit)
-                if state not in ("IDLE", "ERROR", "ERROR_SET", "ERROR_VERIFY", "PAUSED_NETWORK"):
-                    for item in auto.get("actions", []):
-                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                        if ctrl: sequence_overrides[session.email].add(ctrl)
-                    for item in auto.get("initialization", []):
-                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                        if ctrl: sequence_overrides[session.email].add(ctrl)
-                    # NOTE: We DO NOT add deinitialization to sequence_overrides.
-                    # This allows active schedules to enforce their ON state without yielding to DEINIT.
-                
-                
-                # 2. Any active schedule's setIfTrue claims the switch as a schedule override
-                if check_schedule(auto):
-                    for item in auto.get("schedule", {}).get("setIfTrue", []):
-                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                        if ctrl: schedule_overrides[session.email].add(ctrl)
+            for session in session_mgr._sessions.values():
+                sequence_overrides[session.email] = {}
+                schedule_overrides[session.email] = {}
+                for auto_id, auto in session.automations.items():
+                    sequence_overrides[session.email][auto_id] = set()
+                    schedule_overrides[session.email][auto_id] = set()
+                    
+                    rt = auto.get("runtime", {})
+                    state = rt.get("state", "IDLE")
+
+                    # 1. Claim switches based on active phase
+                    if state not in ("IDLE", "ERROR", "ERROR_SET", "ERROR_VERIFY", "PAUSED_NETWORK"):
+                        # Only claim INIT switches if ACTIVELY running INIT ("until init complete")
+                        if state.startswith("INIT_"):
+                            for item in auto.get("initialization", []):
+                                ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                if ctrl: sequence_overrides[session.email][auto_id].add(ctrl)
+                            
+                        # Only claim DEINIT switches if ACTIVELY running DEINIT
+                        if state.startswith("DEINIT_"):
+                            for item in auto.get("deinitialization", []):
+                                ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                if ctrl: sequence_overrides[session.email][auto_id].add(ctrl)
+                            
+                        # Only claim the CURRENT ACTION switch(es), not all of them
+                        if state.startswith("ACTION_") or state.startswith("OVERLAP_"):
+                            idx = rt.get("currentActionIndex", 0)
+                            actions = auto.get("actions", [])
+                            if 0 <= idx < len(actions):
+                                ctrl = actions[idx].get("switchCmdTopic", "") or actions[idx].get("switchStateTopic", "")
+                                if ctrl: sequence_overrides[session.email][auto_id].add(ctrl)
+                    
+                    # 2. Any active schedule's setIfTrue claims the switch as a schedule override
+                    if auto.get("status") == "ON" and check_schedule(auto):
+                        for item in auto.get("schedule", {}).get("setIfTrue", []):
+                            ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                            if ctrl: schedule_overrides[session.email][auto_id].add(ctrl)
         except Exception as e:
             logging.error(f"[ENGINE] Error building active overrides: {e}")
 
         # Tick all session-based automations (multi-tenant)
         for session, auto_id, auto in session_mgr.get_all_automations():
             try:
-                engine_tick(auto, sequence_overrides.get(session.email, set()), schedule_overrides.get(session.email, set()))
+                engine_tick(auto, sequence_overrides.get(session.email, {}), schedule_overrides.get(session.email, {}))
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
         # Periodic DB save every 60 seconds
@@ -2904,7 +2985,8 @@ def _schedules_overlap(a, b):
     """Check if two automations overlap in time ranges AND share at least one switch."""
     def get_switches(auto):
         switches = set()
-        for x in auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("actions", []):
+        # Exclude deinitialization as requested by user
+        for x in auto.get("initialization", []) + auto.get("actions", []) + auto.get("schedule", {}).get("setIfTrue", []) + auto.get("schedule", {}).get("setIfFalse", []):
             if "switchCmdTopic" in x: switches.add(x["switchCmdTopic"])
         return switches
 
@@ -3333,6 +3415,18 @@ def handle_update_automation(data):
         rt["state"] = "ACTION_SET"
         rt["currentActionIndex"] = 0
 
+    # Conflict check: if it is ON, ensure the newly saved changes don't conflict with other running automations
+    if auto.get("status") == "ON":
+        for other_id, other_auto in sess.automations.items():
+            if other_id == auto_id: continue
+            if other_auto.get("status") == "ON":
+                if _schedules_overlap(auto, other_auto):
+                    _auto_log(auto_id, f"Edit introduced a conflict with running automation '{other_auto.get('name')}'. Turning OFF.", level="warn")
+                    auto["status"] = "OFF"
+                    rt["state"] = "IDLE"
+                    socketio.emit("automation_error", {"error": f"Automation '{auto.get('name')}' turned OFF due to a conflict with '{other_auto.get('name')}'."}, room=sess.room)
+                    break
+
     _auto_log(auto_id, f"Automation '{auto['name']}' updated")
     _emit_auto_update(auto)
 
@@ -3373,9 +3467,10 @@ def handle_toggle_automation(data):
     auto["status"] = status
     if status == "ON":
         auto["runtime"] = _new_runtime(auto.get("runtime", {}))
-        auto["runtime"]["state"] = "INIT_SET"
+        auto["runtime"]["state"] = "WAIT_CONDITION"
+        auto["runtime"]["init_completed"] = False
         auto["runtime"]["retryCount"] = 0
-        _auto_log(auto_id, "Turned ON → INIT_SET")
+        _auto_log(auto_id, "Turned ON → WAIT_CONDITION")
         
         # Run AI immediately if enabled
         sched = auto.get("schedule", {})

@@ -97,7 +97,13 @@
   function stateLabel(auto) {
     if (!auto) return "Off";
     const rs = auto.runtime?.state || "IDLE";
-    if (auto.status !== "ON") return "Off";
+    
+    // Status OFF means it's off, unless it's running a DEINIT or in a network pause for DEINIT
+    if (auto.status !== "ON" && !rs.startsWith("DEINIT_") && rs !== "PAUSED_NETWORK") return "Off";
+
+    // If the backend is actively retrying a failed network command, keep showing the error state to avoid flicker
+    if (auto.runtime?.isNetworkRetry) return "Network Error Paused";
+
     const map = {
       IDLE: "Off", WAIT_CONDITION: "Waiting", INIT_SET: "Initializing", INIT_VERIFY: "Verifying Init",
       INIT_VERIFY_INDIVIDUAL: "Verify Init", INIT_VERIFY_ALL: "Verify Init All",
@@ -255,7 +261,7 @@
     // a fresh startup (state INIT_SET) and when looping back for another cycle, where the
     // backend jumps straight to ACTION_SET (skipping INIT_SET). Reset the high-water-mark
     // in both cases so the bar restarts from 0% instead of sticking at 100%.
-    const isFreshCycleStart = (rt.state === "INIT_SET" || rt.state === "ACTION_SET") && idx === 0 && !rt.loopingToFirst;
+    const isFreshCycleStart = (rt.state === "INIT_SET" || rt.state === "ACTION_SET" || (rt.state === "ACTION_RUN" && idx === 0)) && !rt.loopingToFirst;
     if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state || isFreshCycleStart) {
       // Reset high-water-mark when cycle ends, automation is idle, or fresh startup/reset
       delete _lastProgress[autoId];
@@ -385,7 +391,7 @@
     }
 
     // State bar
-    $("#irr-cur-state").textContent = rt.state === "PAUSED_NETWORK"
+    $("#irr-cur-state").textContent = (rt.state === "PAUSED_NETWORK" || rt.isNetworkRetry)
       ? "NETWORK ERROR PAUSED"
       : (rt.state || "IDLE").replace(/_/g, " ");
 
@@ -685,22 +691,30 @@
     const toggle = $("#irr-status-toggle");
     toggle.checked = auto.status === "ON";
     $(".toggle-text-on").textContent = auto.status === "ON" ? "ON" : "OFF";
-    
     // Clear previous errors/highlights
     const errEl = $("#irr-run-error");
     if (errEl) errEl.style.display = "none";
     document.querySelectorAll(".irr-sw-row.conflict").forEach(el => el.classList.remove("conflict"));
 
+    const loadingEl = $("#irr-status-loading");
+    if (loadingEl) {
+      const rs = auto.runtime?.state || "";
+      const isDeinit = rs.startsWith("DEINIT_") || (rs === "PAUSED_NETWORK" && auto.runtime?.prePauseNetwork?.startsWith("DEINIT_"));
+      loadingEl.style.display = isDeinit ? "block" : "none";
+    }
+
     toggle.onchange = (e) => {
       const isTurningOn = toggle.checked;
       if (!isTurningOn) {
         // Turning OFF is always safe
+        if (auto.deinitialization && auto.deinitialization.length > 0 && loadingEl) {
+          loadingEl.style.display = "block";
+        }
         socket.emit("toggle_automation", { id: auto.id, status: "OFF" });
         return;
       }
 
       // Turning ON - run validation
-      const loadingEl = $("#irr-status-loading");
       if (loadingEl) loadingEl.style.display = "block";
       toggle.disabled = true;
 
@@ -741,7 +755,13 @@
     const deinitBody = $("#irr-deinit-body");
     if (deinitBody) {
       const deinits = auto.deinitialization || [];
-      deinitBody.innerHTML = deinits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+      deinitBody.innerHTML = deinits.map(i => {
+        const topic = i.switchCmdTopic || "";
+        const isDeinitPhase = (rt.state || "").startsWith("DEINIT_");
+        const isYielded = isDeinitPhase && (auto.runtime?.yielded_switches || []).includes(topic);
+        const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
+        return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span><span style="display:inline-flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span> <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+      }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
     }
 
     // Condition
@@ -765,7 +785,12 @@
       let status = "⏳ Pending";
       if (i < idx) status = "✔ Done";
       if (isActive) status = "▶ " + (rt.state === "ACTION_RUN" ? "Running" : "Processing");
-      return `<tr class="${isActive ? "active-action irr-sw-row" : "irr-sw-row"}" data-topic="${escHtml(a.switchCmdTopic || "")}"><td>${i + 1}</td><td>${escHtml(a.switchName || "Switch")}</td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
+      const topic = a.switchCmdTopic || "";
+      const isActionPhase = (rt.state || "").startsWith("ACTION_") || (rt.state || "").startsWith("OVERLAP_");
+      const isYielded = isActionPhase && (auto.runtime?.yielded_switches || []).includes(topic);
+      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
+
+      return `<tr class="${isActive ? "active-action irr-sw-row" : "irr-sw-row"}" data-topic="${escHtml(topic)}"><td>${i + 1}</td><td><span style="display:inline-flex;align-items:center;">${escHtml(a.switchName || "Switch")}${yieldIcon}</span></td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
     }).join("")}</tbody></table>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No actions configured</span>';
 
     // Error state
@@ -821,11 +846,15 @@
       </div>
     </div>${schedCondHTML}`;
 
-    const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+    const setTrueHTML = (sched.setIfTrue || []).map(i => {
+      const topic = i.switchCmdTopic || "";
+      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+    }).join("");
+    
     const setFalseHTML = (sched.setIfFalse || []).map(i => {
       const topic = i.switchCmdTopic || "";
-      const isYielded = (auto.runtime?.yielded_switches || []).includes(topic);
-      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active automation">warning</span>` : "";
+      const isYielded = (auto.runtime?.sched_yielded_switches || []).includes(topic);
+      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
       return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
     }).join("");
 
@@ -1412,7 +1441,7 @@
     const set = new Set();
     const add = (arr) => (arr || []).forEach(x => { if (x && x.switchCmdTopic) set.add(x.switchCmdTopic); });
     add(auto.initialization);
-    add(auto.deinitialization);
+    // intentional: deinitialization is excluded from schedule conflicts
     add(auto.actions);
     add(auto.schedule?.setIfTrue);
     add(auto.schedule?.setIfFalse);
@@ -1456,6 +1485,7 @@
 
     const conflicts = new Map(); // switchName -> Set(other automation names)
     SWITCH_CONTAINERS.forEach(cid => {
+      if (cid === "auto-f-deinit") return; // Ignore deinit for conflict checks
       $(`#${cid}`)?.querySelectorAll(".f-switch").forEach(sel => {
         const topic = sel.value;
         if (topic && topicToAutos.has(topic)) {
