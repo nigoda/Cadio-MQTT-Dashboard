@@ -281,9 +281,16 @@ def _mqtt_watchdog():
                 if not sess.password:
                     continue
                 elapsed = now - getattr(sess, '_mqtt_last_connected_time', 0)
-                if elapsed > 15 or sleep_detected:
-                    delays = [5, 15, 30]
-                    delay = delays[min(_reconnect_backoff, len(delays) - 1)]
+                
+                delays = [5, 15, 30]
+                delay = delays[min(_reconnect_backoff, len(delays) - 1)]
+                
+                # Wait until 'delay' seconds have passed since the last disconnect event
+                # We use _mqtt_last_disconnect_time to track this.
+                last_disconnect = getattr(sess, '_mqtt_last_disconnect_time', 0)
+                
+                if (now - last_disconnect) > delay or sleep_detected:
+                    sess._mqtt_last_disconnect_time = now # reset for next backoff
                     logging.warning(
                         f"[WATCHDOG:{email}] MQTT disconnected for {int(elapsed)}s. "
                         f"Reconnect attempt (next retry in {delay}s)..."
