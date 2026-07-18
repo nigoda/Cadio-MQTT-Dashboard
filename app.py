@@ -2955,8 +2955,11 @@ def _ai_scheduler_loop():
                 last_run = auto.get("_ai_last_run_date")
                 if auto_now.hour == AI_RUN_HOUR and last_run != auto_today:
                     auto["_ai_last_run_date"] = auto_today
-                    logging.info(f"[AI-SCHEDULER] 2AM triggered for '{auto_id}' (tz-aware)")
-                    socketio.start_background_task(_run_ai_for_automation, auto_id)
+                    
+                    import random
+                    jitter_delay = random.uniform(0, 120)
+                    logging.info(f"[AI-SCHEDULER] 2AM triggered for '{auto_id}' (tz-aware) with {jitter_delay:.1f}s jitter")
+                    socketio.start_background_task(_run_ai_for_automation, auto_id, jitter_delay)
                 
             # 2. Dynamic automatic retry for failed runs
             now_ts = time.time()
@@ -3038,10 +3041,13 @@ def _schedules_overlap(a, b):
                 return True
     return False
 
-def _run_ai_for_automation(auto_id):
+def _run_ai_for_automation(auto_id, delay=0):
     """Helper to run the AI engine for a single automation."""
     global _ai_running_set
     
+    if delay > 0:
+        time.sleep(delay)
+        
     # Prevent duplicate concurrent runs
     if auto_id in _ai_running_set:
         logging.info(f"[AI-SCHEDULER] AI already running for '{auto_id}', skipping duplicate request")
@@ -3099,7 +3105,9 @@ def _run_ai_for_automation(auto_id):
     _emit_auto_update(auto) # force UI update to show log
 
     try:
-        weather_data = get_weather_data(lat=lat, lon=lon)
+        farm_area = sched.get("farmArea", 5)
+        precision = 1 if farm_area > 300 else (2 if farm_area > 3 else 3)
+        weather_data = get_weather_data(lat=lat, lon=lon, decimal_places=precision)
         if not weather_data:
             _auto_log(auto_id, "AI failed: could not fetch weather", level="error")
             auto["ai_last_fail"] = datetime.now().timestamp()
@@ -3128,6 +3136,19 @@ def _run_ai_for_automation(auto_id):
         new_days = decision.get("selected_days", [])
         reasoning = decision.get("reasoning", "")
         old_days = sched.get("days", [])
+        
+        # HARD FILTER: Ensure no occupied days are included, even if AI hallucinates
+        filtered_days = []
+        removed_days = []
+        for d in new_days:
+            if d in occupied_days:
+                removed_days.append(d)
+            else:
+                filtered_days.append(d)
+                
+        if removed_days:
+            new_days = filtered_days
+            reasoning += f" (System Override: Automatically removed {', '.join(removed_days)} due to hard schedule conflicts with other automations.)"
 
         # SAFETY: If we are currently RUNNING or WORKING on an action, 
         # ensure today stays in the schedule so we don't stop mid-cycle.
@@ -3243,7 +3264,10 @@ def handle_get_weather_insights(data):
     def _fetch():
         from ai_agent import get_weather_data
         try:
-            weather = get_weather_data(lat=lat, lon=lon, past_days=7)
+            session, auto = _find_automation(auto_id)
+            farm_area = auto.get("schedule", {}).get("farmArea", 5) if auto else 5
+            precision = 1 if farm_area > 300 else (2 if farm_area > 3 else 3)
+            weather = get_weather_data(lat=lat, lon=lon, past_days=7, decimal_places=precision)
             socketio.emit("weather_insights_data", {"auto_id": auto_id, "weather": weather}, to=client_sid)
         except Exception as e:
             logging.error(f"Failed to fetch weather insights: {e}")

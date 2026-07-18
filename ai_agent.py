@@ -80,18 +80,18 @@ def is_model_loaded():
 _weather_cache = {}
 _weather_cache_lock = threading.Lock()
 
-def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=7):
+def get_weather_data(lat=DEFAULT_LAT, lon=DEFAULT_LON, past_days=7, decimal_places=1):
     """Fetches past weather + 7-day forecast from Open-Meteo (No API Key required).
     Returns a dict with 'today', 'past' (last N days), and 'forecast' (next 7 days)."""
-    # Round coordinates to 3 decimal places to group nearby requests (approx 110m precision)
+    # Round coordinates to group nearby requests (1=11km, 2=1.1km, 3=110m)
     try:
-        lat_key = round(float(lat), 3)
-        lon_key = round(float(lon), 3)
+        lat_key = round(float(lat), decimal_places)
+        lon_key = round(float(lon), decimal_places)
     except (ValueError, TypeError):
         lat_key = lat
         lon_key = lon
         
-    cache_key = (lat_key, lon_key, past_days)
+    cache_key = (lat_key, lon_key, past_days, decimal_places)
     
     with _weather_cache_lock:
         if cache_key in _weather_cache:
@@ -258,6 +258,7 @@ def build_automation_context(auto_id, auto_data, occupied_days=None):
         "irrigation_history": cycles_history,
         "lat": sched.get("lat"),
         "lon": sched.get("lon"),
+        "farm_area_acres": sched.get("farmArea", 5),
         "ai_thresholds": sched.get("ai_thresholds", {}),
         "ai_custom_rules": sched.get("ai_custom_rules", ""),
         "occupied_days": occupied_days
@@ -322,7 +323,8 @@ RULES:
 7. Check "cycles_completed_today" — if already > 0, the system has watered today.
 8. Check "max_cycles_per_day" — if this is 0, it means the system will run INFINITE cycles.
 9. Select between 1 and 4 days from the upcoming forecast to maintain a healthy soil moisture balance.
-10. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
+10. Check "farm_area_acres" (Farm Size) in Automation Details. Large farms take longer to water fully; consider this when distributing irrigation days.
+11. Output ONLY a raw JSON object (no markdown, no code fences, no conversational text) with exactly these keys:
 
 {{
     "selected_dates": ["YYYY-MM-DD", "YYYY-MM-DD"],

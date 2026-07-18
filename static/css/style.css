@@ -524,6 +524,35 @@ body {
     border: none;
 }
 
+/* Settings modal slider */
+.ha-settings-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--ha-divider);
+    outline: none;
+    cursor: pointer;
+    margin: 10px 0;
+}
+.ha-settings-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--ha-primary);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+.ha-settings-slider::-moz-range-thumb {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--ha-primary);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    border: none;
+}
+
 /* Color picker */
 .ha-color-picker {
     -webkit-appearance: none;

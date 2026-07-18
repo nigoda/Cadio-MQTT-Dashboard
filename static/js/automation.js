@@ -1241,6 +1241,8 @@
     $("#auto-f-th-wind").value = th.wind_kmh !== undefined ? th.wind_kmh : "";
     $("#auto-f-ai-rules").value = auto.schedule?.ai_custom_rules || "";
     
+    // Farm Area
+    $("#auto-f-farm-area").value = auto.schedule?.farmArea !== undefined ? auto.schedule.farmArea : "";
     $("#ai-rules-modal").classList.remove("hidden");
   }
 
@@ -1273,6 +1275,15 @@
       wind_kmh: $("#auto-f-th-wind").value !== "" ? parseFloat($("#auto-f-th-wind").value) : 20.0
     };
     auto.schedule.ai_custom_rules = $("#auto-f-ai-rules").value.trim();
+    
+    if ($("#auto-f-farm-area")) {
+      const areaVal = parseFloat($("#auto-f-farm-area").value);
+      if (!isNaN(areaVal)) {
+          auto.schedule.farmArea = areaVal;
+      } else {
+          delete auto.schedule.farmArea;
+      }
+    }
     
     socket.emit("update_automation", auto);
     closeAiRulesModal();
