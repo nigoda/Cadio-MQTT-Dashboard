@@ -1593,10 +1593,31 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
   border-color: var(--ha-warning, #ff9800);
   box-shadow: 0 0 0 1px var(--ha-warning, #ff9800);
 }
+/* Red outline for action vs enforcement errors */
+.irr-form-row select.f-switch.error-conflict,
+.irr-form-row select.f-state.error-conflict {
+  border-color: var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+}
+.irr-form-row select.f-state.error-conflict {
+  color: var(--ha-red);
+}
+.irr-form-row select.f-state.error-conflict option {
+  color: var(--ha-text);
+}
+.irr-form-row select.f-state.error-conflict option:checked {
+  color: var(--ha-red);
+}
 .irr-modal-warning.warning {
   background: rgba(255, 152, 0, 0.1);
   color: var(--ha-warning, #ff9800);
   border: 1px solid rgba(255, 152, 0, 0.2);
+}
+.irr-modal-warning.error {
+  background: rgba(244, 67, 54, 0.1);
+  color: var(--ha-red);
+  border: 1px solid rgba(244, 67, 54, 0.2);
+  margin-bottom: 8px;
 }
 .irr-run-error-banner {
   background: rgba(244, 67, 54, 0.1);

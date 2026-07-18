@@ -1124,7 +1124,12 @@
 
   function refreshSwitchOptions(container) {
     if (!container || !container.id) return;
-    if (container.id !== "auto-f-init" && container.id !== "auto-f-deinit") return;
+    if (container.id !== "auto-f-init" && 
+        container.id !== "auto-f-deinit" && 
+        container.id !== "auto-f-set-true" && 
+        container.id !== "auto-f-set-false") {
+      return;
+    }
 
     const selects = [...container.querySelectorAll(".f-switch")];
     const used = new Set();
@@ -1484,6 +1489,106 @@
     return { days, is24hr, timeRanges, utcOffset };
   }
 
+  // Validates that Action Sequence switches don't overlap with During Enforcement (setIfTrue) switches
+  // Returns false if there's a conflict, true if valid.
+  function validateActionConflicts() {
+    const errorEl = $("#auto-modal-error");
+    // Clear old errors
+    $("#auto-f-actions")?.querySelectorAll(".f-switch.error-conflict").forEach(el => el.classList.remove("error-conflict"));
+    
+    // Collect all topics used in setIfTrue (During Enforcement)
+    const setIfTrueTopics = new Set();
+    $("#auto-f-set-true")?.querySelectorAll(".f-switch").forEach(sel => {
+      const topic = sel.value;
+      if (topic) setIfTrueTopics.add(topic);
+    });
+
+    const conflicts = new Set();
+    
+    // Check Action Sequence (auto-f-actions) against setIfTrueTopics
+    $("#auto-f-actions")?.querySelectorAll(".f-switch").forEach(sel => {
+      const topic = sel.value;
+      if (topic && setIfTrueTopics.has(topic)) {
+        sel.classList.add("error-conflict");
+        const swName = sel.selectedOptions[0]?.dataset.name || topic;
+        conflicts.add(swName);
+      }
+    });
+
+    if (!errorEl) return true;
+    if (conflicts.size === 0) {
+      errorEl.classList.add("hidden");
+      errorEl.classList.remove("error", "error-action");
+      errorEl.innerHTML = "";
+      return true;
+    }
+    
+    const parts = [...conflicts].map(sw => `“${escHtml(sw)}”`);
+    errorEl.classList.add("error", "error-action");
+    errorEl.classList.remove("hidden");
+    errorEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>Error: ${parts.join(", ")} cannot be used in the Action Sequence because they are also used in During Enforcement.</span>`;
+    return false;
+  }
+
+  // Validates that switches in Outside Enforcement (setIfFalse) do not conflict with the state enforced by other automations.
+  // Returns false if there's a conflict, true if valid.
+  function validateOutsideEnforcementConflicts() {
+    const errorEl = $("#auto-modal-error");
+    // Clear old errors and injected icons
+    $("#auto-f-set-false")?.querySelectorAll(".f-switch.error-conflict, .f-state.error-conflict").forEach(el => el.classList.remove("error-conflict"));
+    
+    // Map of topic -> { state, autoName } from other automations' setIfFalse
+    const globalEnforceMap = new Map();
+    for (const id in _autos) {
+      if (id === _editId) continue;
+      const other = _autos[id];
+      const outsideList = other.schedule?.setIfFalse || [];
+      outsideList.forEach(item => {
+        if (item.switchCmdTopic) {
+          globalEnforceMap.set(item.switchCmdTopic, { state: item.state, autoName: other.name });
+        }
+      });
+    }
+
+    const conflicts = new Set();
+    
+    $("#auto-f-set-false")?.querySelectorAll(".irr-form-row").forEach(row => {
+      const sel = row.querySelector(".f-switch");
+      const stateSel = row.querySelector(".f-state");
+      const topic = sel?.value;
+      const myState = stateSel?.value || "OFF";
+      
+      if (topic && globalEnforceMap.has(topic)) {
+        const globalData = globalEnforceMap.get(topic);
+        if (globalData.state !== myState) {
+          sel.classList.add("error-conflict");
+          if (stateSel) stateSel.classList.add("error-conflict");
+          
+          const swName = sel.selectedOptions[0]?.dataset.name || topic;
+          conflicts.add(`“${escHtml(swName)}” (you set ${myState}, but “${escHtml(globalData.autoName || "Unnamed")}” enforces ${globalData.state})`);
+        }
+      }
+    });
+
+    if (!errorEl) return true;
+    if (conflicts.size === 0) {
+      // Don't clear errorEl if it's already showing an error from validateActionConflicts
+      if (!errorEl.classList.contains("error-action")) {
+        errorEl.classList.add("hidden");
+        errorEl.classList.remove("error");
+        errorEl.innerHTML = "";
+      }
+      return true;
+    }
+    
+    errorEl.classList.add("error");
+    errorEl.classList.remove("error-action"); // Clear any specific tag from the other validator
+    errorEl.classList.remove("hidden");
+    const parts = [...conflicts];
+    errorEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>Error: ${parts.join("; ")}. All automations must agree on the same Outside Enforcement state!</span>`;
+    return false;
+  }
+
   // Highlight conflicting switch selects, toggle the warning banner, and return true.
   // Saving is always allowed, this is just a warning.
   function validateSwitchConflicts() {
@@ -1591,13 +1696,17 @@
   }
 
   // Keep the highlights/banner in sync as the user edits switches, days, times or the 24-hour toggle.
-  const _maybeLiveValidate = () => { validateSwitchConflicts(); };
+  const _maybeLiveValidate = () => { 
+    validateActionConflicts();
+    validateOutsideEnforcementConflicts();
+    validateSwitchConflicts(); 
+  };
   modalOverlay?.addEventListener("change", _maybeLiveValidate);
   modalOverlay?.addEventListener("input", _maybeLiveValidate);
   modalOverlay?.addEventListener("click", (e) => {
     if (e.target.classList?.contains("irr-day-btn") || e.target.closest(".irr-remove-btn") || e.target.closest(".irr-add-btn")) {
       // Small timeout to allow DOM changes (like adding a row or toggling a class) to settle
-      setTimeout(validateSwitchConflicts, 0);
+      setTimeout(_maybeLiveValidate, 0);
     }
   });
 
@@ -1605,7 +1714,13 @@
   $("#auto-modal-save")?.addEventListener("click", () => {
     const data = collectFormData();
     if (!data) return;
-    if (!validateSwitchConflicts()) { return; }
+    
+    // Check for hard errors (blocks saving)
+    if (!validateActionConflicts()) { return; }
+    if (!validateOutsideEnforcementConflicts()) { return; }
+    // Check for soft warnings (allows saving)
+    validateSwitchConflicts();
+    
     if (_editId) {
       data.id = _editId;
       socket.emit("update_automation", data);
