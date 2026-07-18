@@ -3540,10 +3540,10 @@ def handle_reset_automation(data):
     # Explicitly set cycles_today to 0 on reset so the row display restarts
     auto["runtime"]["cycles_today"] = 0
     if status == "ON":
-        auto["runtime"]["state"] = "INIT_SET"
+        auto["runtime"]["state"] = "WAIT_CONDITION"
         auto["runtime"]["retryCount"] = 0
-        auto["runtime"]["currentInitIndex"] = 0
-        _auto_log(auto_id, "RESET → INIT_SET (Restarting from initialization)")
+        auto["runtime"]["init_completed"] = False
+        _auto_log(auto_id, "RESET → WAIT_CONDITION (Restarting schedule checks)")
     else:
         _auto_log(auto_id, "RESET → IDLE")
     _emit_auto_update(auto)
