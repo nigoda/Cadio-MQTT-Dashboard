@@ -1783,45 +1783,15 @@ def _evaluate_sched_conditions(conditions, auto):
     return any(all(g) for g in or_groups)
 
 
-def _verify_switches(switch_list, auto, anchor_time=None):
+def _verify_switches(switch_list, auto):
     """Check if all switches in list match their expected state.
-    If anchor_time is provided, we ALSO ensure the device has sent a proof-of-life
-    (either an availability update, or a distinct state topic update) AFTER anchor_time,
-    to prevent being fooled by MQTT broker echoing our own commands."""
-    owner_email = auto.get("_owner_email", "") if auto else ""
-    # We must import session_mgr or use the global one (it's globally available in app.py)
-    sess = session_mgr.get_session(owner_email)
-
+    switch_list: list of {switchCmdTopic, switchStateTopic, state}"""
     for item in switch_list:
         state_topic = item.get("switchStateTopic", "")
-        cmd_topic = item.get("switchCmdTopic", "")
         expected = item.get("state", "").upper()
-        
-        # 1. Check current state match
         actual = _get_switch_state(state_topic, auto)
         if actual != expected:
             return False
-            
-        # 2. Check proof-of-life if anchor provided
-        if anchor_time and sess:
-            verified = False
-            ctrl = cmd_topic or state_topic
-            
-            # Check availability topics
-            avail_topics = sess.avail_map.get(ctrl, [])
-            for t in avail_topics:
-                if t in sess.device_states and sess.device_states[t].get("ts_float", 0) > anchor_time:
-                    verified = True
-                    break
-            
-            # Check distinct state topic (if it differs from cmd topic, it's not an echo)
-            if not verified and state_topic and state_topic != cmd_topic:
-                if state_topic in sess.device_states and sess.device_states[state_topic].get("ts_float", 0) > anchor_time:
-                    verified = True
-                    
-            if not verified:
-                return False
-                
     return True
 
 
@@ -2133,37 +2103,8 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 
             last_sent_key = f"_last_sent_{topic}"
             retry_key = f"_retry_{topic}"
-            anchor_key = f"_verify_anchor_{topic}"
 
-            # Check if current state matches expected
-            is_match = _verify_switches([item], auto)
-            
-            # If it matches, but we recently sent a command, we MUST ensure it's not just a broker echo.
-            # A genuine reply will have updated the availability topic, or a distinct state topic.
-            delivery_verified = False
-            if is_match and anchor_key in rt:
-                anchor = rt[anchor_key]
-                avail_topics = owner_sess.avail_map.get(topic, []) if owner_sess else []
-                for t in avail_topics:
-                    if t in device_states and device_states[t].get("ts_float", 0) > anchor:
-                        delivery_verified = True
-                        break
-                
-                state_topic = item.get("switchStateTopic", "")
-                if not delivery_verified and state_topic and state_topic != topic:
-                    if state_topic in device_states and device_states[state_topic].get("ts_float", 0) > anchor:
-                        delivery_verified = True
-                        
-                # If not verified yet, and 5 seconds haven't passed, we are still waiting.
-                if not delivery_verified and now - anchor < VERIFY_TIMEOUT:
-                    bg_unverified = True
-                    continue
-                
-                # If 5 seconds passed without proof of life, the match is just a broker echo. Device is dead.
-                if not delivery_verified:
-                    is_match = False
-
-            if not is_match:
+            if not _verify_switches([item], auto):
                 bg_unverified = True
                 # VERIFY_TIMEOUT is used to prevent spamming
                 if now - rt.get(last_sent_key, 0) > VERIFY_TIMEOUT:
@@ -2176,7 +2117,6 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
 
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[last_sent_key] = now
-                    rt[anchor_key] = now
                     rt[retry_key] = retries + 1
                     if retries == 0:
                         _auto_log(auto_id, f"Scheduler drift detected on {item.get('switchName', topic)} — correcting to {item.get('state')}", "warning")
@@ -2188,8 +2128,6 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                     rt.pop(retry_key, None)
                 if last_sent_key in rt:
                     rt.pop(last_sent_key, None)
-                if anchor_key in rt:
-                    rt.pop(anchor_key, None)
                 
                 # Active Ping / Reinforcement
                 # Every 60 seconds, re-send the enforced command to ensure the device hasn't
@@ -2198,9 +2136,6 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 if now - rt.get(ping_key, 0) >= 60:
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[ping_key] = now
-                    rt[last_sent_key] = now
-                    rt[anchor_key] = now
-                    rt[retry_key] = 0
 
         if rt.get("sched_yielded_switches", []) != yielded_this_tick:
             rt["sched_yielded_switches"] = yielded_this_tick
