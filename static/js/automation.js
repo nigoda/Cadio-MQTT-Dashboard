@@ -79,7 +79,8 @@
       case "running": return isOn && stateClass(auto) === "running";
       case "idle": return isOn && ["IDLE", "WAIT_CONDITION", "COMPLETED"].includes(rs);
       case "paused": return isOn && rs.startsWith("PAUSED");
-      case "error": return isOn && rs.startsWith("ERROR");
+      case "scheduler": return (!auto.actions || auto.actions.length === 0);
+      case "error": return isOn && (rs.startsWith("ERROR") || rs === "PAUSED_NETWORK" || auto.runtime?.isNetworkRetry);
       default: return true;
     }
   }

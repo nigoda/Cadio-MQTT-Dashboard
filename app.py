@@ -477,7 +477,7 @@ def on_message(client, userdata, msg):
         now = datetime.utcnow().isoformat()
 
         # 1. Store state
-        sess.device_states[topic] = {"payload": payload, "raw": payload_raw, "ts": now}
+        sess.device_states[topic] = {"payload": payload, "raw": payload_raw, "ts": now, "ts_float": time.time()}
         
         # 2. If discovery config, auto-subscribe to state/availability topics
         if isinstance(payload, dict) and topic.endswith("/config"):
@@ -1357,7 +1357,7 @@ def send_sys_notification(owner_email, title, message, type="info"):
     _send_web_push_async(owner_email, data)
 
 
-def _auto_log(auto_id, message, level="info"):
+def _auto_log(auto_id, message, level="info", notify=True):
     """Append a timestamped log entry for an automation (timezone-aware).
     Routes to sess logs if the automation belongs to a sess user."""
     # Determine log target (sess or global)
@@ -1393,7 +1393,7 @@ def _auto_log(auto_id, message, level="info"):
     logging.info(f"[AUTO {auto_id}] {message}")
 
     # --- PWA & Dashboard Alerts Routing ---
-    if auto and sess:
+    if auto and sess and notify:
         email = sess.email
         notify_title = None
         notify_type = "info"
@@ -1783,15 +1783,45 @@ def _evaluate_sched_conditions(conditions, auto):
     return any(all(g) for g in or_groups)
 
 
-def _verify_switches(switch_list, auto):
+def _verify_switches(switch_list, auto, anchor_time=None):
     """Check if all switches in list match their expected state.
-    switch_list: list of {switchCmdTopic, switchStateTopic, state}"""
+    If anchor_time is provided, we ALSO ensure the device has sent a proof-of-life
+    (either an availability update, or a distinct state topic update) AFTER anchor_time,
+    to prevent being fooled by MQTT broker echoing our own commands."""
+    owner_email = auto.get("_owner_email", "") if auto else ""
+    # We must import session_mgr or use the global one (it's globally available in app.py)
+    sess = session_mgr.get_session(owner_email)
+
     for item in switch_list:
         state_topic = item.get("switchStateTopic", "")
+        cmd_topic = item.get("switchCmdTopic", "")
         expected = item.get("state", "").upper()
+        
+        # 1. Check current state match
         actual = _get_switch_state(state_topic, auto)
         if actual != expected:
             return False
+            
+        # 2. Check proof-of-life if anchor provided
+        if anchor_time and sess:
+            verified = False
+            ctrl = cmd_topic or state_topic
+            
+            # Check availability topics
+            avail_topics = sess.avail_map.get(ctrl, [])
+            for t in avail_topics:
+                if t in sess.device_states and sess.device_states[t].get("ts_float", 0) > anchor_time:
+                    verified = True
+                    break
+            
+            # Check distinct state topic (if it differs from cmd topic, it's not an echo)
+            if not verified and state_topic and state_topic != cmd_topic:
+                if state_topic in sess.device_states and sess.device_states[state_topic].get("ts_float", 0) > anchor_time:
+                    verified = True
+                    
+            if not verified:
+                return False
+                
     return True
 
 
@@ -1922,7 +1952,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                         # Network issue: pause until it comes online or retry delay elapses
                         _enter_network_pause(auto, rt, now, "DEINIT_SET", reason="not_obeying", retry=True)
                         rt.pop("retryCount", None)
-                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} not responding → NETWORK ERROR PAUSED", "error")
+                        _auto_log(auto_id, f"Deinit {idx+1}/{len(deinits)} not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                         _emit_auto_update(auto)
                     else:
                         rt["state"] = "DEINIT_SET"
@@ -1962,7 +1992,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             if state == "ACTION_RUN":
                 # Re-confirm the switch state the moment the broker link returns.
                 rt["_recheckOnResume"] = True
-            _auto_log(auto_id, "Broker connection lost → NETWORK ERROR PAUSED", "error")
+            _auto_log(auto_id, "Broker connection lost → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
             _emit_auto_update(auto)
         elif state == "PAUSED_NETWORK":
             # Stay paused until the broker link returns.
@@ -2031,11 +2061,20 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 rt["pauseUntil"] = now + 60
                 rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
                 return
-            # Reachable again → resume the action
+
+            # Reachable again (according to availability or due timeout) 
+            # BUT we know availability is broken! We must actively ping to verify it's truly back online!
             _resume_network_pause(auto, rt, now)
-            rt["_recheckOnResume"] = True
-            _auto_log(auto_id, "Device reported back online → re-checking switch & resuming action", "info")
-            _emit_auto_update(auto)
+            actions = auto.get("actions", [])
+            idx = rt.get("currentActionIndex", 0)
+            if idx < len(actions):
+                action = actions[idx]
+                rt["_pingTs"] = time.time()
+                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
+                rt["verifyStart"] = now
+                rt["state"] = "ACTION_PING_VERIFY"
+                _auto_log(auto_id, "1-minute timeout reached. Actively pinging device to verify if online...", "info", notify=False)
+                _emit_auto_update(auto)
             return
 
         if offline_devices:
@@ -2055,11 +2094,11 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
     elif offline_devices and state != "ACTION_RUN":
         # Enter network pause due to an offline device (resume when it returns).
         # ACTION_RUN is intentionally excluded: it runs its own interval-based
-        # liveness check so it can roll the timer back to the exact check point
-        # instead of freezing at the current (later) tick.
+        # liveness check (5/30/60) so it can roll the timer back to the exact check point
+        # instead of freezing at the current (later) tick, avoiding lost irrigation time due to MQTT Keep-Alive delay.
         names = ", ".join(offline_devices)
         _enter_network_pause(auto, rt, now, state, reason="offline", retry=False)
-        _auto_log(auto_id, f"Device offline: {names} → NETWORK ERROR PAUSED", "error")
+        _auto_log(auto_id, f"Device offline: {names} → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
         _emit_auto_update(auto)
         return
 
@@ -2069,11 +2108,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
         sched_is_true = check_schedule(auto)
         sched_cfg = auto.get("schedule", {})
         
-        # New approach: don't enforce setIfTrue until INIT is completed
-        if sched_is_true and not rt.get("init_completed"):
-            enforce_list = []
-        else:
-            enforce_list = sched_cfg.get("setIfTrue", []) if sched_is_true else sched_cfg.get("setIfFalse", [])
+        enforce_list = sched_cfg.get("setIfTrue", []) if sched_is_true else sched_cfg.get("setIfFalse", [])
         
         yielded_this_tick = []
         for item in enforce_list:
@@ -2098,20 +2133,50 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 
             last_sent_key = f"_last_sent_{topic}"
             retry_key = f"_retry_{topic}"
+            anchor_key = f"_verify_anchor_{topic}"
 
-            if not _verify_switches([item], auto):
+            # Check if current state matches expected
+            is_match = _verify_switches([item], auto)
+            
+            # If it matches, but we recently sent a command, we MUST ensure it's not just a broker echo.
+            # A genuine reply will have updated the availability topic, or a distinct state topic.
+            delivery_verified = False
+            if is_match and anchor_key in rt:
+                anchor = rt[anchor_key]
+                avail_topics = owner_sess.avail_map.get(topic, []) if owner_sess else []
+                for t in avail_topics:
+                    if t in device_states and device_states[t].get("ts_float", 0) > anchor:
+                        delivery_verified = True
+                        break
+                
+                state_topic = item.get("switchStateTopic", "")
+                if not delivery_verified and state_topic and state_topic != topic:
+                    if state_topic in device_states and device_states[state_topic].get("ts_float", 0) > anchor:
+                        delivery_verified = True
+                        
+                # If not verified yet, and 5 seconds haven't passed, we are still waiting.
+                if not delivery_verified and now - anchor < VERIFY_TIMEOUT:
+                    bg_unverified = True
+                    continue
+                
+                # If 5 seconds passed without proof of life, the match is just a broker echo. Device is dead.
+                if not delivery_verified:
+                    is_match = False
+
+            if not is_match:
                 bg_unverified = True
                 # VERIFY_TIMEOUT is used to prevent spamming
                 if now - rt.get(last_sent_key, 0) > VERIFY_TIMEOUT:
                     retries = rt.get(retry_key, 0)
                     if retries >= MAX_RETRIES:
                         _enter_network_pause(auto, rt, now, state, reason="not_obeying")
-                        _auto_log(auto_id, f"Scheduler enforce failed for {item.get('switchName')} (device not responding) → NETWORK ERROR PAUSED", "error")
+                        _auto_log(auto_id, f"Scheduler enforce failed for {item.get('switchName')} (device not responding) → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                         _emit_auto_update(auto)
                         return
 
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[last_sent_key] = now
+                    rt[anchor_key] = now
                     rt[retry_key] = retries + 1
                     if retries == 0:
                         _auto_log(auto_id, f"Scheduler drift detected on {item.get('switchName', topic)} — correcting to {item.get('state')}", "warning")
@@ -2123,6 +2188,8 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                     rt.pop(retry_key, None)
                 if last_sent_key in rt:
                     rt.pop(last_sent_key, None)
+                if anchor_key in rt:
+                    rt.pop(anchor_key, None)
                 
                 # Active Ping / Reinforcement
                 # Every 60 seconds, re-send the enforced command to ensure the device hasn't
@@ -2131,6 +2198,9 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 if now - rt.get(ping_key, 0) >= 60:
                     _mqtt_set_switch(topic, item.get("state", ""), auto)
                     rt[ping_key] = now
+                    rt[last_sent_key] = now
+                    rt[anchor_key] = now
+                    rt[retry_key] = 0
 
         if rt.get("sched_yielded_switches", []) != yielded_this_tick:
             rt["sched_yielded_switches"] = yielded_this_tick
@@ -2304,7 +2374,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 rt["retryCount"] = rt.get("retryCount", 0) + 1
                 if rt["retryCount"] >= MAX_RETRIES:
                     _enter_network_pause(auto, rt, now, "INIT_SET", reason="not_obeying")
-                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} not responding → NETWORK ERROR PAUSED", "error")
+                    _auto_log(auto_id, f"Init {idx+1}/{len(inits)} not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                     _emit_auto_update(auto)
                 else:
                     rt["state"] = "INIT_SET"
@@ -2334,7 +2404,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             if rt["retryCount"] >= MAX_RETRIES:
                 rt["currentInitIndex"] = 0
                 _enter_network_pause(auto, rt, now, "INIT_SET", reason="not_obeying")
-                _auto_log(auto_id, "Bulk init not responding → NETWORK ERROR PAUSED", "error")
+                _auto_log(auto_id, "Bulk init not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                 _emit_auto_update(auto)
             else:
                 # Restart the sequential flow
@@ -2403,7 +2473,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             rt["retryCount"] = rt.get("retryCount", 0) + 1
             if rt["retryCount"] >= MAX_RETRIES:
                 _enter_network_pause(auto, rt, now, "ACTION_SET", reason="not_obeying")
-                _auto_log(auto_id, f"Action {idx+1} not responding → NETWORK ERROR PAUSED", "error")
+                _auto_log(auto_id, f"Action {idx+1} not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                 _emit_auto_update(auto)
             else:
                 rt["state"] = "ACTION_SET"
@@ -2536,32 +2606,76 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             next_at = rt.get("nextVerifyAt") or (now + verify_interval)
             
             if now >= next_at:
-                owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
-                ctrl = action.get("switchStateTopic") or action.get("switchCmdTopic")
-                online = _topic_is_available(owner_sess, ctrl) if owner_sess else True
+                # Active Liveness Ping: bypass broken availability topics by demanding an active state reply
+                rt["_pingTs"] = time.time()
+                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
+                
+                # Freeze timer back exactly to interval boundary
+                elapsed_trig = next_at - (anchor or now)
+                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_trig)
+                rt["timerStart"] = None
+                rt["verifyStart"] = now
+                rt["state"] = "ACTION_PING_VERIFY"
+                _emit_auto_update(auto)
+                return
+        return
 
-                if online:
-                    # Verified good — schedule the next check; timer untouched.
-                    rt["nextVerifyAt"] = next_at + verify_interval
-                else:
-                    # Device offline (LWT). Roll timer back exactly to interval boundary.
-                    elapsed_trig = next_at - (anchor or now)
-                    rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_trig)
-                    rt["timerStart"] = None
-                    rt.pop("nextVerifyAt", None)
-                    rt.pop("_verifyAnchor", None)
-                    
-                    avail_topics = list(owner_sess.avail_map.get(ctrl, [])) if owner_sess else []
-                    rt["prePauseNetwork"] = "ACTION_RUN"
-                    rt["errorReason"] = "offline"
-                    rt["retryCount"] = 0
-                    rt["pauseUntil"] = now + 60
-                    rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
-                    rt["_offlineTopics"] = [t for t in (action.get("switchStateTopic"), action.get("switchCmdTopic"), *avail_topics) if t]
-                    rt["_recheckOnResume"] = True
-                    rt["state"] = "PAUSED_NETWORK"
-                    _auto_log(auto_id, f"Action {idx+1} check: device offline → NETWORK ERROR PAUSED", "error")
-                    _emit_auto_update(auto)
+    if state == "ACTION_PING_VERIFY":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        action = actions[idx] if idx < len(actions) else {}
+        
+        ping_ts = rt.get("_pingTs", 0)
+        owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
+        ctrl = action.get("switchStateTopic") or action.get("switchCmdTopic")
+        
+        is_alive = False
+        if owner_sess:
+            check_topics = [ctrl] + list(owner_sess.avail_map.get(ctrl, []))
+            for t in check_topics:
+                if t and t in owner_sess.device_states:
+                    last_msg_ts = owner_sess.device_states[t].get("ts_float", 0)
+                    if last_msg_ts >= ping_ts:
+                        is_alive = True
+                        break
+                
+        if is_alive:
+            # Device successfully replied to our ping! Resume ACTION_RUN.
+            rt["timerStart"] = now
+            rt["state"] = "ACTION_RUN"
+            
+            duration = action.get("duration", 0)
+            if duration > 600:
+                verify_interval = 60
+            elif duration >= 60:
+                verify_interval = 30
+            else:
+                verify_interval = 5
+                
+            rt["nextVerifyAt"] = now + verify_interval
+            rt.pop("_pingTs", None)
+            _emit_auto_update(auto)
+            return
+            
+        # If not verified yet, wait up to 5 seconds
+        if now - (rt.get("verifyStart") or now) > 5:
+            # 5 seconds elapsed without a reply to our ping. Device is DEAD!
+            rt.pop("nextVerifyAt", None)
+            rt.pop("_verifyAnchor", None)
+            rt.pop("_pingTs", None)
+            
+            avail_topics = list(owner_sess.avail_map.get(ctrl, [])) if owner_sess else []
+            rt["prePauseNetwork"] = "ACTION_RUN"
+            rt["errorReason"] = "offline"
+            rt["retryCount"] = 0
+            rt["pauseUntil"] = now + 60
+            rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
+            rt["_offlineTopics"] = [t for t in (action.get("switchStateTopic"), action.get("switchCmdTopic"), *avail_topics) if t]
+            rt["_recheckOnResume"] = True
+            rt["state"] = "PAUSED_NETWORK"
+            _auto_log(auto_id, f"Action {idx+1} liveness ping failed → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
+            rt["isNetworkRetry"] = True
+            _emit_auto_update(auto)
         return
 
     if state == "ACTION_DRIFT_VERIFY":
@@ -2579,7 +2693,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             rt["driftRetryCount"] = rt.get("driftRetryCount", 0) + 1
             if rt["driftRetryCount"] >= MAX_RETRIES:
                 _enter_network_pause(auto, rt, now, "ACTION_SET", reason="not_obeying")
-                _auto_log(auto_id, f"Action {idx+1} drift — device not responding → NETWORK ERROR PAUSED", "error")
+                _auto_log(auto_id, f"Action {idx+1} drift — device not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                 _emit_auto_update(auto)
             else:
                 # Re-send and try again
@@ -2630,7 +2744,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             rt["retryCount"] = rt.get("retryCount", 0) + 1
             if rt["retryCount"] >= MAX_RETRIES:
                 _enter_network_pause(auto, rt, now, "OVERLAP_NEXT_SET", reason="not_obeying")
-                _auto_log(auto_id, f"Overlap Action {next_idx+1} not responding → NETWORK ERROR PAUSED", "error")
+                _auto_log(auto_id, f"Overlap Action {next_idx+1} not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                 _emit_auto_update(auto)
             else:
                 rt["state"] = "OVERLAP_NEXT_SET"
@@ -2689,7 +2803,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             if rt["driftRetryCount"] >= MAX_RETRIES:
                 rt.pop("driftAction", None)
                 _enter_network_pause(auto, rt, now, "BUFFER", reason="not_obeying")
-                _auto_log(auto_id, "Buffer drift — device not responding → NETWORK ERROR PAUSED", "error")
+                _auto_log(auto_id, "Buffer drift — device not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
                 _emit_auto_update(auto)
             else:
                 _mqtt_set_switch(sw.get("switchCmdTopic", ""), sw.get("state", ""), auto)
