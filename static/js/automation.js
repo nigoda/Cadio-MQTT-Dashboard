@@ -114,11 +114,16 @@
       OVERLAP_NEXT_VERIFY: auto.runtime?.loopingToFirst ? "Verify Init & Next" : "Verifying Next",
       ACTION_REVERT: "Reverting", ACTION_VERIFY_REVERT: "Verifying Revert", BUFFER: "Buffer",
       PAUSED_CONDITION: "Paused (Condition)", PAUSED_SCHEDULE: "Paused (Schedule)", PAUSED_USER: "Paused (User)", PAUSED_ENFORCE: "Pausing for Schedule",
-      PAUSED_NETWORK: "Network Error Paused",
+      PAUSED_NETWORK: "Network Error Paused", SCHEDULER_PING_VERIFY: "Ping Check",
       COMPLETED: "Completed", ERROR_SET: "Error Recovery", ERROR_VERIFY: "Error Verify", ERROR: "Error"
     };
     if (rs === "PAUSED_NETWORK") {
       return "Network Error Paused";
+    }
+    if (rs === "ACTION_PING_VERIFY" || rs === "SCHEDULER_PING_VERIFY") {
+      const pre = auto.runtime?.prePingState;
+      if (pre === "PAUSED_NETWORK") return "Network Error Paused";
+      return map[pre] || (pre || "Running");
     }
     if (rs.startsWith("ERROR") && auto.runtime?.errorReason === "missing") {
       return "Error (Device Not Found)";
@@ -131,7 +136,13 @@
     if (window._dashboardEntities) {
       for (const eid in window._dashboardEntities) {
         const e = window._dashboardEntities[eid];
-        if (e.type === "switch" && e.cmdTopic) ents.push(e);
+        if (e.type === "switch" && e.cmdTopic) {
+           const wd = (window.watchdogs || {})[e.deviceSerial];
+           if (wd && (e.cmdTopic === wd || e.stateTopic === wd)) {
+             continue; // Skip watchdog switches
+           }
+           ents.push(e);
+        }
       }
     }
     return ents;
@@ -231,7 +242,16 @@
     if (rt.state === "ACTION_RUN") {
       const timerStart = rt.timerStart || (Date.now() / 1000);
       const elapsedSec = Math.max(0, (Date.now() / 1000) - timerStart);
-      elapsedCurSec = Math.min(dur, elapsedSec);
+      if (rt.remainingTime !== undefined && rt.remainingTime !== null) {
+        const currentRemaining = Math.max(0, rt.remainingTime - elapsedSec);
+        elapsedCurSec = Math.max(0, dur - currentRemaining);
+      } else {
+        elapsedCurSec = Math.min(dur, elapsedSec);
+      }
+    } else if (rt.state && (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY" || rt.state === "ACTION_DRIFT_VERIFY")) {
+      if (rt.remainingTime !== undefined && rt.remainingTime !== null) {
+        elapsedCurSec = Math.max(0, dur - rt.remainingTime);
+      }
     } else if (rt.state === "BUFFER") {
       const bufStart = rt.bufferStart || (Date.now() / 1000);
       const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
@@ -356,6 +376,31 @@
         }
 
         inp.disabled = true; // disable while checking
+        
+        // Check if automation uses any switch that is currently a watchdog
+        let conflictWatchdog = null;
+        const allItems = [...(a.actions||[]), ...(a.initialization||[]), ...(a.deinitialization||[]), ...(a.schedule?.setIfTrue||[]), ...(a.schedule?.setIfFalse||[])];
+        for (const i of allItems) {
+            const topic = i.switchCmdTopic || i.switchStateTopic || "";
+            if (!topic) continue;
+            for (const [unit, wdTopic] of Object.entries(window.watchdogs || {})) {
+                if (wdTopic && topic === wdTopic) {
+                    conflictWatchdog = wdTopic;
+                    break;
+                }
+            }
+            if (conflictWatchdog) break;
+        }
+        
+        if (conflictWatchdog) {
+            inp.disabled = false;
+            inp.checked = false; // revert visual toggle
+            const msg = "Cannot turn ON: this automation uses a switch that is currently set as a Watchdog. Please change the watchdog switch first.";
+            if (window.showToastNotification) window.showToastNotification("Watchdog Conflict", msg, "error");
+            else alert(msg);
+            return;
+        }
+        
         const conflictsMap = validateRunConflicts(a);
         inp.disabled = false;
 
@@ -411,11 +456,27 @@
       const curAction = idx < actions.length ? actions[idx] : actions[actions.length - 1];
       const dur = curAction.duration || 0;
       
-      if (rt.state === "ACTION_RUN") {
+      if (rt.state === "ACTION_RUN" || (rt.state && (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY" || rt.state === "ACTION_DRIFT_VERIFY"))) {
         const timerStart = rt.timerStart || (Date.now() / 1000);
-        const elapsedSec = Math.max(0, (Date.now() / 1000) - timerStart);
-        const remainingCurSec = Math.max(0, dur - elapsedSec);
-        curSub = `${curAction.switchName || 'Switch'} ${curAction.state} for ${formatTime(elapsedSec)}`;
+        const elapsedSecSinceResume = Math.max(0, (Date.now() / 1000) - timerStart);
+        
+        let remainingCurSec = Math.max(0, dur - elapsedSecSinceResume);
+        let trueElapsedSec = elapsedSecSinceResume;
+        
+        if (rt.remainingTime !== undefined && rt.remainingTime !== null) {
+          if (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY" || rt.state === "ACTION_DRIFT_VERIFY") {
+            remainingCurSec = rt.remainingTime;
+          } else {
+            remainingCurSec = Math.max(0, rt.remainingTime - elapsedSecSinceResume);
+          }
+          trueElapsedSec = Math.max(0, dur - remainingCurSec);
+        }
+        
+        let actionStr = 'for';
+        if (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY") actionStr = 'Paused at';
+        if (rt.state === "ACTION_DRIFT_VERIFY") actionStr = 'Verifying at';
+        
+        curSub = `${curAction.switchName || 'Switch'} ${curAction.state} ${actionStr} ${formatTime(trueElapsedSec)}`;
 
         if (idx + 1 < actions.length) {
           const nextAction = actions[idx + 1];
@@ -1859,6 +1920,7 @@
   socket.on("automations_list", (list) => {
     _autos = {};
     (list || []).forEach(a => { _autos[a.id] = a; });
+    window.automations = _autos;
     renderList();
     renderDetail();
   });
@@ -1868,6 +1930,7 @@
     if (!auto) return;
     auto.logs = data.logs || [];
     _autos[auto.id] = auto;
+    window.automations = _autos;
     renderList();
     if (_selectedId === auto.id) renderDetail();
   });

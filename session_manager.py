@@ -49,6 +49,10 @@ class UserSession:
         self.automations: dict = {}         # auto_id -> automation dict
         self.automation_logs: dict = {}     # auto_id -> list of log entries
 
+        # Unit-Level Watchdog state
+        self.watchdogs: dict = {}           # unit_serial -> topic
+        self.unit_liveness: dict = {}       # unit_serial -> True/False (True = online)
+
         # Socket tracking (all browser tabs for this user)
         self.socket_sids: set = set()
 

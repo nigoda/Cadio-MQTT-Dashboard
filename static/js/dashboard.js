@@ -58,6 +58,10 @@
   const sensorsDevices    = $("#sensors-devices");
   const sensorsBadges     = $("#sensors-badges");
   const sensorCharts      = $("#sensor-charts");
+  
+  window.watchdogs = {};
+  window.unitLiveness = {};
+  window.enabledUnits = [];
 
   const overviewSearch    = $("#overview-search");
   const lightsSearch      = $("#lights-search");
@@ -102,6 +106,33 @@
   socket.on("session_token", (d) => {
     if (d && d.token) localStorage.setItem("cadio_session_token", d.token);
   });
+  
+  socket.on("watchdogs_update", (data) => {
+    if (data && data.watchdogs) {
+      window.watchdogs = data.watchdogs || {};
+      window.unitLiveness = data.liveness || {};
+      if (data.next_pings) window.watchdogNextPings = data.next_pings;
+      if (data.enabled_units) window.enabledUnits = data.enabled_units;
+    } else {
+      window.watchdogs = data || {};
+    }
+    renderAll();
+  });
+  
+  // Update countdown timers every second
+  setInterval(() => {
+    document.querySelectorAll('.watchdog-countdown').forEach(el => {
+      const nextTime = parseFloat(el.getAttribute('data-next'));
+      if (!isNaN(nextTime) && nextTime > 0) {
+        const secondsLeft = Math.max(0, Math.floor(nextTime - (Date.now() / 1000)));
+        if (secondsLeft <= 0) {
+          el.textContent = 'Checking…';
+        } else {
+          el.textContent = secondsLeft + 's';
+        }
+      }
+    });
+  }, 1000);
 
   // Force reconnection when app returns to foreground from iOS background freeze
   document.addEventListener("visibilitychange", () => {
@@ -563,10 +594,22 @@
 
   // Filter a device's entity list by a search term. If the device's own name/serial
   // matches, all its entities are kept; otherwise only entities whose name matches.
-  function filterEntitiesBySearch(serial, list, term) {
-    if (!term) return list;
-    if (deviceLabel(serial).toLowerCase().includes(term)) return list;
-    return list.filter((e) => (e.name || "").toLowerCase().includes(term));
+  function filterEntitiesBySearch(serial, entities, term) {
+    let filtered = entities;
+    const currentWatchdog = window.watchdogs[serial];
+    
+    // Always hide the current watchdog from normal entity rendering
+    if (currentWatchdog) {
+       filtered = filtered.filter(e => e.stateTopic !== currentWatchdog && e.cmdTopic !== currentWatchdog);
+    }
+    
+    if (!term) return filtered;
+    return filtered.filter((e) => {
+      const name = (e.name || "").toLowerCase();
+      const st = (e.stateTopic || "").toLowerCase();
+      const ct = (e.cmdTopic || "").toLowerCase();
+      return name.includes(term) || st.includes(term) || ct.includes(term);
+    });
   }
 
   function renderOverviewByDevice(byDevice, term) {
@@ -582,23 +625,159 @@
       if (allEntities.length === 0) return "";
       const dev = devices[serial] || {};
       const subtitle = [dev.model, dev.sw_version].filter(Boolean).join(" · ");
+      
+      const switches = [...grp.light, ...grp.switch];
+      let watchdogSelectHtml = "";
+      if (switches.length > 0) {
+        let currentWatchdog = window.watchdogs[serial];
+        
+        // Auto-select the switch ending with _20 if no watchdog is explicitly set
+        if (currentWatchdog === undefined) {
+          const defaultSwitch = switches.find(s => {
+            const topic = s.cmdTopic || s.stateTopic || "";
+            return topic.endsWith("_20/set") || topic.endsWith("_20");
+          });
+          if (defaultSwitch) {
+            currentWatchdog = defaultSwitch.cmdTopic || defaultSwitch.stateTopic;
+            // Save it back to backend automatically so it persists
+            window.watchdogs[serial] = currentWatchdog;
+            if (window.socket && window.socket.connected) {
+              window.socket.emit("set_watchdog", { unit: serial, topic: currentWatchdog });
+            }
+          } else {
+             currentWatchdog = 'none';
+             window.watchdogs[serial] = 'none';
+          }
+        }
+        
+        const unitIsEnabled = window.enabledUnits && window.enabledUnits.includes(serial);
+        const isOffline = unitIsEnabled && window.unitLiveness[serial] === false;
+        
+        const iconClass = isOffline ? "wd-icon wd-icon--offline" : "wd-icon";
+          
+        let nextPingText = "";
+        if (unitIsEnabled && currentWatchdog && currentWatchdog !== 'none') {
+            let secondsLeft = "?";
+            let rawNext = "";
+            if (window.watchdogNextPings && window.watchdogNextPings[serial]) {
+                rawNext = window.watchdogNextPings[serial];
+                secondsLeft = Math.max(0, Math.floor(rawNext - (Date.now() / 1000)));
+            }
+            nextPingText = `<span class="wd-countdown">Next: <span class="watchdog-countdown" data-next="${rawNext}">${secondsLeft}s</span></span>`;
+        }
+          
+        watchdogSelectHtml = `
+          <div class="ha-watchdog-selector">
+            <span class="material-symbols-outlined ${iconClass}">pets</span>
+            <label class="wd-label">Watchdog:</label>
+            <select class="watchdog-select" data-unit="${serial}">
+              <option value="none" ${currentWatchdog === 'none' ? 'selected' : ''}>None</option>
+              ${switches.map(s => {
+                  const val = s.cmdTopic || s.stateTopic;
+                  let usedInAuto = null;
+                  for (const auto of Object.values(window.automations || {})) {
+                      const allItems = [...(auto.actions||[]), ...(auto.initialization||[]), ...(auto.deinitialization||[]), ...(auto.schedule?.setIfTrue||[]), ...(auto.schedule?.setIfFalse||[])];
+                      if (allItems.some(i => (i.switchCmdTopic || i.switchStateTopic || "") === val)) {
+                          usedInAuto = auto.name;
+                          break;
+                      }
+                  }
+                  
+                  if (usedInAuto && currentWatchdog !== val) {
+                      return '';
+                  }
+                  
+                  const disabledStr = usedInAuto ? `disabled title="Used in automation: ${escHtml(usedInAuto)}"` : '';
+                  const labelSuffix = usedInAuto ? ' (In Use)' : '';
+                  return `<option value="${val}" ${currentWatchdog === val ? 'selected' : ''} ${disabledStr}>${escHtml(s.name)}${labelSuffix}</option>`;
+              }).join("")}
+            </select>
+            ${nextPingText}
+          </div>
+        `;
+      }
+      
+      // LED indicator: show Online/Offline only when unit is used in an ON automation
+      const unitIsEnabled = window.enabledUnits && window.enabledUnits.includes(serial);
+      let ledColor, ledShadow, ledTitle;
+      if (unitIsEnabled) {
+        const isOffline = window.unitLiveness[serial] === false;
+        ledColor = isOffline ? "#f44336" : "#4caf50";
+        ledShadow = isOffline ? "" : "box-shadow: 0 0 5px #4caf50;";
+        ledTitle = isOffline ? "Offline" : "Online";
+      } else {
+        ledColor = "#555";
+        ledShadow = "";
+        ledTitle = "Standby (No active automation)";
+      }
+      
       return `
         <div class="ha-card">
-          <div class="ha-card-header">
-            <span class="material-symbols-outlined">developer_board</span>
-            ${escHtml(deviceLabel(serial))}
+          <div class="ha-card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="material-symbols-outlined">developer_board</span>
+              ${escHtml(deviceLabel(serial))}
+            </div>
+            <div style="width: 12px; height: 12px; border-radius: 50%; background-color: ${ledColor}; border: 1px solid #555; ${ledShadow}" title="${ledTitle}"></div>
           </div>
           ${subtitle ? `<div class="ha-device-subtitle">${escHtml(subtitle)}</div>` : ""}
+          ${watchdogSelectHtml}
           <div class="ha-entity-rows">
             ${allEntities.map((e) => entityRowHTML(e, e.type === "light" || e.type === "switch")).join("")}
           </div>
         </div>`;
+
     }).join("");
     overviewDevices.innerHTML = html || `<div class="ha-card"><div class="ha-empty-row">No devices match your search.</div></div>`;
+    
     // Bind toggle events
     overviewDevices.querySelectorAll(".ha-toggle input").forEach((input) => {
       input.addEventListener("change", onToggle);
     });
+    
+    // Bind watchdog select events
+    overviewDevices.querySelectorAll(".watchdog-select").forEach((select) => {
+      select.addEventListener("change", async (e) => {
+        const unit = e.target.getAttribute("data-unit");
+        const val = e.target.value;
+        
+        // Ask for password confirmation
+        const savedPass = localStorage.getItem("cadio_pass");
+        if (savedPass) {
+            const entered = prompt("Enter your password to change the watchdog switch:");
+            if (entered !== savedPass) {
+                e.target.value = window.watchdogs[unit] || "none";
+                if (entered !== null) alert("Incorrect password.");
+                return;
+            }
+        }
+        
+        // Prevent changing if any automation uses this unit
+        let runningAuto = null;
+        for (const [id, auto] of Object.entries(window.automations || {})) {
+           const allItems = [...(auto.actions||[]), ...(auto.initialization||[]), ...(auto.deinitialization||[]), ...(auto.schedule?.setIfTrue||[]), ...(auto.schedule?.setIfFalse||[])];
+           const usesSwitch = val !== 'none' && allItems.some(i => (i.switchCmdTopic || i.switchStateTopic || "") === val);
+           if (usesSwitch) {
+               runningAuto = auto.name;
+               break;
+           }
+        }
+        if (runningAuto) {
+            e.target.value = window.watchdogs[unit] || "none";
+            alert(`Cannot select this switch as a watchdog because it is currently used in the automation "${runningAuto}". Please remove it from the automation first.`);
+            return;
+        }
+        
+        if (val) {
+          window.watchdogs[unit] = val;
+        } else {
+          window.watchdogs[unit] = 'none';
+        }
+        
+        socket.emit("set_watchdog", { unit: unit, topic: window.watchdogs[unit] });
+      });
+    });
+    
     bindLightControls(overviewDevices);
     bindEntityClicks(overviewDevices);
   }

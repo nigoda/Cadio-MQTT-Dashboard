@@ -256,6 +256,29 @@ DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is 
 # MQTT Watchdog globals
 _mqtt_last_connected_time = time.time()
 
+def _get_enabled_auto_units(sess):
+    """Return set of unit serials used by automations that are toggled ON."""
+    enabled_units = set()
+    for auto_id, auto in getattr(sess, "automations", {}).items():
+        if auto.get("status") != "ON":
+            continue
+        # Gather all topics from actions, initialization, deinitialization, schedule sets
+        all_items = (
+            auto.get("actions", []) +
+            auto.get("initialization", []) +
+            auto.get("deinitialization", []) +
+            auto.get("schedule", {}).get("setIfTrue", []) +
+            auto.get("schedule", {}).get("setIfFalse", [])
+        )
+        for item in all_items:
+            topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+            if topic:
+                parts = topic.split("/")
+                if len(parts) >= 4:
+                    unit = parts[3].split("_")[0]
+                    enabled_units.add(unit)
+    return enabled_units
+
 def _mqtt_watchdog():
     """Background thread to ensure per-session MQTT reconnects after internet loss."""
     logging.info("[WATCHDOG] MQTT monitor thread started")
@@ -483,6 +506,81 @@ def on_message(client, userdata, msg):
         if isinstance(payload, dict) and topic.endswith("/config"):
             _auto_subscribe_from_config(client, owner_email, payload)
             _index_availability_from_config(sess, payload)
+            
+            # Auto-assign default watchdog if applicable
+            parts = topic.split("/")
+            if len(parts) >= 4:
+                obj_id = parts[3]
+                unit = obj_id.split("_")[0]
+                if obj_id.endswith("_20") and unit not in sess.watchdogs:
+                    cmd_topic = payload.get("command_topic") or payload.get("state_topic")
+                    if cmd_topic:
+                        sess.watchdogs[unit] = cmd_topic
+                        import db
+                        db.set_watchdogs(owner_email, sess.watchdogs)
+                        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+                        socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
+
+            
+        # 3. Unit-Level Liveness: Any message marks the unit as online
+        if not getattr(sess, "unit_liveness", None):
+            sess.unit_liveness = {}
+            
+        # Extract unit serial from topic (e.g. homeassistant/switch/node/unit_20/...)
+        parts = topic.split("/")
+        if len(parts) >= 4 and not topic.endswith("/set"):
+            obj_id = parts[3]
+            unit = obj_id.split("_")[0]
+            if unit in sess.watchdogs and sess.watchdogs[unit] and sess.watchdogs[unit] != 'none':
+                wd_cmd_topic = sess.watchdogs[unit]
+                wd_parts = wd_cmd_topic.split("/")
+                wd_obj_id = wd_parts[3] if len(wd_parts) >= 4 else ""
+                
+                # Only treat non-watchdog messages as organic liveness & idle timer reset
+                if obj_id != wd_obj_id:
+                    was_offline = sess.unit_liveness.get(unit, True) is False
+                    sess.unit_liveness[unit] = True
+                    if was_offline:
+                        # Unit just came back online organically! Resume paused automations
+                        # BUT only if ALL units used by the automation are alive
+                        now_ts = time.time()
+                        for auto_id, auto in sess.automations.items():
+                            if auto.get("status") == "ON" and auto.get("runtime", {}).get("state") == "PAUSED_NETWORK":
+                                # Check if automation uses this unit
+                                uses_unit = False
+                                all_items = auto.get("actions", []) + auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("schedule", {}).get("setIfTrue", []) + auto.get("schedule", {}).get("setIfFalse", [])
+                                for item in all_items:
+                                    ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                    if ctrl and unit in ctrl:
+                                        uses_unit = True
+                                        break
+                                if not uses_unit:
+                                    continue
+                                # Check ALL units used by this automation are alive
+                                all_units_alive = True
+                                for item in all_items:
+                                    ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                    if ctrl:
+                                        ctrl_parts = ctrl.split("/")
+                                        if len(ctrl_parts) >= 4:
+                                            other_unit = ctrl_parts[3].split("_")[0]
+                                            if sess.unit_liveness.get(other_unit, True) is False:
+                                                all_units_alive = False
+                                                break
+                                if all_units_alive:
+                                    _resume_network_pause(auto, auto["runtime"], now_ts)
+                                    _auto_log(auto_id, f"Unit {unit} reported in (Birth Message). Resuming automation \u2192 {auto['runtime']['state']}", "info")
+                                    _emit_auto_update(auto)
+                                    
+                    # Idle timer reset ONLY for /state messages, and ONLY if no ping is pending
+                    if topic.endswith("/state"):
+                        if hasattr(sess, "watchdog_state") and unit in sess.watchdog_state:
+                            wd_state = sess.watchdog_state[unit]
+                            if not wd_state.get("pending_ping", False):
+                                wd_state["last_ping"] = time.time()
+                                if sess.room:
+                                    next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                                    socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
 
         # 3. Handle Sensor History (if payload is numeric)
         if isinstance(payload, (int, float)):
@@ -831,6 +929,57 @@ def get_push_public_key():
     return jsonify({"publicKey": pub_key})
 
 
+@app.route("/api/watchdogs", methods=["GET"])
+def api_get_watchdogs():
+    email = None
+    token = session.get("user_session_token")
+    if token:
+        import db
+        email = db.validate_user_session(token)
+    if not email:
+        email = session.get("email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+    
+    sess = session_mgr.get_session(email)
+    if not sess:
+        return jsonify({"success": False, "error": "No session"}), 401
+    return jsonify({"success": True, "watchdogs": sess.watchdogs})
+
+@app.route("/api/watchdogs", methods=["POST"])
+def api_save_watchdogs():
+    email = None
+    token = session.get("user_session_token")
+    if token:
+        import db
+        email = db.validate_user_session(token)
+    if not email:
+        email = session.get("email")
+    if not email:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    sess = session_mgr.get_session(email)
+    if not sess:
+        return jsonify({"success": False, "error": "No session"}), 401
+    
+    data = request.json or {}
+    unit = data.get("unit")
+    topic = data.get("topic")
+    if not unit:
+        return jsonify({"success": False, "error": "Missing unit"}), 400
+    
+    if topic:
+        sess.watchdogs[unit] = topic
+    else:
+        sess.watchdogs.pop(unit, None)
+        
+    import db
+    db.set_watchdogs(email, sess.watchdogs)
+    
+    socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
+    return jsonify({"success": True, "watchdogs": sess.watchdogs})
+
+
 @app.route("/api/push/subscribe", methods=["POST"])
 def subscribe_push():
     email = None
@@ -958,10 +1107,11 @@ def handle_login(data):
         emit("mqtt_status", {"connected": True, "message": "Connected"})
         for topic, d in existing_sess.device_states.items():
             emit("device_update", {"topic": topic, **d})
-        for auto_id, auto in existing_sess.automations.items():
-            safe = copy.deepcopy(auto)
-            logs = existing_sess.automation_logs.get(auto_id, [])[:20]
-            emit("automation_update", {"automation": safe, "logs": logs})
+        for auto in db.load_automations(email):
+            logs = getattr(existing_sess, "auto_logs", {}).get(auto["id"], [])
+            emit("automation_update", {"automation": auto, "logs": logs})
+        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(existing_sess, "watchdog_state", {}).items() if existing_sess.watchdogs.get(u) != 'none'}
+        emit("watchdogs_update", {"watchdogs": existing_sess.watchdogs, "liveness": getattr(existing_sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(existing_sess))})
         _emit_admin_stats()
         return
 
@@ -1003,12 +1153,32 @@ def handle_login(data):
             emit("device_update", {"topic": topic, **data})
     
     # 9. Send automation state to this client
-    for auto_id, auto in sess.automations.items():
-        safe = copy.deepcopy(auto)
-        logs = sess.automation_logs.get(auto_id, [])[:20]
-        emit("automation_update", {"automation": safe, "logs": logs})
+    for auto in db.load_automations(email):
+        logs = getattr(sess, "auto_logs", {}).get(auto["id"], [])
+        emit("automation_update", {"automation": auto, "logs": logs})
+    next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+    emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))})
 
     _emit_admin_stats()
+
+@socketio.on("set_watchdog")
+def handle_set_watchdog(data):
+    sess = session_mgr.get_session_by_sid(request.sid)
+    if not sess: return
+    unit = data.get("unit")
+    topic = data.get("topic")
+    if not unit: return
+    
+    if topic:
+        sess.watchdogs[unit] = topic
+    else:
+        sess.watchdogs.pop(unit, None)
+        
+    import db
+    db.set_watchdogs(sess.email, sess.watchdogs)
+    next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+    socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
+
 
 
 @socketio.on("save_push_subscription")
@@ -1526,6 +1696,15 @@ def _automation_device_health(auto):
         if discovery_ready and ctrl not in sess.known_control_topics:
             result["missing"].append(name)
             return
+            
+        parts = ctrl.split("/")
+        if len(parts) >= 4:
+            obj_id = parts[3]
+            unit = obj_id.split("_")[0]
+            if getattr(sess, "unit_liveness", {}).get(unit, True) is False:
+                result["offline"].append(name)
+                return
+                
         if not _topic_is_available(sess, ctrl):
             result["offline"].append(name)
 
@@ -2011,20 +2190,6 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             if not reported_in and not due:
                 return  # keep holding until the device reports in or the minute elapses
             
-            if reported_in:
-                # Device spontaneously sent data! Actively verify it NOW.
-                _resume_network_pause(auto, rt, now)
-                actions = auto.get("actions", [])
-                idx = rt.get("currentActionIndex", 0)
-                if idx < len(actions):
-                    action = actions[idx]
-                    _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
-                    rt["driftRetryCount"] = 0
-                    rt["verifyStart"] = now
-                    rt["state"] = "ACTION_DRIFT_VERIFY"
-                    _auto_log(auto_id, "Device reported in early. Actively verifying state.", "info")
-                    _emit_auto_update(auto)
-                return
 
             if offline_devices:
                 # Availability still reports offline → arm the next 1-minute retry.
@@ -2032,19 +2197,10 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
                 return
 
-            # Reachable again (according to availability or due timeout) 
-            # BUT we know availability is broken! We must actively ping to verify it's truly back online!
+            # Reachable again (according to 1 min timeout)
             _resume_network_pause(auto, rt, now)
-            actions = auto.get("actions", [])
-            idx = rt.get("currentActionIndex", 0)
-            if idx < len(actions):
-                action = actions[idx]
-                rt["_pingTs"] = time.time()
-                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
-                rt["verifyStart"] = now
-                rt["state"] = "ACTION_PING_VERIFY"
-                _auto_log(auto_id, "1-minute timeout reached. Actively pinging device to verify if online...", "info", notify=False)
-                _emit_auto_update(auto)
+            _auto_log(auto_id, "Network paused 1-minute timeout reached. Resuming.", "info")
+            _emit_auto_update(auto)
             return
 
         if offline_devices:
@@ -2129,13 +2285,6 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 if last_sent_key in rt:
                     rt.pop(last_sent_key, None)
                 
-                # Active Ping / Reinforcement
-                # Every 60 seconds, re-send the enforced command to ensure the device hasn't
-                # silently dropped off or lost state without us noticing.
-                ping_key = f"_last_ping_{topic}"
-                if now - rt.get(ping_key, 0) >= 60:
-                    _mqtt_set_switch(topic, item.get("state", ""), auto)
-                    rt[ping_key] = now
 
         if rt.get("sched_yielded_switches", []) != yielded_this_tick:
             rt["sched_yielded_switches"] = yielded_this_tick
@@ -2236,24 +2385,34 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
     if state == "WAIT_CONDITION":
         cond = evaluate_condition(auto)
         sched = check_schedule(auto)
-        if cond and sched:
-            # Check cycle limit before starting a new cycle
-            max_cycles = auto.get("maxCyclesPerDay", 0)
-            if max_cycles > 0:
-                today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
-                cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
-                if cycles_today >= max_cycles:
+        
+        # Check cycle limit before starting a new cycle
+        max_cycles = auto.get("maxCyclesPerDay", 0)
+        today_str = _get_auto_now(auto).strftime("%Y-%m-%d")
+        cycles_today = rt.get("cycles_today", 0) if rt.get("cycles_date") == today_str else 0
+        
+        if not rt.get("init_completed"):
+            if sched:
+                if max_cycles > 0 and cycles_today >= max_cycles:
                     if rt.get("_cycle_paused") != today_str:
                         rt["_cycle_paused"] = today_str
                         _auto_log(auto_id, f"Max cycles reached ({cycles_today}/{max_cycles}) — pausing until tomorrow")
                         _emit_auto_update(auto)
                     return
-            
-            if not rt.get("init_completed"):
+                
                 rt["state"] = "INIT_SET"
                 rt["retryCount"] = 0
-                _auto_log(auto_id, "Condition satisfied + Schedule active → INIT_SET (First run only)")
-            else:
+                _auto_log(auto_id, "Schedule active → INIT_SET (First run only)")
+                _emit_auto_update(auto)
+        else:
+            if cond and sched:
+                if max_cycles > 0 and cycles_today >= max_cycles:
+                    if rt.get("_cycle_paused") != today_str:
+                        rt["_cycle_paused"] = today_str
+                        _auto_log(auto_id, f"Max cycles reached ({cycles_today}/{max_cycles}) — pausing until tomorrow")
+                        _emit_auto_update(auto)
+                    return
+                
                 if not auto.get("actions"):
                     rt["state"] = "SCHEDULER_RUN"
                     _auto_log(auto_id, "Condition satisfied + Schedule active → SCHEDULER_RUN (No actions mode)")
@@ -2261,7 +2420,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                     rt["state"] = "ACTION_SET"
                     rt["currentActionIndex"] = 0
                     _auto_log(auto_id, "Condition satisfied + Schedule active → ACTION_SET")
-            _emit_auto_update(auto)
+                _emit_auto_update(auto)
         return
 
     if state == "INIT_SET":
@@ -2507,135 +2666,6 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             return
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
-        if idx < len(actions):
-            action = actions[idx]
-            rt.pop("_recheckOnResume", None)
-
-            # 1. Instant Drift Check (Memory Payload)
-            if not _verify_switches([action], auto):
-                elapsed_so_far = now - (rt.get("timerStart") or now)
-                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_so_far)
-                rt["timerStart"] = None
-                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
-                rt["driftRetryCount"] = 0
-                rt["verifyStart"] = now
-                rt["state"] = "ACTION_DRIFT_VERIFY"
-                _auto_log(auto_id, f"Switch drift detected on Action {idx+1} — correcting", "warning")
-                _emit_auto_update(auto)
-                return
-
-            # 2. Interval Network Liveness Check
-            duration = action.get("duration", 0)
-            if duration > 600:
-                verify_interval = 60
-            elif duration >= 60:
-                verify_interval = 30
-            else:
-                verify_interval = 5
-
-            anchor = rt.get("timerStart")
-            if rt.get("_verifyAnchor") != anchor:
-                rt["_verifyAnchor"] = anchor
-                rt["nextVerifyAt"] = (anchor or now) + verify_interval
-
-            next_at = rt.get("nextVerifyAt") or (now + verify_interval)
-            
-            if now >= next_at:
-                # Active Liveness Ping: bypass broken availability topics by demanding an active state reply
-                rt["_pingTs"] = time.time()
-                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
-                
-                # Freeze timer back exactly to interval boundary
-                elapsed_trig = next_at - (anchor or now)
-                rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_trig)
-                rt["timerStart"] = None
-                rt["verifyStart"] = now
-                rt["state"] = "ACTION_PING_VERIFY"
-                _emit_auto_update(auto)
-                return
-        return
-
-    if state == "ACTION_PING_VERIFY":
-        actions = auto.get("actions", [])
-        idx = rt.get("currentActionIndex", 0)
-        action = actions[idx] if idx < len(actions) else {}
-        
-        ping_ts = rt.get("_pingTs", 0)
-        owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
-        ctrl = action.get("switchStateTopic") or action.get("switchCmdTopic")
-        
-        is_alive = False
-        if owner_sess:
-            check_topics = [ctrl] + list(owner_sess.avail_map.get(ctrl, []))
-            for t in check_topics:
-                if t and t in owner_sess.device_states:
-                    last_msg_ts = owner_sess.device_states[t].get("ts_float", 0)
-                    if last_msg_ts >= ping_ts:
-                        is_alive = True
-                        break
-                
-        if is_alive:
-            # Device successfully replied to our ping! Resume ACTION_RUN.
-            rt["timerStart"] = now
-            rt["state"] = "ACTION_RUN"
-            
-            duration = action.get("duration", 0)
-            if duration > 600:
-                verify_interval = 60
-            elif duration >= 60:
-                verify_interval = 30
-            else:
-                verify_interval = 5
-                
-            rt["nextVerifyAt"] = now + verify_interval
-            rt.pop("_pingTs", None)
-            _emit_auto_update(auto)
-            return
-            
-        # If not verified yet, wait up to 5 seconds
-        if now - (rt.get("verifyStart") or now) > 5:
-            # 5 seconds elapsed without a reply to our ping. Device is DEAD!
-            rt.pop("nextVerifyAt", None)
-            rt.pop("_verifyAnchor", None)
-            rt.pop("_pingTs", None)
-            
-            avail_topics = list(owner_sess.avail_map.get(ctrl, [])) if owner_sess else []
-            rt["prePauseNetwork"] = "ACTION_RUN"
-            rt["errorReason"] = "offline"
-            rt["retryCount"] = 0
-            rt["pauseUntil"] = now + 60
-            rt["_offlinePausedTs"] = datetime.utcnow().isoformat()
-            rt["_offlineTopics"] = [t for t in (action.get("switchStateTopic"), action.get("switchCmdTopic"), *avail_topics) if t]
-            rt["_recheckOnResume"] = True
-            rt["state"] = "PAUSED_NETWORK"
-            _auto_log(auto_id, f"Action {idx+1} liveness ping failed → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
-            rt["isNetworkRetry"] = True
-            _emit_auto_update(auto)
-        return
-
-    if state == "ACTION_DRIFT_VERIFY":
-        actions = auto.get("actions", [])
-        idx = rt.get("currentActionIndex", 0)
-        action = actions[idx] if idx < len(actions) else {}
-        if _verify_switches([action], auto):
-            # Switch corrected — resume ACTION_RUN with remaining time
-            rt["timerStart"] = now
-            rt["state"] = "ACTION_RUN"
-            rt["driftRetryCount"] = 0
-            _auto_log(auto_id, f"Drift corrected on Action {idx+1} — resuming")
-            _emit_auto_update(auto)
-        elif now - (rt.get("verifyStart") or now) > DRIFT_VERIFY_TIMEOUT:
-            rt["driftRetryCount"] = rt.get("driftRetryCount", 0) + 1
-            if rt["driftRetryCount"] >= MAX_RETRIES:
-                _enter_network_pause(auto, rt, now, "ACTION_SET", reason="not_obeying")
-                _auto_log(auto_id, f"Action {idx+1} drift — device not responding → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
-                _emit_auto_update(auto)
-            else:
-                # Re-send and try again
-                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", ""), auto)
-                rt["verifyStart"] = now
-                _auto_log(auto_id, f"Drift correction retry {rt['driftRetryCount']}/{MAX_RETRIES} on Action {idx+1}", "warning")
-                _emit_auto_update(auto)
         return
 
     if state == "OVERLAP_NEXT_SET":
@@ -2932,6 +2962,177 @@ def _engine_loop():
                 engine_tick(auto, sequence_overrides.get(session.email, {}), schedule_overrides.get(session.email, {}))
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
+                
+        # --- Unit-Level Watchdog Verification ---
+        now = time.time()
+        for email, sess in list(session_mgr._sessions.items()):
+            if not getattr(sess, "watchdog_state", None):
+                sess.watchdog_state = {}
+            
+            # Only activate watchdog for units used in ON automations
+            enabled_units = _get_enabled_auto_units(sess)
+                
+            for unit, topic in list(sess.watchdogs.items()):
+                if not topic or topic == 'none': continue # Empty means no watchdog for this unit
+                
+                # Skip watchdog ping if unit is not in any ON automation
+                if unit not in enabled_units:
+                    continue
+
+                
+                state = sess.watchdog_state.get(unit)
+                if state is None:
+                    state = {}
+                    sess.watchdog_state[unit] = state
+                last_ping = state.get("last_ping", 0)
+                
+                if now - last_ping >= 60 and not state.get("pending_ping", False):
+                    # Time to ping this unit
+                    # Toggle state ON -> OFF -> ON based on last known payload
+                    current_payload = "off"
+                    state_topic = topic.replace("/set", "/state").replace("/availability", "/state")
+                    if state_topic in sess.device_states:
+                         p = sess.device_states[state_topic].get("payload", "")
+                         if isinstance(p, dict):
+                             payload_raw = str(p.get("state", "")).lower()
+                         else:
+                             payload_raw = str(p).lower()
+                         
+                         logging.info(f"[WATCHDOG-DEBUG] p: {p}, type: {type(p)}, payload_raw: {payload_raw}")
+                         
+                         if payload_raw == "off": current_payload = "off"
+                         else: current_payload = "on"
+                    toggle_to = "OFF" if current_payload == "on" else "ON"
+                    
+                    cmd_topic = topic.replace("/state", "/set").replace("/availability", "/set")
+                    # It's usually the set topic we want. If they selected the state topic, we replace it.
+                    if "/set" not in topic:
+                        cmd_topic = topic.rsplit("/", 1)[0] + "/set"
+                    else:
+                        cmd_topic = topic
+                    
+                    state["pending_ping"] = True
+                    state["last_ping"] = now
+                    state["expected_state"] = toggle_to
+
+                    if sess.mqtt_client and sess.mqtt_connected:
+                        sess.mqtt_client.publish(cmd_topic, json.dumps({"state": toggle_to}))
+                        logging.info(f"[WATCHDOG:{email}] Published {toggle_to} to {cmd_topic}")
+                        if sess.room:
+                            next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                            socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(enabled_units)}, room=sess.room)
+                            logging.info(f"[WATCHDOG:{email}] Emitted next_pings to room {sess.room}")
+                        else:
+                            logging.info(f"[WATCHDOG:{email}] Skipped emitting next_pings because room is {sess.room}")
+                        
+                elif state.get("pending_ping") and now - last_ping > 5:
+                    # 5 seconds passed since ping, check if expected state arrived
+                    is_alive = False
+                    state_topic = topic.replace("/set", "/state").replace("/availability", "/state")
+                    expected = state.get("expected_state")
+                    
+                    if state_topic in sess.device_states:
+                        p = sess.device_states[state_topic].get("payload", "")
+                        ts_f = sess.device_states[state_topic].get("ts_float", 0)
+                        if isinstance(p, dict):
+                            payload_raw = str(p.get("state", p.get("value", ""))).lower()
+                        elif isinstance(p, str) and p.startswith("{"):
+                            try:
+                                d = json.loads(p)
+                                payload_raw = str(d.get("state", d.get("value", p))).lower()
+                            except:
+                                payload_raw = p.lower()
+                        else:
+                            payload_raw = str(p).lower()
+                            
+                        logging.info(f"[WATCHDOG-VERIFY] {unit}: expected={expected}, payload_raw={payload_raw}, ts_f={ts_f}, last_ping={last_ping}, diff={ts_f - last_ping}")
+                        
+                        if ts_f > last_ping and expected and expected.lower() == payload_raw:
+                            is_alive = True
+                    else:
+                        logging.info(f"[WATCHDOG-VERIFY] {unit}: state_topic {state_topic} NOT IN device_states!")
+                            
+                    state["pending_ping"] = False
+                    
+                    if getattr(sess, "unit_liveness", None) is None:
+                        sess.unit_liveness = {}
+                    
+                    old_liveness = sess.unit_liveness.get(unit, True)
+                    
+                    if is_alive:
+                        sess.unit_liveness[unit] = True
+                        state["retry_count"] = 0
+                        
+                        if not old_liveness:
+                            # Unit just came back online via watchdog verification! Resume paused automations
+                            # BUT only if ALL units used by the automation are alive
+                            for auto_id, auto in list(sess.automations.items()):
+                                if auto.get("status") == "ON" and auto.get("runtime", {}).get("state") == "PAUSED_NETWORK":
+                                    # Check if automation uses this unit
+                                    uses_unit = False
+                                    all_items = auto.get("actions", []) + auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("schedule", {}).get("setIfTrue", []) + auto.get("schedule", {}).get("setIfFalse", [])
+                                    for item in all_items:
+                                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                        if ctrl and unit in ctrl:
+                                            uses_unit = True
+                                            break
+                                    if not uses_unit:
+                                        continue
+                                    # Check ALL units used by this automation are alive
+                                    all_units_alive = True
+                                    for item in all_items:
+                                        ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                        if ctrl:
+                                            ctrl_parts = ctrl.split("/")
+                                            if len(ctrl_parts) >= 4:
+                                                other_unit = ctrl_parts[3].split("_")[0]
+                                                if sess.unit_liveness.get(other_unit, True) is False:
+                                                    all_units_alive = False
+                                                    break
+                                    if all_units_alive:
+                                        _resume_network_pause(auto, auto["runtime"], time.time())
+                                        _auto_log(auto_id, f"Unit {unit} verified online via watchdog. Resuming automation \u2192 {auto['runtime']['state']}", "info")
+                                        _emit_auto_update(auto)
+                    else:
+                        retry_count = state.get("retry_count", 0)
+                        if retry_count < 2:
+                            state["retry_count"] = retry_count + 1
+                            state["last_ping"] = 0  # Force immediate retry
+                            continue  # Skip marking offline
+                        else:
+                            # Unit is DEAD!
+                            sess.unit_liveness[unit] = False
+                            state["retry_count"] = 0
+                            
+                    if old_liveness != sess.unit_liveness[unit] and sess.room:
+                        # Liveness changed, broadcast update
+                        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                        socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(enabled_units)}, room=sess.room)
+                        
+                    if not sess.unit_liveness[unit]:
+                        # Pause all automations using devices from this unit!
+                        for auto_id, auto in list(sess.automations.items()):
+                            if auto.get("status") != "ON": continue
+                            rt = auto.get("runtime", {})
+                            auto_state = rt.get("state", "IDLE")
+                            if auto_state in ("IDLE", "PAUSED_NETWORK", "ERROR", "ERROR_SET", "ERROR_VERIFY"): continue
+                            
+                            # Check if automation uses this unit
+                            uses_unit = False
+                            for item in auto.get("actions", []) + auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("schedule", {}).get("setIfTrue", []) + auto.get("schedule", {}).get("setIfFalse", []):
+                                ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                if ctrl and unit in ctrl:
+                                    uses_unit = True
+                                    break
+                            
+                            if uses_unit:
+                                _enter_network_pause(auto, rt, now, auto_state, reason="offline", retry=False)
+                                _auto_log(auto_id, f"Unit {unit} watchdog failed. Entire unit offline \u2192 NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
+                                rt["isNetworkRetry"] = True
+                                _emit_auto_update(auto)
+                
+                sess.watchdog_state[unit] = state
+        
         # Periodic DB save every 60 seconds
         if time.time() - _last_db_save > 60:
             try:
@@ -3586,6 +3787,11 @@ def handle_toggle_automation(data):
         db.save_automation(_get_user_email(), auto)
     except Exception as e:
         logging.error(f"[DB] Failed to save toggle state: {e}")
+    
+    # Notify frontend about changed enabled_units so watchdog UI updates immediately
+    if sess.room:
+        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+        socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
 
 
 @socketio.on("reset_automation")
@@ -3718,6 +3924,7 @@ def _load_session_automations(sess, email):
     try:
         import db
         saved = db.load_automations(email)
+        sess.watchdogs = db.get_watchdogs(email)
         sess.automations.clear()
         sess.automation_logs.clear()
         for auto in saved:
