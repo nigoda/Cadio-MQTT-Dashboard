@@ -508,9 +508,12 @@ def _auto_to_row(user_email, auto):
     """Convert an in-memory automation dict to DB row values."""
     # Separate runtime from config
     runtime = auto.get("runtime", {})
+    # Keys that are runtime-only and must never be persisted to DB
+    _TRANSIENT_KEYS = {"id", "name", "description", "status", "runtime", "logs", "ai_priority",
+                       "_session_automations", "_owner_email", "ai_running"}
     config = {}
     for k, v in auto.items():
-        if k not in ("id", "name", "description", "status", "runtime", "logs", "ai_priority"):
+        if k not in _TRANSIENT_KEYS:
             config[k] = v
     return (
         auto["id"],

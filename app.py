@@ -257,10 +257,11 @@ DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is 
 _mqtt_last_connected_time = time.time()
 
 def _get_enabled_auto_units(sess):
-    """Return set of unit serials used by automations that are toggled ON."""
+    """Return set of unit serials used by automations that are ON or currently deinitializing."""
     enabled_units = set()
     for auto_id, auto in getattr(sess, "automations", {}).items():
-        if auto.get("status") != "ON":
+        state = auto.get("runtime", {}).get("state", "IDLE")
+        if auto.get("status") != "ON" and not state.startswith("DEINIT"):
             continue
         # Gather all topics from actions, initialization, deinitialization, schedule sets
         all_items = (
@@ -1980,6 +1981,9 @@ def _emit_auto_update(auto):
     auto_id = safe.get("id", "")
     owner_email = auto.get("_owner_email", "")
     
+    # Strip transient engine-only keys that must never be serialized
+    safe.pop("_session_automations", None)
+    
     # Inject current AI running status
     safe["ai_running"] = (auto_id in _ai_running_set)
     
@@ -2034,6 +2038,52 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
                 rt["pauseReason"] = None
                 _emit_auto_update(auto)
                 return
+
+            # --- Serialized deinit: wait if another automation sharing our switches
+            # started deinit earlier and hasn't finished yet. ---
+            my_queued_at = rt.get("deinit_queued_at", 0)
+            my_topics = set(
+                item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                for item in deinits
+                if item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+            )
+            # Look across ALL automations in the same session for a conflicting earlier deinit
+            should_wait = False
+            for other_id, other_auto in (auto.get("_session_automations") or {}).items():
+                if other_id == auto_id:
+                    continue
+                other_rt = other_auto.get("runtime", {})
+                other_state = other_rt.get("state", "IDLE")
+                if other_state not in ("DEINIT_SET", "DEINIT_VERIFY_INDIVIDUAL"):
+                    continue
+                other_queued_at = other_rt.get("deinit_queued_at", 0)
+                # Tiebreak by auto_id (lexicographic) so both sides agree on who goes first
+                # when timestamps are identical (e.g. toggled simultaneously by a script).
+                if other_queued_at > my_queued_at:
+                    continue  # Other started later — we go first
+                if other_queued_at == my_queued_at and other_id > auto_id:
+                    continue  # Same timestamp — smaller ID wins; if other_id is larger, we go first
+                # Other started earlier — check if it shares any switch with us
+                other_topics = set(
+                    item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                    for item in other_auto.get("deinitialization", [])
+                    if item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                )
+                if my_topics & other_topics:  # Intersection — shared switches
+                    should_wait = True
+                    break
+            if should_wait:
+                # Don't log every tick — only log when we first start waiting
+                if not rt.get("_deinit_waiting"):
+                    rt["_deinit_waiting"] = True
+                    _auto_log(auto_id, "DEINIT waiting for earlier automation to finish first", "warning")
+                    _emit_auto_update(auto)
+                return  # Try again next engine tick
+            else:
+                if rt.pop("_deinit_waiting", None):
+                    _auto_log(auto_id, "DEINIT proceeding — earlier automation finished")
+                    _emit_auto_update(auto)
+
             if idx < len(deinits):
                 item = deinits[idx]
                 topic = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
@@ -2935,7 +2985,8 @@ def _engine_loop():
                                 if ctrl: sequence_overrides[session.email][auto_id].add(ctrl)
                             
                         # Only claim DEINIT switches if ACTIVELY running DEINIT
-                        if state.startswith("DEINIT_"):
+                        # (NOT if waiting for a serialized earlier deinit to finish)
+                        if state.startswith("DEINIT_") and not rt.get("_deinit_waiting"):
                             for item in auto.get("deinitialization", []):
                                 ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
                                 if ctrl: sequence_overrides[session.email][auto_id].add(ctrl)
@@ -2959,6 +3010,9 @@ def _engine_loop():
         # Tick all session-based automations (multi-tenant)
         for session, auto_id, auto in session_mgr.get_all_automations():
             try:
+                # Inject a snapshot of sibling automations so engine_tick can serialize
+                # concurrent deinits. Snapshot avoids concurrent-modification issues.
+                auto["_session_automations"] = dict(session.automations)
                 engine_tick(auto, sequence_overrides.get(session.email, {}), schedule_overrides.get(session.email, {}))
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
@@ -3256,38 +3310,56 @@ def _schedules_overlap(a, b):
         switches = set()
         # Exclude deinitialization as requested by user
         for x in auto.get("initialization", []) + auto.get("actions", []) + auto.get("schedule", {}).get("setIfTrue", []) + auto.get("schedule", {}).get("setIfFalse", []):
-            if "switchCmdTopic" in x: switches.add(x["switchCmdTopic"])
+            if x.get("switchCmdTopic"): switches.add(x["switchCmdTopic"])
         return switches
 
     if not get_switches(a).intersection(get_switches(b)):
         return False
         
-    sched_a = a.get("schedule", {})
-    sched_b = b.get("schedule", {})
-    
-    if sched_a.get("is24hr") or sched_b.get("is24hr"):
-        return True
+    def _weekly_utc_intervals(sched):
+        days = sched.get("days", [])
+        if not days: return []
+        offset = sched.get("utcOffset", 0)
+        try: offset = int(offset)
+        except: offset = 0
         
-    def parse_time(t_str):
-        if not t_str: return 0
-        try:
-            h, m = t_str.split(":")
-            return int(h) * 60 + int(m)
-        except:
-            return 0
+        is24hr = sched.get("is24hr", False)
+        ranges = []
+        if is24hr:
+            ranges = [[0, 1440]]
+        else:
+            for r in sched.get("timeRanges", []):
+                try:
+                    sh, sm = map(int, r.get("start", "").split(":"))
+                    eh, em = map(int, r.get("end", "").split(":"))
+                    s = sh * 60 + sm
+                    e = eh * 60 + em
+                    if s < e: ranges.append([s, e])
+                    elif s > e: ranges.extend([[s, 1440], [0, e]])
+                    else: ranges.append([0, 1440])
+                except:
+                    pass
+            if not ranges: ranges = [[0, 1440]]
             
-    ra = sched_a.get("timeRanges", [])
-    rb = sched_b.get("timeRanges", [])
-    if not ra or not rb:
-        return False
+        out = []
+        day_idx = {"Mon": 0, "Tue": 1, "Wed": 2, "Thu": 3, "Fri": 4, "Sat": 5, "Sun": 6}
+        for d in days:
+            di = day_idx.get(d)
+            if di is None: continue
+            for ps, pe in ranges:
+                s = ((di * 1440 + ps + offset) % 10080 + 10080) % 10080
+                e = s + (pe - ps)
+                if e <= 10080: out.append([s, e])
+                else: out.extend([[s, 10080], [0, e - 10080]])
+        return out
         
-    for rangeA in ra:
-        for rangeB in rb:
-            sA = parse_time(rangeA.get("start", "00:00"))
-            eA = parse_time(rangeA.get("end", "23:59"))
-            sB = parse_time(rangeB.get("start", "00:00"))
-            eB = parse_time(rangeB.get("end", "23:59"))
-            if sA <= eB and sB <= eA:
+    ia = _weekly_utc_intervals(a.get("schedule", {}))
+    ib = _weekly_utc_intervals(b.get("schedule", {}))
+    
+    if not ia or not ib: return False
+    for s1, e1 in ia:
+        for s2, e2 in ib:
+            if s1 < e2 and s2 < e1:
                 return True
     return False
 
@@ -3713,7 +3785,14 @@ def handle_update_automation(data):
                 if _schedules_overlap(auto, other_auto):
                     _auto_log(auto_id, f"Edit introduced a conflict with running automation '{other_auto.get('name')}'. Turning OFF.", level="warn")
                     auto["status"] = "OFF"
-                    rt["state"] = "IDLE"
+                    deinits = auto.get("deinitialization", [])
+                    if deinits:
+                        rt["state"] = "DEINIT_SET"
+                        rt["currentDeinitIndex"] = 0
+                        rt["retryCount"] = 0
+                        rt["deinit_queued_at"] = time.time()
+                    else:
+                        rt["state"] = "IDLE"
                     socketio.emit("automation_error", {"error": f"Automation '{auto.get('name')}' turned OFF due to a conflict with '{other_auto.get('name')}'."}, room=sess.room)
                     break
 
@@ -3774,6 +3853,7 @@ def handle_toggle_automation(data):
             new_rt["state"] = "DEINIT_SET"
             new_rt["currentDeinitIndex"] = 0
             new_rt["retryCount"] = 0
+            new_rt["deinit_queued_at"] = time.time()  # Used to sequence concurrent deinits
             auto["runtime"] = new_rt
             _auto_log(auto_id, "Turned OFF → DEINIT_SET (deinitialization)")
         else:

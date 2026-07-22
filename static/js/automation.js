@@ -58,7 +58,13 @@
     if (!auto) return "off";
     const s = auto.status;
     const rs = auto.runtime?.state || "IDLE";
-    if (s !== "ON") return "off";
+    if (s !== "ON") {
+      // OFF but waiting in the deinit queue
+      if (auto.runtime?._deinit_waiting) return "deinit-waiting";
+      // OFF but actively deiniting
+      if (rs.startsWith("DEINIT_")) return "running";
+      return "off";
+    }
     if (rs === "ERROR") return "error";
     if (rs === "PAUSED_NETWORK") return "error";
     if (rs.startsWith("PAUSED")) return "paused";
@@ -98,7 +104,11 @@
   function stateLabel(auto) {
     if (!auto) return "Off";
     const rs = auto.runtime?.state || "IDLE";
-    
+    const waiting = auto.runtime?._deinit_waiting;
+
+    // DEINIT WAITING — queued behind an earlier automation
+    if (waiting) return "Deinit Waiting";
+
     // Status OFF means it's off, unless it's running a DEINIT or in a network pause for DEINIT
     if (auto.status !== "ON" && !rs.startsWith("DEINIT_") && rs !== "PAUSED_NETWORK") return "Off";
 
@@ -115,6 +125,7 @@
       ACTION_REVERT: "Reverting", ACTION_VERIFY_REVERT: "Verifying Revert", BUFFER: "Buffer",
       PAUSED_CONDITION: "Paused (Condition)", PAUSED_SCHEDULE: "Paused (Schedule)", PAUSED_USER: "Paused (User)", PAUSED_ENFORCE: "Pausing for Schedule",
       PAUSED_NETWORK: "Network Error Paused", SCHEDULER_PING_VERIFY: "Ping Check",
+      DEINIT_SET: "Deinitializing", DEINIT_VERIFY_INDIVIDUAL: "Verify Deinit",
       COMPLETED: "Completed", ERROR_SET: "Error Recovery", ERROR_VERIFY: "Error Verify", ERROR: "Error"
     };
     if (rs === "PAUSED_NETWORK") {
@@ -798,7 +809,7 @@
         
         // Apply red borders to the rows
         switchTopics.forEach(t => {
-            document.querySelectorAll(`.irr-sw-row[data-topic="${t}"]`).forEach(el => el.classList.add("conflict"));
+            document.querySelectorAll(`.irr-sw-row[data-topic="${t}"], tr[data-topic="${t}"]`).forEach(el => el.classList.add("conflict"));
         });
         
       } else {
@@ -1719,8 +1730,6 @@
   function validateRunConflicts(autoToRun) {
     const conflicts = new Map();
     // Re-use the existing logic to calculate its schedule
-    // The auto obj might not have timeRanges formatted exactly like the modal's DOM extraction,
-    // but _weeklyUtcIntervals expects the raw backend auto.schedule object!
     const schedToRun = autoToRun.schedule || {};
     
     // switchCmdTopic -> Set of other automation names overlapping in schedule
@@ -1742,30 +1751,26 @@
       }
     }
     
-    // We want to map topics to names, or map switchNames to names?
-    // In updateCardDetails we use topics to find DOM nodes, and we map to names for the error string.
-    // We can just return a Map of switchNames -> Set(other names), AND return the topics.
-    // Let's return a Map of switchName -> Set(other names).
     const conflictsByName = new Map();
     for (const t of conflicts.keys()) {
-      // Find the name of this switch from autoToRun
       let swName = t;
-      const check = (arr) => (arr||[]).forEach(x => { if (x.switchCmdTopic === t && x.switchName) swName = x.switchName; });
-      check(autoToRun.initialization);
-      check(autoToRun.deinitialization);
-      check(autoToRun.actions);
-      check(autoToRun.schedule?.setIfTrue);
-      check(autoToRun.schedule?.setIfFalse);
-      
-      if (!conflictsByName.has(swName)) conflictsByName.set(swName, new Set());
-      conflicts.get(t).forEach(n => conflictsByName.get(swName).add(n));
+      if (window._dashboardEntities) {
+        for (const eid in window._dashboardEntities) {
+          const e = window._dashboardEntities[eid];
+          if (e.cmdTopic === t) {
+            swName = e.name || t;
+            if (window._dashboardDevices && window._dashboardDevices[e.deviceSerial]) {
+              swName += ` (${window._dashboardDevices[e.deviceSerial].name})`;
+            }
+            break;
+          }
+        }
+      }
+      conflictsByName.set(swName, conflicts.get(t));
     }
     
-    return {
-       size: conflicts.size,
-       topics: Array.from(conflicts.keys()),
-       entries: () => conflictsByName.entries()
-    };
+    conflictsByName.topics = Array.from(conflicts.keys());
+    return conflictsByName;
   }
 
   // Keep the highlights/banner in sync as the user edits switches, days, times or the 24-hour toggle.
@@ -1945,6 +1950,14 @@
     if (_selectedId === data.id) { _selectedId = null; }
     renderList();
     renderDetail();
+  });
+
+  socket.on("automation_error", (data) => {
+    if (window.showToastNotification) {
+      window.showToastNotification("Automation Conflict", data.error, "error");
+    } else {
+      alert(data.error);
+    }
   });
 
   socket.on("suggested_ai_settings_response", (res) => {
