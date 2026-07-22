@@ -126,7 +126,7 @@
       if (!isNaN(nextTime) && nextTime > 0) {
         const secondsLeft = Math.max(0, Math.floor(nextTime - (Date.now() / 1000)));
         if (secondsLeft <= 0) {
-          el.textContent = 'Checking…';
+          el.textContent = '#';
         } else {
           el.textContent = secondsLeft + 's';
         }
@@ -313,6 +313,7 @@
 
     if (isConfig && typeof payload === "object" && payload !== null) {
       handleDiscoveryConfig(topic, payload);
+      renderAll();
     } else {
       handleStateUpdate(topic, payload, ts);
     }
@@ -342,7 +343,7 @@
     // Extract device info (serial_number identifies the physical unit)
     const dev = config.device || {};
     const serial = dev.serial_number || objectId.split("_")[0] || "unknown";
-    if (serial && !devices[serial]) {
+    if (serial) {
       devices[serial] = {
         serial,
         name: dev.name || serial,
@@ -575,6 +576,9 @@
     renderSensorBadges(sensorsBadges, typeGroups.sensor);
     renderAllEntitiesList(typeGroups);
     renderCharts(typeGroups.sensor);
+    if (window._renderAutomationUI) {
+      window._renderAutomationUI();
+    }
   }
 
   // -------------------------------------------------------

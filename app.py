@@ -257,11 +257,11 @@ DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is 
 _mqtt_last_connected_time = time.time()
 
 def _get_enabled_auto_units(sess):
-    """Return set of unit serials used by automations that are ON or currently deinitializing."""
+    """Return set of unit serials used by automations that are ON or currently deinitializing/paused."""
     enabled_units = set()
     for auto_id, auto in getattr(sess, "automations", {}).items():
         state = auto.get("runtime", {}).get("state", "IDLE")
-        if auto.get("status") != "ON" and not state.startswith("DEINIT"):
+        if auto.get("status") != "ON" and not state.startswith("DEINIT") and state != "PAUSED_NETWORK":
             continue
         # Gather all topics from actions, initialization, deinitialization, schedule sets
         all_items = (
@@ -1981,9 +1981,6 @@ def _emit_auto_update(auto):
     auto_id = safe.get("id", "")
     owner_email = auto.get("_owner_email", "")
     
-    # Strip transient engine-only keys that must never be serialized
-    safe.pop("_session_automations", None)
-    
     # Inject current AI running status
     safe["ai_running"] = (auto_id in _ai_running_set)
     
@@ -2000,7 +1997,7 @@ def _emit_auto_update(auto):
         socketio.emit("automation_update", {"automation": safe, "logs": logs})
 
 
-def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
+def engine_tick(auto, sequence_overrides=None, schedule_overrides=None, session_automations=None):
     """Execute one tick of the state machine for an automation."""
     rt = auto["runtime"]
     state = rt["state"]
@@ -2049,7 +2046,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None):
             )
             # Look across ALL automations in the same session for a conflicting earlier deinit
             should_wait = False
-            for other_id, other_auto in (auto.get("_session_automations") or {}).items():
+            for other_id, other_auto in (session_automations or {}).items():
                 if other_id == auto_id:
                     continue
                 other_rt = other_auto.get("runtime", {})
@@ -3012,8 +3009,7 @@ def _engine_loop():
             try:
                 # Inject a snapshot of sibling automations so engine_tick can serialize
                 # concurrent deinits. Snapshot avoids concurrent-modification issues.
-                auto["_session_automations"] = dict(session.automations)
-                engine_tick(auto, sequence_overrides.get(session.email, {}), schedule_overrides.get(session.email, {}))
+                engine_tick(auto, sequence_overrides.get(session.email, {}), schedule_overrides.get(session.email, {}), dict(session.automations))
             except Exception as e:
                 logging.error(f"[ENGINE] Error in {auto_id} (user={session.email}): {e}")
                 
@@ -3025,6 +3021,13 @@ def _engine_loop():
             
             # Only activate watchdog for units used in ON automations
             enabled_units = _get_enabled_auto_units(sess)
+            
+            # If enabled_units changed (e.g. an automation finished deinit and went IDLE), notify frontend
+            last_enabled = getattr(sess, "last_enabled_units", None)
+            if last_enabled is not None and enabled_units != last_enabled and sess.room:
+                next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(enabled_units)}, room=sess.room)
+            sess.last_enabled_units = set(enabled_units)
                 
             for unit, topic in list(sess.watchdogs.items()):
                 if not topic or topic == 'none': continue # Empty means no watchdog for this unit
@@ -3783,7 +3786,7 @@ def handle_update_automation(data):
             if other_id == auto_id: continue
             if other_auto.get("status") == "ON":
                 if _schedules_overlap(auto, other_auto):
-                    _auto_log(auto_id, f"Edit introduced a conflict with running automation '{other_auto.get('name')}'. Turning OFF.", level="warn")
+                    _auto_log(auto_id, f"Edit introduced a conflict with running automation '{other_auto.get('name')}'. Turning OFF.", level="warning")
                     auto["status"] = "OFF"
                     deinits = auto.get("deinitialization", [])
                     if deinits:

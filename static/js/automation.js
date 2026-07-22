@@ -170,6 +170,28 @@
     return ents;
   }
 
+  function getDynamicSwitchName(cmdTopic, fallbackName) {
+    if (!cmdTopic) return fallbackName || "Switch";
+    const e = getSwitchEntities().find(x => x.cmdTopic === cmdTopic || x.stateTopic === cmdTopic);
+    if (e) {
+      const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
+      return `${e.name} (${devName})`;
+    }
+    return fallbackName || cmdTopic || "Switch";
+  }
+
+  function getDynamicSensorName(stateTopic, fallbackName) {
+    if (!stateTopic) return fallbackName || "Sensor";
+    if (window._dashboardEntities) {
+      const e = Object.values(window._dashboardEntities).find(x => x.stateTopic === stateTopic && (x.type === "sensor" || x.type === "binary_sensor"));
+      if (e) {
+        const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
+        return `${e.name} (${devName})`;
+      }
+    }
+    return fallbackName || stateTopic || "Sensor";
+  }
+
   function switchOptions(selectedCmd) {
     return getSwitchEntities().map(e => {
       const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
@@ -487,18 +509,18 @@
         if (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY") actionStr = 'Paused at';
         if (rt.state === "ACTION_DRIFT_VERIFY") actionStr = 'Verifying at';
         
-        curSub = `${curAction.switchName || 'Switch'} ${curAction.state} ${actionStr} ${formatTime(trueElapsedSec)}`;
+        curSub = `${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)} ${curAction.state} ${actionStr} ${formatTime(trueElapsedSec)}`;
 
         if (idx + 1 < actions.length) {
           const nextAction = actions[idx + 1];
-          nextStep = `${nextAction.switchName || 'Switch'} ${nextAction.state}`;
+          nextStep = `${getDynamicSwitchName(nextAction.switchCmdTopic, nextAction.switchName)} ${nextAction.state}`;
         } else {
           if (rt.loopingToFirst || (rt.state === "ACTION_RUN" && !rt.pauseReason)) {
             const nextAction = actions[0];
-            nextStep = `Initialization & ${nextAction.switchName || 'Switch'} ${nextAction.state}`;
+            nextStep = `Initialization & ${getDynamicSwitchName(nextAction.switchCmdTopic, nextAction.switchName)} ${nextAction.state}`;
           } else {
             const revertState = curAction.state === "ON" ? "OFF" : "ON";
-            nextStep = `${curAction.switchName || 'Switch'} ${revertState}`;
+            nextStep = `${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)} ${revertState}`;
           }
         }
         nextSub = `In ${formatTime(remainingCurSec)}`;
@@ -509,12 +531,12 @@
         const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
         curSub = `Waiting for buffer`;
         nextSub = `In ${formatTime(Math.max(0, bufTime - bufElapsed))}`;
-        nextStep = `Revert ${curAction.switchName || 'Switch'}`;
+        nextStep = `Revert ${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)}`;
 
       } else if (rt.state === "IDLE" || rt.state === "COMPLETED") {
         curSub = rt.state === "COMPLETED" ? "Finished cycle" : "Waiting for start";
       } else {
-        curSub = `Action ${Math.min(idx + 1, actions.length)}: ${curAction.switchName || 'Switch'} ${curAction.state}`;
+        curSub = `Action ${Math.min(idx + 1, actions.length)}: ${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)} ${curAction.state}`;
         if (rt.loopingToFirst && rt.state.includes("OVERLAP")) {
           curSub = `Looping: Initialization & Action 1`;
         }
@@ -584,7 +606,8 @@
     if (liveSw) {
       const switchMap = new Map();
       [...inits, ...actions, ...errs, ...schedTrue, ...schedFalse].forEach(s => {
-        if (s.switchName) switchMap.set(s.switchName, s.switchStateTopic || s.switchCmdTopic);
+        const t = s.switchStateTopic || s.switchCmdTopic;
+        if (t) switchMap.set(getDynamicSwitchName(s.switchCmdTopic, s.switchName), t);
       });
       if (switchMap.size > 0) {
         liveSw.innerHTML = `<div class="irr-live-grid">${Array.from(switchMap.entries()).map(([name, topic]) => {
@@ -612,7 +635,7 @@
     if (liveSen) {
       const sensorMap = new Map();
       conds.forEach(c => {
-        if (c.sensorName || c.sensorStateTopic) sensorMap.set(c.sensorName || "Sensor", c.sensorStateTopic);
+        if (c.sensorStateTopic) sensorMap.set(getDynamicSensorName(c.sensorStateTopic, c.sensorName), c.sensorStateTopic);
       });
       if (sensorMap.size > 0) {
         liveSen.innerHTML = `<div class="irr-live-grid">${Array.from(sensorMap.entries()).map(([name, topic]) => {
@@ -822,7 +845,7 @@
     // Init
     const initBody = $("#irr-init-body");
     const inits = auto.initialization || [];
-    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(getDynamicSwitchName(i.switchCmdTopic, i.switchName))} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
 
     // Deinit
     const deinitBody = $("#irr-deinit-body");
@@ -833,7 +856,7 @@
         const isDeinitPhase = (rt.state || "").startsWith("DEINIT_");
         const isYielded = isDeinitPhase && (auto.runtime?.yielded_switches || []).includes(topic);
         const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
-        return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span><span style="display:inline-flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span> <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+        return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span><span style="display:inline-flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, i.switchName))}${yieldIcon}</span> <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
       }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
     }
 
@@ -842,7 +865,7 @@
     const conds = auto.condition || [];
     condBody.innerHTML = conds.map((c, i) => {
       const logicBadge = c.logic && i < conds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(getDynamicSensorName(c.sensorStateTopic, c.sensorName))}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
     }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">No conditions (always true)</span>';
 
     // Actions
@@ -863,13 +886,13 @@
       const isYielded = isActionPhase && (auto.runtime?.yielded_switches || []).includes(topic);
       const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
 
-      return `<tr class="${isActive ? "active-action" : ""}" data-topic="${escHtml(topic)}"><td>${i + 1}</td><td><span style="display:inline-flex;align-items:center;">${escHtml(a.switchName || "Switch")}${yieldIcon}</span></td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
+      return `<tr class="${isActive ? "active-action" : ""}" data-topic="${escHtml(topic)}"><td>${i + 1}</td><td><span style="display:inline-flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, a.switchName))}${yieldIcon}</span></td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
     }).join("")}</tbody></table>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No actions configured</span>';
 
     // Error state
     const errBody = $("#irr-error-body");
     const errs = auto.errorState || [];
-    errBody.innerHTML = errs.map(e => `<div class="irr-sw-row"><span>${escHtml(e.switchName || "Switch")}</span><span class="irr-sw-state off">${e.state || "OFF"}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    errBody.innerHTML = errs.map(e => `<div class="irr-sw-row"><span>${escHtml(getDynamicSwitchName(e.switchCmdTopic, e.switchName))}</span><span class="irr-sw-state off">${e.state || "OFF"}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
 
     // Scheduler
     const schedBody = $("#irr-sched-body");
@@ -899,7 +922,7 @@
     const schedConds = sched.conditions || [];
     const schedCondHTML = schedConds.length > 0 ? `<div style="margin-top:12px;"><span class="irr-label">Conditions</span><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${schedConds.map((c, i) => {
       const logicBadge = c.logic && i < schedConds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(getDynamicSensorName(c.sensorStateTopic, c.sensorName))}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
     }).join("")}</div></div>` : '';
 
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
@@ -921,14 +944,14 @@
 
     const setTrueHTML = (sched.setIfTrue || []).map(i => {
       const topic = i.switchCmdTopic || "";
-      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, i.switchName))}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
     }).join("");
     
     const setFalseHTML = (sched.setIfFalse || []).map(i => {
       const topic = i.switchCmdTopic || "";
       const isYielded = (auto.runtime?.sched_yielded_switches || []).includes(topic);
       const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
-      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, i.switchName))}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
     }).join("");
 
     if (setTrueHTML || setFalseHTML) {
@@ -1678,7 +1701,7 @@
   function validateSwitchConflicts() {
     const warnEl = $("#auto-modal-warning");
     SWITCH_CONTAINERS.forEach(cid => {
-      $(`#${cid}`)?.querySelectorAll(".f-switch.warning-conflict").forEach(el => el.classList.remove("warning-conflict"));
+      $(`#${cid}`)?.querySelectorAll(".f-switch.conflict").forEach(el => el.classList.remove("conflict"));
     });
 
     const sched = _collectScheduleLite();
@@ -1701,7 +1724,7 @@
       $(`#${cid}`)?.querySelectorAll(".f-switch").forEach(sel => {
         const topic = sel.value;
         if (topic && topicToAutos.has(topic)) {
-          sel.classList.add("warning-conflict");
+          sel.classList.add("conflict");
           const swName = sel.selectedOptions[0]?.dataset.name || topic;
           if (!conflicts.has(swName)) conflicts.set(swName, new Set());
           topicToAutos.get(topic).forEach(n => conflicts.get(swName).add(n));
@@ -1753,19 +1776,7 @@
     
     const conflictsByName = new Map();
     for (const t of conflicts.keys()) {
-      let swName = t;
-      if (window._dashboardEntities) {
-        for (const eid in window._dashboardEntities) {
-          const e = window._dashboardEntities[eid];
-          if (e.cmdTopic === t) {
-            swName = e.name || t;
-            if (window._dashboardDevices && window._dashboardDevices[e.deviceSerial]) {
-              swName += ` (${window._dashboardDevices[e.deviceSerial].name})`;
-            }
-            break;
-          }
-        }
-      }
+      let swName = getDynamicSwitchName(t, t);
       conflictsByName.set(swName, conflicts.get(t));
     }
     
@@ -2370,5 +2381,11 @@
 
   // Start live timer loop
   setInterval(updateLiveTimers, 1000);
+
+  // Expose global render function for dashboard.js to trigger on device rename
+  window._renderAutomationUI = function() {
+    renderList();
+    if (_selectedId) renderDetail();
+  };
   });
 })();
