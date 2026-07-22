@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+venv/
+env/
+.env
+
+# Database & Keys (CRITICAL: Do not upload these)
+cadio.db
+cadio.db-shm
+cadio.db-wal
+.encryption_key
+settings.json
+exports/
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Legacy AI (No longer used with Gemini)
+models/
+*.gguf

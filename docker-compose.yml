@@ -1,0 +1,29 @@
+# Nivixsa demo — isolated from the PTZ system on this host.
+# - The app is NOT published to any host port (avoids the PTZ :5000 API).
+# - A dedicated cloudflared container (its own tunnel token) exposes it,
+#   completely separate from the host's PTZ cloudflared.service.
+services:
+  nivixsa-smart-agriculture:
+    build: .
+    container_name: nivixsa-smart-agriculture
+    restart: always
+    expose:
+      - "5000" # internal Docker network only — reachable by cloudflared, not the host
+    environment:
+      - TZ=UTC
+    volumes:
+      - ./cadio.db:/app/cadio.db
+      - ./cadio.db-wal:/app/cadio.db-wal
+      - ./cadio.db-shm:/app/cadio.db-shm
+      - ./.encryption_key:/app/.encryption_key
+      - ./.env:/app/.env
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: nivixsa-cloudflared
+    restart: always
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - nivixsa-smart-agriculture

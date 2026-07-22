@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nivixsa Admin — Business Command Center</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --accent-green: #10b981;
+            --accent-cyan: #06b6d4;
+            --accent-gold: #f59e0b;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --danger: #ef4444;
+            --border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            display: flex;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 260px;
+            background: rgba(15, 23, 42, 0.95);
+            border-right: 1px solid var(--border);
+            padding: 2rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+            position: fixed;
+            height: 100vh;
+            z-index: 100;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, var(--accent-green), var(--accent-cyan));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 2rem;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            padding: 0.8rem 1rem;
+            border-radius: 12px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .nav-item.active {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--accent-green);
+        }
+
+        .nav-item:hover:not(.active) {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 260px;
+            padding: 2rem 3rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 3rem;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 3rem;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            padding: 1.5rem;
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .stat-label { color: var(--text-secondary); font-size: 0.9rem; }
+        .stat-value { font-size: 2rem; font-weight: 700; }
+        .stat-trend { font-size: 0.8rem; color: var(--accent-green); }
+
+        /* Sections */
+        .page-section { display: none; animation: fadeIn 0.4s ease; }
+        .page-section.active { display: block; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Table Container */
+        .table-container {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            overflow: hidden;
+        }
+
+        table { width: 100%; border-collapse: collapse; text-align: left; }
+        th { padding: 1.2rem 1.5rem; color: var(--text-secondary); font-weight: 500; border-bottom: 1px solid var(--border); }
+        td { padding: 1.2rem 1.5rem; border-bottom: 1px solid var(--border); }
+
+        /* Badges */
+        .badge {
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+        .badge-free { background: rgba(148, 163, 184, 0.1); color: var(--text-secondary); }
+        .badge-monthly { background: rgba(6, 182, 212, 0.1); color: var(--accent-cyan); }
+        .badge-yearly { background: rgba(245, 158, 11, 0.1); color: var(--accent-gold); }
+
+        /* Revenue Chart Mockup */
+        .chart-box {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 2rem;
+            height: 250px;
+            display: flex;
+            align-items: flex-end;
+            gap: 1.5rem;
+            justify-content: space-around;
+        }
+        .bar {
+            width: 40px;
+            background: linear-gradient(to top, var(--accent-cyan), var(--accent-gold));
+            border-radius: 8px 8px 0 0;
+            position: relative;
+        }
+        .bar::after {
+            content: attr(data-month);
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <div class="logo">NIVIXSA ADMIN</div>
+        
+        <div class="nav-item active" onclick="showPage('revenue', this)">
+            <span>💰</span> Revenue & Plans
+        </div>
+        <div class="nav-item" onclick="showPage('users', this)">
+            <span>👥</span> User Accounts
+        </div>
+        <div class="nav-item" onclick="showPage('health', this)">
+            <span>📈</span> System Health
+        </div>
+        <div class="nav-item" onclick="showPage('ai', this)">
+            <span>🤖</span> AI Usage
+        </div>
+        
+        <div style="margin-top: auto;">
+            <div class="nav-item" style="color: var(--danger);">
+                <span>🚪</span> Logout
+            </div>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <header>
+            <h1 id="page-title">Revenue & Subscriptions</h1>
+        </header>
+
+        <!-- REVENUE PAGE -->
+        <div id="revenue" class="page-section active">
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <span class="stat-label">Monthly Recurring Revenue (MRR)</span>
+                    <span class="stat-value">$4,820</span>
+                    <span class="stat-trend">↑ 18% vs last month</span>
+                </div>
+                <div class="stat-card">
+                    <span class="stat-label">Active Subscriptions</span>
+                    <span class="stat-value">512</span>
+                    <span class="stat-trend">82% Yearly Retention</span>
+                </div>
+                <div class="stat-card" style="border: 1px solid var(--accent-gold);">
+                    <span class="stat-label">Projected Annual Revenue</span>
+                    <span class="stat-value" style="color: var(--accent-gold);">$57,840</span>
+                    <span class="stat-trend">Based on current growth</span>
+                </div>
+            </div>
+
+            <h3 style="margin-bottom: 1.5rem;">Revenue Growth (Last 6 Months)</h3>
+            <div class="chart-box">
+                <div class="bar" style="height: 30%;" data-month="Dec"></div>
+                <div class="bar" style="height: 45%;" data-month="Jan"></div>
+                <div class="bar" style="height: 40%;" data-month="Feb"></div>
+                <div class="bar" style="height: 65%;" data-month="Mar"></div>
+                <div class="bar" style="height: 85%;" data-month="Apr"></div>
+                <div class="bar" style="height: 100%;" data-month="May"></div>
+            </div>
+        </div>
+
+        <!-- USERS PAGE -->
+        <div id="users" class="page-section">
+            <div class="table-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User Account</th>
+                            <th>Plan Type</th>
+                            <th>Status</th>
+                            <th>Next Billing</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><b>john.doe@example.com</b></td>
+                            <td><span class="badge badge-monthly">Monthly</span></td>
+                            <td><span style="color: var(--accent-green)">● Active</span></td>
+                            <td>June 12, 2026</td>
+                            <td><button style="background:none; border:none; color:var(--accent-cyan); cursor:pointer;">Edit Plan</button></td>
+                        </tr>
+                        <tr>
+                            <td><b>farming_pro@agri.in</b></td>
+                            <td><span class="badge badge-yearly">Yearly</span></td>
+                            <td><span style="color: var(--accent-green)">● Active</span></td>
+                            <td>May 2027</td>
+                            <td><button style="background:none; border:none; color:var(--accent-cyan); cursor:pointer;">Edit Plan</button></td>
+                        </tr>
+                        <tr>
+                            <td><b>test_user_free@gmail.com</b></td>
+                            <td><span class="badge badge-free">Free Tier</span></td>
+                            <td><span style="color: var(--text-secondary)">● Active</span></td>
+                            <td>N/A</td>
+                            <td><button style="background:none; border:none; color:var(--accent-cyan); cursor:pointer;">Upgrade</button></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- HEALTH & AI (PLACEHOLDERS) -->
+        <div id="health" class="page-section">
+            <p>System Health Monitor Active... (See User Management for details)</p>
+        </div>
+        <div id="ai" class="page-section">
+            <p>AI Analytics Loading... (Tracking Gemini Token Usage)</p>
+        </div>
+    </div>
+
+    <script>
+        function showPage(pageId, element) {
+            const titles = {
+                'revenue': 'Revenue & Subscriptions',
+                'users': 'User Account Management',
+                'health': 'System Health Monitor',
+                'ai': 'AI Usage & Analytics'
+            };
+            document.getElementById('page-title').innerText = titles[pageId];
+            document.querySelectorAll('.page-section').forEach(s => s.classList.remove('active'));
+            document.getElementById(pageId).classList.add('active');
+            document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+            element.classList.add('active');
+        }
+    </script>
+
+</body>
+</html>

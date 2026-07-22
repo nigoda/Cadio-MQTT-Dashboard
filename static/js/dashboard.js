@@ -4,11 +4,15 @@
 (function () {
   "use strict";
 
+  document.addEventListener("DOMContentLoaded", () => {
+
   // -------------------------------------------------------
   // State
   // -------------------------------------------------------
   const entities = {};        // entityId -> { config, state, type, name, topic, ... }
+  window._dashboardEntities = entities;  // Expose for automation.js
   const devices = {};         // serial -> { name, model, sw_version, serial, manufacturer }
+  window._dashboardDevices = devices;    // Expose for automation.js
   const allTopics = new Set();
   const logEntries = [];
   const MAX_LOG = 500;
@@ -27,6 +31,16 @@
   const loginError   = $("#login-error");
   const appEl        = $("#app");
 
+  // Parse redirect messages (e.g. from global logout redirect)
+  const urlParams = new URLSearchParams(window.location.search);
+  const msg = urlParams.get("msg");
+  if (msg && loginError) {
+    loginError.textContent = msg;
+    loginError.classList.remove("hidden");
+    // Clean up url parameters
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
   const sidebar       = $("#ha-sidebar");
   const sidebarToggle = $("#sidebar-toggle");
   const navItems      = $$(".ha-nav-item");
@@ -35,6 +49,7 @@
   const statusDotMob  = $("#status-indicator-mobile");
   const statusText    = $("#status-text");
   const deviceCount   = $("#device-count");
+  const userEmailEl   = $("#user-email-display");
 
   const statusBadges      = $("#status-badges");
   const overviewDevices   = $("#overview-devices");
@@ -43,6 +58,15 @@
   const sensorsDevices    = $("#sensors-devices");
   const sensorsBadges     = $("#sensors-badges");
   const sensorCharts      = $("#sensor-charts");
+  
+  window.watchdogs = {};
+  window.unitLiveness = {};
+  window.enabledUnits = [];
+
+  const overviewSearch    = $("#overview-search");
+  const lightsSearch      = $("#lights-search");
+  const switchesSearch    = $("#switches-search");
+  const sensorsSearch     = $("#sensors-search");
 
   const logBody       = $("#log-body");
   const logFilter     = $("#log-filter");
@@ -59,20 +83,154 @@
   // -------------------------------------------------------
   // Socket.IO
   // -------------------------------------------------------
+  // Default transports (polling first, then upgrade to WebSocket). Both work under
+  // eventlet: WebSocket-capable networks upgrade; networks that block WebSocket stay
+  // on long-polling, which is fine for real browsers (their engine.io parser has no
+  // per-batch packet cap, unlike python-engineio). Do NOT force websocket-only — that
+  // strands clients on WS-hostile networks with no fallback. See docs/HANDOFF.md.
   const socket = io();
+  window.socket = socket; // Expose for other JS files (automation.js, settings.js)
+
+  // Re-login automatically on connection or re-connection
+  socket.on("connect", () => {
+    console.log("[SOCKET] Connected/Reconnected. Sending login authentication...");
+    const savedEmail = localStorage.getItem("cadio_email") || loginEmail.value;
+    const savedPass = localStorage.getItem("cadio_pass") || loginPass.value;
+    if (savedEmail && savedPass) {
+      socket.emit("login", { email: savedEmail, password: savedPass, auto: true, token: localStorage.getItem("cadio_session_token") });
+    }
+  });
+
+  // Store the per-device session token so refreshes/reconnects reuse the same
+  // session row instead of creating a new one each time.
+  socket.on("session_token", (d) => {
+    if (d && d.token) localStorage.setItem("cadio_session_token", d.token);
+  });
+  
+  socket.on("watchdogs_update", (data) => {
+    if (data && data.watchdogs) {
+      window.watchdogs = data.watchdogs || {};
+      window.unitLiveness = data.liveness || {};
+      if (data.next_pings) window.watchdogNextPings = data.next_pings;
+      if (data.enabled_units) window.enabledUnits = data.enabled_units;
+    } else {
+      window.watchdogs = data || {};
+    }
+    renderAll();
+  });
+  
+  // Update countdown timers every second
+  setInterval(() => {
+    document.querySelectorAll('.watchdog-countdown').forEach(el => {
+      const nextTime = parseFloat(el.getAttribute('data-next'));
+      if (!isNaN(nextTime) && nextTime > 0) {
+        const secondsLeft = Math.max(0, Math.floor(nextTime - (Date.now() / 1000)));
+        if (secondsLeft <= 0) {
+          el.textContent = '#';
+        } else {
+          el.textContent = secondsLeft + 's';
+        }
+      }
+    });
+  }, 1000);
+
+  // Force reconnection when app returns to foreground from iOS background freeze
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      console.log("[PWA] Visibility changed to visible. Checking connection status...");
+      if (!socket.connected) {
+        console.log("[PWA] Socket was disconnected. Forcing reconnect...");
+        socket.connect();
+      }
+    }
+  });
 
   // -------------------------------------------------------
   // Login
   // -------------------------------------------------------
+  const loginSubmitBtn = document.getElementById("login-submit-btn");
+
   loginForm.addEventListener("submit", (e) => {
     e.preventDefault();
     loginError.classList.add("hidden");
-    socket.emit("login", { email: loginEmail.value, password: loginPass.value });
+    const email = loginEmail.value;
+    const pass = loginPass.value;
+    
+    if (loginSubmitBtn) {
+      loginSubmitBtn.disabled = true;
+      loginSubmitBtn.textContent = "Logging In...";
+    }
+    
+    // Store credentials for auto-reconnect on page refresh
+    localStorage.setItem("cadio_email", email);
+    localStorage.setItem("cadio_pass", pass);
+    socket.emit("login", { email, password: pass, token: localStorage.getItem("cadio_session_token") });
   });
 
+  // Auto-login from localStorage on page load / reconnect
+  (function autoLogin() {
+    // Priority 1: pre-filled fields (impersonation)
+    if (loginEmail.value && loginPass.value) {
+      console.log("[DASHBOARD] Auto-logging in via impersonation...");
+      if (loginSubmitBtn) {
+        loginSubmitBtn.disabled = true;
+        loginSubmitBtn.textContent = "Logging In...";
+      }
+      socket.emit("login", { email: loginEmail.value, password: loginPass.value, token: localStorage.getItem("cadio_session_token") });
+      return;
+    }
+    // Priority 2: saved credentials
+    const savedEmail = localStorage.getItem("cadio_email");
+    const savedPass = localStorage.getItem("cadio_pass");
+    if (savedEmail && savedPass) {
+      console.log("[DASHBOARD] Auto-logging in from saved session...");
+      loginEmail.value = savedEmail;
+      if (loginSubmitBtn) {
+        loginSubmitBtn.disabled = true;
+        loginSubmitBtn.textContent = "Logging In...";
+      }
+      socket.emit("login", { email: savedEmail, password: savedPass, auto: true, token: localStorage.getItem("cadio_session_token") });
+    }
+  })();
+
   // -------------------------------------------------------
-  // MQTT Status
+  // Security Handshake
   // -------------------------------------------------------
+  socket.on("security_code_request", (data) => {
+    // Show a prominent notification/modal for the user
+    const msg = `⚠️ SECURITY REQUEST: An administrator is requesting access to your dashboard. \n\nYour security code is: ${data.code}\n\nOnly provide this code to a trusted support agent.`;
+    alert(msg); // In a real "Premium" UI, we'd use a beautiful custom modal
+  });
+
+  socket.on("force_logout", (data) => {
+    // 1. Instantly hide app dashboard and show login overlay
+    if (appEl) appEl.classList.add("hidden");
+    if (loginOverlay) loginOverlay.classList.remove("hidden");
+
+    // 2. Clear credentials from localStorage
+    localStorage.removeItem("cadio_email");
+    localStorage.removeItem("cadio_pass");
+    localStorage.removeItem("cadio_session_token");
+
+    // 3. Clear pre-filled input values to prevent Flask auto-login
+    if (loginEmail) loginEmail.value = "";
+    if (loginPass) loginPass.value = "";
+
+    // 4. Unsubscribe Web Push on this device so notifications stop here too
+    const redirect = () => {
+      window.location.href =
+        "/logout?msg=" + encodeURIComponent(data.message || "Logged out globally.");
+    };
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.ready
+        .then(reg => reg.pushManager.getSubscription())
+        .then(sub => (sub ? sub.unsubscribe() : null))
+        .catch(e => console.error("Error unsubscribing push on force logout:", e))
+        .finally(redirect);
+    } else {
+      redirect();
+    }
+  });
   socket.on("mqtt_status", (data) => {
     const connected = data.connected;
     [statusDot, statusDotMob].forEach((dot) => {
@@ -83,13 +241,56 @@
     if (connected && data.message === "Connected") {
       loginOverlay.classList.add("hidden");
       appEl.classList.remove("hidden");
+
+      // Show the logged-in user's email in the sidebar
+      const currentEmail = loginEmail.value || localStorage.getItem("cadio_email") || "";
+      if (userEmailEl && currentEmail) {
+        userEmailEl.textContent = currentEmail;
+        userEmailEl.title = currentEmail;
+      }
+      
+      const loginBtn = document.getElementById("login-submit-btn");
+      if (loginBtn) {
+        loginBtn.disabled = false;
+        loginBtn.textContent = "Log In";
+      }
+
+      // Fetch settings once logged in to sync UI state
+      socket.emit("get_api_settings");
+      // Auto-subscribe/sync Web Push notifications now that the user is authenticated
+      setTimeout(subscribeUserToPush, 2000);
+
+      // If the Logbook tab is open, (re)load the logged-in devices list now that
+      // the socket is authenticated — the initial request on tab-open may have
+      // fired before login completed and returned an empty list.
+      const logTabEl = document.getElementById("tab-log");
+      if (logTabEl && logTabEl.classList.contains("active")) {
+        setTimeout(() => { try { requestUserSessions(); } catch (e) {} }, 300);
+      }
     }
     if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
       const msg = data.message.toLowerCase();
-      if (msg.includes("bad credentials") || msg.includes("not authorised")) {
-        loginError.textContent = "Invalid email or password";
+      if (msg === "not connected") return; // Ignore initial socket handshake on login screen
+
+      const loginBtn = document.getElementById("login-submit-btn");
+      if (loginBtn) {
+        loginBtn.disabled = false;
+        loginBtn.textContent = "Log In";
+      }
+
+      if (msg.includes("account blocked")) {
+        loginError.textContent = "⚠️ Your CADIO account has been temporarily blocked. Please wait and try again later.";
+        loginError.style.color = "#e67e22";
+        localStorage.removeItem("cadio_email");
+        localStorage.removeItem("cadio_pass");
+      } else if (msg.includes("bad credentials") || msg.includes("not authorised") || msg.includes("cadio login failed")) {
+        loginError.textContent = "❌ Invalid email or password. Please check your CADIO credentials.";
+        loginError.style.color = "";
+        localStorage.removeItem("cadio_email");
+        localStorage.removeItem("cadio_pass");
       } else {
         loginError.textContent = data.message;
+        loginError.style.color = "";
       }
       loginError.classList.remove("hidden");
     }
@@ -112,6 +313,7 @@
 
     if (isConfig && typeof payload === "object" && payload !== null) {
       handleDiscoveryConfig(topic, payload);
+      renderAll();
     } else {
       handleStateUpdate(topic, payload, ts);
     }
@@ -141,7 +343,7 @@
     // Extract device info (serial_number identifies the physical unit)
     const dev = config.device || {};
     const serial = dev.serial_number || objectId.split("_")[0] || "unknown";
-    if (serial && !devices[serial]) {
+    if (serial) {
       devices[serial] = {
         serial,
         name: dev.name || serial,
@@ -366,14 +568,17 @@
       typeGroups[bucket].push(e);
     }
 
-    renderOverviewByDevice(byDevice);
-    renderTypeTabByDevice(lightsDevices, byDevice, ["light"], true);
-    renderTypeTabByDevice(switchesDevices, byDevice, ["switch"], true);
-    renderTypeTabByDevice(sensorsDevices, byDevice, ["sensor", "binary_sensor"], false);
+    renderOverviewByDevice(byDevice, searchTerm(overviewSearch));
+    renderTypeTabByDevice(lightsDevices, byDevice, ["light"], true, searchTerm(lightsSearch));
+    renderTypeTabByDevice(switchesDevices, byDevice, ["switch"], true, searchTerm(switchesSearch));
+    renderTypeTabByDevice(sensorsDevices, byDevice, ["sensor", "binary_sensor"], false, searchTerm(sensorsSearch));
     renderBadges(statusBadges, typeGroups);
     renderSensorBadges(sensorsBadges, typeGroups.sensor);
     renderAllEntitiesList(typeGroups);
     renderCharts(typeGroups.sensor);
+    if (window._renderAutomationUI) {
+      window._renderAutomationUI();
+    }
   }
 
   // -------------------------------------------------------
@@ -386,40 +591,202 @@
     return `${name} (${serial})`;
   }
 
-  function renderOverviewByDevice(byDevice) {
+  // Search term (lowercased) for a given tab's search input.
+  function searchTerm(input) {
+    return input && input.value ? input.value.trim().toLowerCase() : "";
+  }
+
+  // Filter a device's entity list by a search term. If the device's own name/serial
+  // matches, all its entities are kept; otherwise only entities whose name matches.
+  function filterEntitiesBySearch(serial, entities, term) {
+    let filtered = entities;
+    const currentWatchdog = window.watchdogs[serial];
+    
+    // Always hide the current watchdog from normal entity rendering
+    if (currentWatchdog) {
+       filtered = filtered.filter(e => e.stateTopic !== currentWatchdog && e.cmdTopic !== currentWatchdog);
+    }
+    
+    if (!term) return filtered;
+    return filtered.filter((e) => {
+      const name = (e.name || "").toLowerCase();
+      const st = (e.stateTopic || "").toLowerCase();
+      const ct = (e.cmdTopic || "").toLowerCase();
+      return name.includes(term) || st.includes(term) || ct.includes(term);
+    });
+  }
+
+  function renderOverviewByDevice(byDevice, term) {
     if (!overviewDevices) return;
     const serials = Object.keys(byDevice);
     if (serials.length === 0) {
       overviewDevices.innerHTML = '<div class="ha-card"><div class="ha-empty-row">Waiting for devices…</div></div>';
       return;
     }
-    overviewDevices.innerHTML = serials.map((serial) => {
+    const html = serials.map((serial) => {
       const grp = byDevice[serial];
-      const allEntities = [...grp.light, ...grp.switch, ...grp.binary_sensor, ...grp.sensor, ...grp.other];
+      const allEntities = filterEntitiesBySearch(serial, [...grp.light, ...grp.switch, ...grp.binary_sensor, ...grp.sensor, ...grp.other], term);
       if (allEntities.length === 0) return "";
       const dev = devices[serial] || {};
       const subtitle = [dev.model, dev.sw_version].filter(Boolean).join(" · ");
+      
+      const switches = [...grp.light, ...grp.switch];
+      let watchdogSelectHtml = "";
+      if (switches.length > 0) {
+        let currentWatchdog = window.watchdogs[serial];
+        
+        // Auto-select the switch ending with _20 if no watchdog is explicitly set
+        if (currentWatchdog === undefined) {
+          const defaultSwitch = switches.find(s => {
+            const topic = s.cmdTopic || s.stateTopic || "";
+            return topic.endsWith("_20/set") || topic.endsWith("_20");
+          });
+          if (defaultSwitch) {
+            currentWatchdog = defaultSwitch.cmdTopic || defaultSwitch.stateTopic;
+            // Save it back to backend automatically so it persists
+            window.watchdogs[serial] = currentWatchdog;
+            if (window.socket && window.socket.connected) {
+              window.socket.emit("set_watchdog", { unit: serial, topic: currentWatchdog });
+            }
+          } else {
+             currentWatchdog = 'none';
+             window.watchdogs[serial] = 'none';
+          }
+        }
+        
+        const unitIsEnabled = window.enabledUnits && window.enabledUnits.includes(serial);
+        const isOffline = unitIsEnabled && window.unitLiveness[serial] === false;
+        
+        const iconClass = isOffline ? "wd-icon wd-icon--offline" : "wd-icon";
+          
+        let nextPingText = "";
+        if (unitIsEnabled && currentWatchdog && currentWatchdog !== 'none') {
+            let secondsLeft = "?";
+            let rawNext = "";
+            if (window.watchdogNextPings && window.watchdogNextPings[serial]) {
+                rawNext = window.watchdogNextPings[serial];
+                secondsLeft = Math.max(0, Math.floor(rawNext - (Date.now() / 1000)));
+            }
+            nextPingText = `<span class="wd-countdown">Next: <span class="watchdog-countdown" data-next="${rawNext}">${secondsLeft}s</span></span>`;
+        }
+          
+        watchdogSelectHtml = `
+          <div class="ha-watchdog-selector">
+            <span class="material-symbols-outlined ${iconClass}">pets</span>
+            <label class="wd-label">Watchdog:</label>
+            <select class="watchdog-select" data-unit="${serial}">
+              <option value="none" ${currentWatchdog === 'none' ? 'selected' : ''}>None</option>
+              ${switches.map(s => {
+                  const val = s.cmdTopic || s.stateTopic;
+                  let usedInAuto = null;
+                  for (const auto of Object.values(window.automations || {})) {
+                      const allItems = [...(auto.actions||[]), ...(auto.initialization||[]), ...(auto.deinitialization||[]), ...(auto.schedule?.setIfTrue||[]), ...(auto.schedule?.setIfFalse||[])];
+                      if (allItems.some(i => (i.switchCmdTopic || i.switchStateTopic || "") === val)) {
+                          usedInAuto = auto.name;
+                          break;
+                      }
+                  }
+                  
+                  if (usedInAuto && currentWatchdog !== val) {
+                      return '';
+                  }
+                  
+                  const disabledStr = usedInAuto ? `disabled title="Used in automation: ${escHtml(usedInAuto)}"` : '';
+                  const labelSuffix = usedInAuto ? ' (In Use)' : '';
+                  return `<option value="${val}" ${currentWatchdog === val ? 'selected' : ''} ${disabledStr}>${escHtml(s.name)}${labelSuffix}</option>`;
+              }).join("")}
+            </select>
+            ${nextPingText}
+          </div>
+        `;
+      }
+      
+      // LED indicator: show Online/Offline only when unit is used in an ON automation
+      const unitIsEnabled = window.enabledUnits && window.enabledUnits.includes(serial);
+      let ledColor, ledShadow, ledTitle;
+      if (unitIsEnabled) {
+        const isOffline = window.unitLiveness[serial] === false;
+        ledColor = isOffline ? "#f44336" : "#4caf50";
+        ledShadow = isOffline ? "" : "box-shadow: 0 0 5px #4caf50;";
+        ledTitle = isOffline ? "Offline" : "Online";
+      } else {
+        ledColor = "#555";
+        ledShadow = "";
+        ledTitle = "Standby (No active automation)";
+      }
+      
       return `
         <div class="ha-card">
-          <div class="ha-card-header">
-            <span class="material-symbols-outlined">developer_board</span>
-            ${escHtml(deviceLabel(serial))}
+          <div class="ha-card-header" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="material-symbols-outlined">developer_board</span>
+              ${escHtml(deviceLabel(serial))}
+            </div>
+            <div style="width: 12px; height: 12px; border-radius: 50%; background-color: ${ledColor}; border: 1px solid #555; ${ledShadow}" title="${ledTitle}"></div>
           </div>
           ${subtitle ? `<div class="ha-device-subtitle">${escHtml(subtitle)}</div>` : ""}
+          ${watchdogSelectHtml}
           <div class="ha-entity-rows">
             ${allEntities.map((e) => entityRowHTML(e, e.type === "light" || e.type === "switch")).join("")}
           </div>
         </div>`;
+
     }).join("");
+    overviewDevices.innerHTML = html || `<div class="ha-card"><div class="ha-empty-row">No devices match your search.</div></div>`;
+    
     // Bind toggle events
     overviewDevices.querySelectorAll(".ha-toggle input").forEach((input) => {
       input.addEventListener("change", onToggle);
     });
+    
+    // Bind watchdog select events
+    overviewDevices.querySelectorAll(".watchdog-select").forEach((select) => {
+      select.addEventListener("change", async (e) => {
+        const unit = e.target.getAttribute("data-unit");
+        const val = e.target.value;
+        
+        // Ask for password confirmation
+        const savedPass = localStorage.getItem("cadio_pass");
+        if (savedPass) {
+            const entered = prompt("Enter your password to change the watchdog switch:");
+            if (entered !== savedPass) {
+                e.target.value = window.watchdogs[unit] || "none";
+                if (entered !== null) alert("Incorrect password.");
+                return;
+            }
+        }
+        
+        // Prevent changing if any automation uses this unit
+        let runningAuto = null;
+        for (const [id, auto] of Object.entries(window.automations || {})) {
+           const allItems = [...(auto.actions||[]), ...(auto.initialization||[]), ...(auto.deinitialization||[]), ...(auto.schedule?.setIfTrue||[]), ...(auto.schedule?.setIfFalse||[])];
+           const usesSwitch = val !== 'none' && allItems.some(i => (i.switchCmdTopic || i.switchStateTopic || "") === val);
+           if (usesSwitch) {
+               runningAuto = auto.name;
+               break;
+           }
+        }
+        if (runningAuto) {
+            e.target.value = window.watchdogs[unit] || "none";
+            alert(`Cannot select this switch as a watchdog because it is currently used in the automation "${runningAuto}". Please remove it from the automation first.`);
+            return;
+        }
+        
+        if (val) {
+          window.watchdogs[unit] = val;
+        } else {
+          window.watchdogs[unit] = 'none';
+        }
+        
+        socket.emit("set_watchdog", { unit: unit, topic: window.watchdogs[unit] });
+      });
+    });
+    
     bindLightControls(overviewDevices);
     bindEntityClicks(overviewDevices);
   }
 
-  function renderTypeTabByDevice(container, byDevice, types, showToggle) {
+  function renderTypeTabByDevice(container, byDevice, types, showToggle, term) {
     if (!container) return;
     const typeArr = Array.isArray(types) ? types : [types];
     const serials = Object.keys(byDevice).filter((s) => typeArr.some((t) => byDevice[s][t].length > 0));
@@ -427,8 +794,8 @@
       container.innerHTML = '<div class="ha-card"><div class="ha-empty-row">No entities yet…</div></div>';
       return;
     }
-    container.innerHTML = serials.map((serial) => {
-      const list = typeArr.flatMap((t) => byDevice[serial][t] || []);
+    const html = serials.map((serial) => {
+      const list = filterEntitiesBySearch(serial, typeArr.flatMap((t) => byDevice[serial][t] || []), term);
       if (list.length === 0) return "";
       return `
         <div class="ha-card">
@@ -441,6 +808,7 @@
           </div>
         </div>`;
     }).join("");
+    container.innerHTML = html || `<div class="ha-card"><div class="ha-empty-row">No entities match your search.</div></div>`;
     container.querySelectorAll(".ha-toggle input").forEach((input) => {
       input.addEventListener("change", onToggle);
     });
@@ -858,10 +1226,84 @@
   }
 
   if (logFilter) logFilter.addEventListener("input", renderLogTable);
+
+  // Device search inputs (Overview / Lights / Switches / Sensors) → re-render filtered lists
+  [overviewSearch, lightsSearch, switchesSearch, sensorsSearch].forEach((input) => {
+    if (input) input.addEventListener("input", renderAll);
+  });
   if (btnClearLog) btnClearLog.addEventListener("click", () => {
     logEntries.length = 0;
     renderLogTable();
   });
+
+  // -------------------------------------------------------
+  // Logged-in Devices (user login sessions)
+  // -------------------------------------------------------
+  const sessionsList = $("#sessions-list");
+  const btnRefreshSessions = $("#btn-refresh-sessions");
+
+  function requestUserSessions() {
+    if (!sessionsList) return;
+    sessionsList.innerHTML = '<div class="ha-empty-row">Loading devices…</div>';
+    if (socket) socket.emit("list_user_sessions");
+  }
+
+  function fmtSessionTime(s) {
+    if (!s) return "—";
+    const d = new Date(s.endsWith("Z") || s.includes("+") ? s : s.replace(" ", "T") + "Z");
+    if (isNaN(d.getTime())) return s;
+    return d.toLocaleString();
+  }
+
+  function renderUserSessions(sessions) {
+    if (!sessionsList) return;
+    if (!sessions || sessions.length === 0) {
+      sessionsList.innerHTML = '<div class="ha-empty-row">No active devices.</div>';
+      return;
+    }
+    sessionsList.innerHTML = sessions.map((s) => {
+      const badges = [];
+      if (s.current) badges.push('<span class="ha-session-badge current">This device</span>');
+      badges.push(`<span class="ha-session-badge ${s.online ? "online" : "offline"}">${s.online ? "Online" : "Offline"}</span>`);
+      const logoutBtn = s.current
+        ? `<button class="ha-btn-text ha-session-logout" data-id="${escHtml(s.id)}" title="Log out this device">Log out</button>`
+        : `<button class="ha-btn-text ha-session-logout danger" data-id="${escHtml(s.id)}" title="Log out this device">Log out</button>`;
+      return `
+        <div class="ha-session-row">
+          <div class="ha-session-info">
+            <div class="ha-session-device">
+              <span class="material-symbols-outlined">${s.device.includes("Android") || s.device.includes("iOS") ? "smartphone" : "computer"}</span>
+              <span>${escHtml(s.device)}</span>
+              ${badges.join(" ")}
+            </div>
+            <div class="ha-session-meta">Signed in: ${escHtml(fmtSessionTime(s.created_at))}</div>
+          </div>
+          ${logoutBtn}
+        </div>`;
+    }).join("");
+
+    sessionsList.querySelectorAll(".ha-session-logout").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.dataset.id;
+        const isCurrent = btn.classList.contains("ha-session-logout") && !btn.classList.contains("danger");
+        const msg = isCurrent
+          ? "Log out this device? You will be returned to the login screen."
+          : "Log out the selected device? It will be signed out immediately.";
+        if (!confirm(msg)) return;
+        btn.disabled = true;
+        socket.emit("logout_device", { id });
+      });
+    });
+  }
+
+  if (socket) {
+    socket.on("user_sessions", (data) => renderUserSessions(data && data.sessions));
+    socket.on("user_sessions_error", (data) => {
+      if (data && data.message) alert(data.message);
+      requestUserSessions();
+    });
+  }
+  if (btnRefreshSessions) btnRefreshSessions.addEventListener("click", requestUserSessions);
 
   // -------------------------------------------------------
   // Publish + Developer Live Log
@@ -957,21 +1399,37 @@
   navItems.forEach((btn) => {
     btn.addEventListener("click", () => {
       const tab = btn.dataset.tab;
-      navItems.forEach((b) => b.classList.remove("active"));
-      btn.classList.add("active");
-      $$(".ha-view").forEach((v) => v.classList.remove("active"));
-      const target = $(`#tab-${tab}`);
-      if (target) target.classList.add("active");
-
-      // Close mobile sidebar
-      if (sidebar) sidebar.classList.remove("open");
-
-      // Lazy renders
-      if (tab === "log") renderLogTable();
-      if (tab === "developer") renderDevLog();
-      if (tab === "history") renderAll();
+      showTab(tab);
     });
   });
+
+  function showTab(tabId) {
+    navItems.forEach((b) => b.classList.toggle("active", b.dataset.tab === tabId));
+    $$(".ha-view").forEach((v) => v.classList.remove("active"));
+    const target = $(`#tab-${tabId}`);
+    if (target) target.classList.add("active");
+
+    // Close mobile sidebar
+    if (sidebar) sidebar.classList.remove("open");
+
+    // Save to persistence
+    localStorage.setItem("user_active_tab", tabId);
+
+    // Lazy renders
+    if (tabId === "log") { renderLogTable(); requestUserSessions(); }
+    if (tabId === "developer") renderDevLog();
+    if (tabId === "history") renderAll();
+    if (tabId === "api") {
+      renderApiCode();
+      renderApiEntitiesTable();
+    }
+  }
+
+  // Initialize from persistence
+  (function initTab() {
+    const savedTab = localStorage.getItem("user_active_tab") || "overview";
+    showTab(savedTab);
+  })();
 
   function isTabActive(tab) {
     const el = $(`#tab-${tab}`);
@@ -997,18 +1455,88 @@
     });
   });
 
-  // Logout
-  const btnLogout = $("#btn-logout");
-  if (btnLogout) {
-    btnLogout.addEventListener("click", () => {
-      socket.emit("logout");
-      appEl.classList.add("hidden");
-      loginOverlay.classList.remove("hidden");
-      loginPass.value = "";
-      loginError.classList.add("hidden");
-      if (statusText) statusText.textContent = "Disconnected";
-      [statusDot, statusDotMob].forEach((d) => { if (d) d.classList.remove("connected"); });
+  // Logout System
+  const btnLogout = document.getElementById("btn-logout");
+  const confirmModal = document.getElementById("ha-confirm-modal");
+  const confirmBtnLogout = document.getElementById("confirm-logout");
+  const confirmBtnLogoutDevice = document.getElementById("confirm-logout-device");
+  const confirmBtnCancel = document.getElementById("confirm-cancel");
+
+  // Shared logout flow. `socketEvent` is "logout" (all devices) or
+  // "logout_this_device" (this device only); `msg` is the confirmation shown
+  // on the login screen after redirect.
+  function performLogout(socketEvent, msg) {
+    // Unsubscribe Web Push notifications on THIS device (both logout kinds
+    // sign this device out, so its push subscription should go either way).
+    // We hold the redirect until this completes so the /api/push/unsubscribe
+    // request isn't aborted by navigation (which would leave a live sub that
+    // keeps delivering notifications after logout).
+    const cleanupPush = () => {
+      if (!navigator.serviceWorker) return Promise.resolve();
+      return navigator.serviceWorker.ready
+        .then(reg => reg.pushManager.getSubscription())
+        .then(sub => {
+          if (!sub) return null;
+          return fetch("/api/push/unsubscribe", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ endpoint: sub.endpoint })
+          })
+            .catch(e => console.error("Error notifying server of unsubscription:", e))
+            .then(() => sub.unsubscribe())
+            .catch(e => console.error("Error unsubscribing push:", e));
+        })
+        .catch(e => console.error("Error getting push subscription on logout:", e));
+    };
+
+    // 1. Tell the server which logout to perform
+    if (socket) socket.emit(socketEvent);
+
+    // 2. Clear local data
+    localStorage.removeItem("cadio_email");
+    localStorage.removeItem("cadio_pass");
+    localStorage.removeItem("cadio_session_token");
+
+    // 3. UI Cleanup
+    appEl.classList.add("hidden");
+    loginOverlay.classList.remove("hidden");
+    loginPass.value = "";
+    loginError.classList.add("hidden");
+    if (statusText) statusText.textContent = "Disconnected";
+
+    // 4. Close modal
+    confirmModal.classList.remove("active");
+    confirmModal.style.display = "none";
+
+    // 5. Final Reset (Redirect to clear Flask session and show confirmation)
+    //    only after push cleanup has finished.
+    cleanupPush().finally(() => {
+      window.location.href = "/logout?msg=" + encodeURIComponent(msg);
     });
+  }
+
+  if (btnLogout && confirmModal) {
+    btnLogout.onclick = () => {
+      confirmModal.style.display = "flex";
+      setTimeout(() => confirmModal.classList.add("active"), 10);
+    };
+
+    if (confirmBtnCancel) {
+      confirmBtnCancel.onclick = () => {
+        confirmModal.classList.remove("active");
+        setTimeout(() => { confirmModal.style.display = "none"; }, 300);
+      };
+    }
+
+    if (confirmBtnLogout) {
+      confirmBtnLogout.onclick = () =>
+        performLogout("logout", "You have logged out of all devices.");
+    }
+
+    if (confirmBtnLogoutDevice) {
+      confirmBtnLogoutDevice.onclick = () =>
+        performLogout("logout_this_device", "You have logged out of this device.");
+    }
   }
 
   // -------------------------------------------------------
@@ -1215,6 +1743,8 @@
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 1500);
   }
+  window.showToast = showToast;
+
 
   // Close panel
   function closeDetailPanel() {
@@ -1667,19 +2197,214 @@ func main() {
     </table>`;
   }
 
-  // Render API tab on navigation
-  const origNavClick = navItems;
-  navItems.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      if (btn.dataset.tab === "api") {
-        renderApiCode();
-        renderApiEntitiesTable();
-      }
-    });
-  });
 
   // Patch render functions to bind clicks after rendering
   const _origRenderOverview = renderOverviewByDevice;
   const _origRenderTypeTab = renderTypeTabByDevice;
 
+  // -------------------------------------------------------
+  // PWA & Toast Notifications
+  // -------------------------------------------------------
+  const toastContainer = document.getElementById("toast-container");
+
+  function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/\-/g, '+')
+      .replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  function subscribeUserToPush() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      console.warn("[PWA] Push messaging is not supported in this browser.");
+      return;
+    }
+    navigator.serviceWorker.ready.then((registration) => {
+      fetch('/api/push/public-key')
+        .then(r => r.json())
+        .then(data => {
+          const publicKey = data.publicKey;
+          if (!publicKey) {
+            console.error("[PWA] No public VAPID key returned from server.");
+            return;
+          }
+          const newKeyArray = urlBase64ToUint8Array(publicKey);
+          
+          return registration.pushManager.getSubscription().then((existingSubscription) => {
+            if (existingSubscription) {
+              // Check for VAPID key mismatch
+              let keyMismatch = false;
+              if (existingSubscription.options && existingSubscription.options.applicationServerKey) {
+                const existingKey = new Uint8Array(existingSubscription.options.applicationServerKey);
+                if (existingKey.length !== newKeyArray.length) {
+                  keyMismatch = true;
+                } else {
+                  for (let i = 0; i < existingKey.length; i++) {
+                    if (existingKey[i] !== newKeyArray[i]) {
+                      keyMismatch = true;
+                      break;
+                    }
+                  }
+                }
+              } else {
+                keyMismatch = true;
+              }
+
+              if (keyMismatch) {
+                console.log("[PWA] VAPID key mismatch detected. Unsubscribing old subscription...");
+                return existingSubscription.unsubscribe().then(() => {
+                  return registration.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: newKeyArray
+                  });
+                });
+              } else {
+                console.log("[PWA] Existing subscription is valid.");
+                return existingSubscription;
+              }
+            } else {
+              console.log("[PWA] No existing subscription found. Subscribing...");
+              return registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: newKeyArray
+              });
+            }
+          });
+        })
+        .then((pushSubscription) => {
+          if (!pushSubscription) return;
+          console.log("[PWA] User is subscribed to Web Push:", pushSubscription);
+          
+          // Emit socket event for reliable authenticated subscription saving
+          socket.emit("save_push_subscription", pushSubscription);
+          
+          return fetch('/api/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pushSubscription)
+          });
+        })
+        .then(response => {
+          if (response && response.ok) {
+            console.log("[PWA] Push subscription saved on server successfully.");
+          }
+        })
+        .catch((error) => {
+          console.error("[PWA] Failed to subscribe user to Web Push:", error);
+        });
+    });
+  }
+
+  function requestNotificationPermission() {
+    if ("Notification" in window) {
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") {
+          console.log("[PWA] Notification permission granted.");
+          subscribeUserToPush();
+        }
+      });
+    }
+  }
+
+  // Request permission or register on load
+  if ("Notification" in window) {
+    if (Notification.permission === "default") {
+      setTimeout(requestNotificationPermission, 3000);
+    } else if (Notification.permission === "granted") {
+      setTimeout(subscribeUserToPush, 2000);
+    }
+  }
+
+  function showToastNotification(title, message, type = "info") {
+    if (!toastContainer) return;
+
+    // Create toast element
+    const toast = document.createElement("div");
+    toast.className = `ha-toast ha-toast-${type}`;
+
+    // Select icon
+    let iconName = "info";
+    if (type === "success") iconName = "check_circle";
+    if (type === "warning") iconName = "warning";
+    if (type === "error") iconName = "error";
+
+    toast.innerHTML = `
+      <span class="material-symbols-outlined ha-toast-icon">${iconName}</span>
+      <div class="ha-toast-content">
+        <div class="ha-toast-title">${escHtml(title)}</div>
+        <div class="ha-toast-message">${escHtml(message)}</div>
+      </div>
+      <button class="ha-toast-close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    `;
+
+    // Bind close button
+    const closeBtn = toast.querySelector(".ha-toast-close");
+    closeBtn.addEventListener("click", () => {
+      toast.classList.remove("show");
+      setTimeout(() => toast.remove(), 300);
+    });
+
+    toastContainer.appendChild(toast);
+
+    // Trigger animation
+    setTimeout(() => {
+      toast.classList.add("show");
+    }, 50);
+
+    // Auto-remove after 6 seconds
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.classList.remove("show");
+        setTimeout(() => toast.remove(), 300);
+      }
+    }, 6000);
+
+    // Also trigger native browser/system notification
+    if ("Notification" in window && Notification.permission === "granted") {
+      console.log("[PWA] Attempting to show system notification...", title);
+      if ("serviceWorker" in navigator) {
+        console.log("[PWA] Using service worker to show notification");
+        navigator.serviceWorker.ready.then((registration) => {
+          registration.showNotification(title, {
+            body: message,
+            icon: window.location.origin + "/static/icons/icon-192x192.png",
+            badge: window.location.origin + "/static/icons/icon-72x72.png",
+            tag: "nivixsa-notification",
+            renotify: true,
+            vibrate: [200, 100, 200]
+          }).then(() => console.log("[PWA] System notification displayed successfully via SW"))
+            .catch(err => console.error("[PWA] SW showNotification failed:", err));
+        });
+      } else {
+        console.log("[PWA] Using new Notification fallback");
+        try {
+          new Notification(title, {
+            body: message,
+            icon: window.location.origin + "/static/icons/icon-192x192.png"
+          });
+        } catch (e) {
+          console.error("[PWA] new Notification failed:", e);
+        }
+      }
+    } else {
+      console.log("[PWA] Cannot show system notification. Notification in window:", "Notification" in window, "Permission:", Notification.permission);
+    }
+  }
+
+  // Socket listener for system notifications from backend
+  socket.on("sys_notification", (data) => {
+    showToastNotification(data.title, data.message, data.type || "info");
+  });
+  // Expose function globally for other JS files
+  window.showToastNotification = showToastNotification;
+
+  });
 })();

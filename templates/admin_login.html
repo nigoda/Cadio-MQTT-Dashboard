@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nivixsa — Admin Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
+    <style>
+        :root {
+            --ha-primary: #03a9f4;
+            --ha-bg: #1c1c1c;
+            --ha-card: #262626;
+            --ha-text: #e1e1e1;
+            --ha-text-secondary: #9e9e9e;
+            --ha-red: #f44336;
+            --ha-radius: 12px;
+            --ha-divider: #3a3a3a;
+        }
+
+        * { box-sizing: border-box; }
+        
+        body {
+            font-family: 'Roboto', sans-serif;
+            background: var(--ha-bg);
+            color: var(--ha-text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .login-card {
+            background: var(--ha-card);
+            padding: 40px;
+            border-radius: var(--ha-radius);
+            width: 100%;
+            max-width: 400px;
+            text-align: center;
+            border: 1px solid var(--ha-divider);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+
+        .icon { font-size: 64px; color: var(--ha-primary); margin-bottom: 16px; }
+        h1 { font-weight: 500; font-size: 24px; margin-bottom: 8px; }
+        p { color: var(--ha-text-secondary); margin-bottom: 32px; font-size: 14px; }
+
+        .field { position: relative; margin-bottom: 24px; text-align: left; }
+        label { display: block; font-size: 12px; color: var(--ha-text-secondary); margin-bottom: 8px; }
+        input {
+            width: 100%;
+            padding: 12px;
+            background: #1a1a1a;
+            border: 1px solid var(--ha-divider);
+            border-radius: 6px;
+            color: var(--ha-text);
+            font-size: 14px;
+            outline: none;
+        }
+        input:focus { border-color: var(--ha-primary); }
+
+        .btn {
+            display: block;
+            margin: 0;
+            width: 100%;
+            padding: 14px;
+            background: var(--ha-primary);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: filter 0.2s;
+        }
+        .btn:hover { filter: brightness(1.1); }
+
+        .error { color: var(--ha-red); font-size: 13px; margin-top: 16px; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <span class="material-symbols-outlined icon">admin_panel_settings</span>
+        <h1>Admin Login</h1>
+        <p>Enter your Command Center credentials</p>
+        
+        <form action="/admin/login" method="POST">
+            <div class="field">
+                <label>ADMIN EMAIL</label>
+                <input type="email" name="email" required autofocus>
+            </div>
+            <div class="field">
+                <label>ADMIN PASSWORD</label>
+                <input type="password" name="password" required>
+            </div>
+            
+            {% if error %}
+            <div class="error">{{ error }}</div>
+            {% endif %}
+            
+            <button type="submit" class="btn">Authenticate</button>
+        </form>
+    </div>
+</body>
+</html>

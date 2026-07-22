@@ -3,6 +3,8 @@
 Everything you need to build a custom smart home platform using Nivixsa devices.
 This guide is designed for **developers** and **AI agents** - any language, any framework.
 
+> **Deploying this dashboard?** See the [deployment runbook](docs/README.md) for the full Docker + Cloudflare-tunnel setup, and [docs/HANDOFF.md](docs/HANDOFF.md) for operational notes.
+
 ---
 
 ## Table of Contents
@@ -19,6 +21,31 @@ This guide is designed for **developers** and **AI agents** - any language, any 
 - [Broker Rules & Limitations](#broker-rules--limitations)
 - [Supported Entity Types](#supported-entity-types)
 - [Quick Start for AI Agents](#quick-start-for-ai-agents)
+- [AI Configuration (Gemini API)](#ai-configuration-gemini-api)
+
+---
+
+## AI Configuration (Gemini API)
+
+The platform's AI Agronomist requires a **Google Gemini API Key** to function. You have two ways to configure this:
+
+### 1. Default Server Key (.env)
+The "Shared AI" plan uses the key stored on the server.
+1. Create a `.env` file in the root directory.
+2. Add your key: `GEMINI_API_KEY=your_key_here`.
+3. This key is available to all dashboard users by default.
+
+### 2. User Personal Key (Dashboard Settings)
+Users can provide their own key through the dashboard's **AI Settings** page.
+1. Select the **"Personal AI"** plan.
+2. Paste your private Gemini key.
+3. This key is saved securely in the **local SQLite database (`cadio.db`)**.
+4. **Security**: The key is encrypted using **Fernet (AES-128)** before being saved. It is masked in the UI (e.g., `ABCD****WXYZ`) and can be removed at any time through the same settings page.
+
+### Security Best Practices
+- **Do not share** your `.env` or `settings.json` files.
+- These files are automatically ignored by Git (via `.gitignore`) to prevent accidental leaks.
+- You can get a free Gemini API key at [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 ---
 
@@ -406,3 +433,7 @@ If you're an AI agent and a user asks you to build a Nivixsa IoT platform, here'
 - Home automation scripts (connect, discover, control on a schedule)
 
 Any language with an MQTT client library works: Python, JavaScript, Java, C#, Go, Rust, Swift, Kotlin, Dart, C/C++, Ruby, PHP, etc.
+
+---
+
+---

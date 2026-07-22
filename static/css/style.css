@@ -89,7 +89,7 @@ body {
     position: relative;
     margin-bottom: 16px;
 }
-.ha-field input {
+.ha-field input, .ha-field select {
     width: 100%;
     padding: 16px 12px 6px;
     font-size: 14px;
@@ -101,19 +101,31 @@ body {
     outline: none;
     transition: border-color var(--ha-transition);
 }
-.ha-field input:focus { border-color: var(--ha-primary); }
+.ha-field select { padding-right: 24px; appearance: none; }
+.ha-field input:focus, .ha-field select:focus { border-color: var(--ha-primary); }
 .ha-field label {
     position: absolute; left: 12px; top: 12px;
     color: var(--ha-text-secondary);
     font-size: 14px;
     pointer-events: none;
     transition: all var(--ha-transition);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: calc(100% - 24px);
+    background-color: transparent;
+    padding: 0 4px;
+    margin-left: -4px;
+    border-radius: 4px;
 }
 .ha-field input:focus + label,
 .ha-field input:not(:placeholder-shown) + label,
-.ha-field input[readonly] + label {
-    top: 4px; font-size: 10px;
+.ha-field input[readonly] + label,
+.ha-field select + label,
+.ha-field input[type="number"] + label {
+    top: -6px; font-size: 11px;
     color: var(--ha-primary);
+    background-color: var(--ha-surface);
 }
 
 /* Buttons */
@@ -128,7 +140,8 @@ body {
     cursor: pointer;
     transition: background var(--ha-transition);
 }
-.ha-btn-primary:hover { background: var(--ha-primary-dark); }
+.ha-btn-primary:hover:not(:disabled) { background: var(--ha-primary-dark); }
+.ha-btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
 .ha-btn-secondary {
     width: 100%;
     padding: 12px;
@@ -230,8 +243,27 @@ body {
 }
 .ha-status-dot.connected { background: var(--ha-green); }
 .ha-device-badge {
-    font-size: 11px;
-    color: var(--ha-text-disabled);
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+}
+.ha-user-email-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0 4px;
+}
+.ha-user-email-icon {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    flex-shrink: 0;
+}
+.ha-user-email-text {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
 }
 .ha-logout-btn {
     display: flex; align-items: center; gap: 8px;
@@ -492,6 +524,35 @@ body {
     border: none;
 }
 
+/* Settings modal slider */
+.ha-settings-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--ha-divider);
+    outline: none;
+    cursor: pointer;
+    margin: 10px 0;
+}
+.ha-settings-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--ha-primary);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+.ha-settings-slider::-moz-range-thumb {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--ha-primary);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    border: none;
+}
+
 /* Color picker */
 .ha-color-picker {
     -webkit-appearance: none;
@@ -569,6 +630,33 @@ body {
 .ha-log-table td:nth-child(2) { color: var(--ha-primary); }
 .ha-log-table td:nth-child(3) { font-family: 'Roboto Mono', monospace; }
 
+/* Logged-in Devices (user sessions) */
+.ha-sessions-card { margin-bottom: 16px; }
+.ha-sessions-list { display: flex; flex-direction: column; }
+.ha-session-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.ha-session-row:last-child { border-bottom: none; }
+.ha-session-info { min-width: 0; flex: 1; }
+.ha-session-device {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    font-size: 14px; font-weight: 500; color: var(--ha-text);
+}
+.ha-session-device .material-symbols-outlined { font-size: 20px; color: var(--ha-text-secondary); }
+.ha-session-meta { font-size: 12px; color: var(--ha-text-secondary); margin-top: 4px; }
+.ha-session-badge {
+    font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px;
+    padding: 2px 8px; border-radius: 10px;
+}
+.ha-session-badge.current { background: rgba(3,169,244,.15); color: var(--ha-primary); }
+.ha-session-badge.online { background: rgba(76,175,80,.15); color: #4caf50; }
+.ha-session-badge.offline { background: rgba(255,255,255,.06); color: var(--ha-text-secondary); }
+.ha-session-logout { flex-shrink: 0; }
+.ha-session-logout.danger { color: var(--ha-red); }
+.ha-session-logout.danger:hover { background: rgba(244,67,54,.1); }
+
 /* Inputs */
 .ha-input-sm {
     padding: 6px 12px;
@@ -581,6 +669,16 @@ body {
     outline: none;
 }
 .ha-input-sm:focus { border-color: var(--ha-primary); }
+
+/* Remove number input spin buttons */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+input[type="number"] {
+    -moz-appearance: textfield;
+}
 
 /* Developer publish form */
 .ha-publish-form {
@@ -1090,3 +1188,918 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--ha-divider); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--ha-text-secondary); }
+
+/* ===========================
+   Irrigation Dashboard
+   =========================== */
+.irr-workspace {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 16px;
+    height: calc(100vh - 110px);
+    min-height: 0;
+}
+.irr-list-panel {
+    display: flex; flex-direction: column;
+    background: var(--ha-card);
+    border-radius: var(--ha-radius);
+    overflow: hidden;
+    box-shadow: var(--ha-shadow);
+}
+.irr-auto-search {
+    position: relative;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+}
+.irr-auto-search-box {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+}
+.irr-auto-search-icon {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    pointer-events: none;
+}
+.irr-auto-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px 8px 34px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+}
+.irr-auto-search-input:focus {
+    border-color: var(--ha-primary);
+    outline: none;
+}
+.irr-auto-filter-select {
+    flex-shrink: 0;
+    padding: 8px 8px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    max-width: 110px;
+}
+.irr-auto-filter-select:focus {
+    border-color: var(--ha-primary);
+    outline: none;
+}
+.irr-auto-filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+}
+.irr-filter-chip {
+    padding: 4px 10px;
+    background: var(--ha-surface);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: 14px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background var(--ha-transition), color var(--ha-transition), border-color var(--ha-transition);
+}
+.irr-filter-chip:hover {
+    color: var(--ha-text);
+    border-color: var(--ha-text-secondary);
+}
+.irr-filter-chip.active {
+    background: var(--ha-primary);
+    color: #fff;
+    border-color: var(--ha-primary);
+}
+/* Automations filter dropdown (multi-select) + clear button */
+.irr-auto-filter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 8px 0;
+    flex-shrink: 0;
+}
+.irr-filter-dd { position: relative; flex: 1; }
+.irr-filter-dd-trigger {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 12px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color var(--ha-transition);
+}
+.irr-filter-dd-trigger:hover { border-color: var(--ha-text-secondary); }
+.irr-filter-dd-ic { font-size: 18px; color: var(--ha-text-secondary); }
+.irr-filter-dd-caret {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    margin-left: auto;
+    transition: transform var(--ha-transition);
+}
+.irr-filter-dd-trigger[aria-expanded="true"] .irr-filter-dd-caret { transform: rotate(180deg); }
+.irr-filter-dd-menu {
+    position: fixed;      /* fixed + JS-positioned so it escapes the list panel's overflow:hidden */
+    z-index: 3000;
+    min-width: 170px;
+    background: var(--ha-surface);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    padding: 4px;
+}
+.irr-filter-dd-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--ha-text);
+    cursor: pointer;
+}
+.irr-filter-dd-opt:hover { background: rgba(255,255,255,0.06); }
+.irr-filter-dd-cb { accent-color: var(--ha-primary); cursor: pointer; width: 15px; height: 15px; margin: 0; }
+.irr-filter-clear-btn {
+    flex-shrink: 0;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 18px;
+    background: var(--ha-surface);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: color var(--ha-transition), border-color var(--ha-transition);
+}
+.irr-filter-clear-btn:hover { color: var(--ha-text); border-color: var(--ha-text-secondary); }
+.irr-auto-clear-btn {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 7px;
+    background: var(--ha-surface);
+    color: var(--ha-text-secondary);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    cursor: pointer;
+    transition: color var(--ha-transition), border-color var(--ha-transition);
+}
+.irr-auto-clear-btn:hover {
+    color: var(--ha-red);
+    border-color: var(--ha-red);
+}
+.irr-auto-clear-btn .material-symbols-outlined {
+    font-size: 18px;
+}
+.irr-auto-clear-btn.hidden {
+    display: none;
+}
+.irr-auto-list {
+    flex: 1; overflow-y: auto;
+    padding: 8px;
+}
+.irr-auto-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px;
+    border-radius: var(--ha-radius-sm);
+    cursor: pointer;
+    transition: background var(--ha-transition);
+    border: 2px solid transparent;
+}
+.irr-auto-item:hover { background: rgba(255,255,255,.04); }
+.irr-auto-item.active { background: var(--ha-sidebar-selected); border-color: var(--ha-primary); }
+.irr-auto-item-info { flex: 1; min-width: 0; }
+.irr-auto-item-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.irr-auto-item-status { font-size: 11px; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.irr-status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.irr-status-dot.running { background: #4caf50; }
+.irr-status-dot.paused { background: #ff9800; }
+.irr-status-dot.error { background: #f44336; }
+.irr-status-dot.off { background: #666; }
+.irr-status-dot.completed { background: #03a9f4; }
+.irr-status-dot.waiting { background: #9c27b0; }
+.irr-auto-item-progress {
+    height: 4px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+    display: none;
+    width: 100%;
+}
+.irr-auto-item-progress.visible {
+    display: block;
+}
+.irr-auto-item-progress-fill {
+    height: 100%;
+    background: var(--ha-primary);
+    width: 0%;
+    transition: width 0.3s ease;
+}
+.irr-auto-item-pct {
+    font-size: 10px;
+    color: var(--ha-text-secondary);
+    margin-left: auto;
+}
+
+/* Controller status */
+.irr-controller-status {
+    padding: 14px 16px;
+    border-top: 1px solid var(--ha-divider);
+}
+.irr-controller-status h4 { font-size: 12px; font-weight: 600; color: var(--ha-text-secondary); text-transform: uppercase; letter-spacing: .6px; margin-bottom: 8px; }
+.irr-ctrl-row { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 6px; }
+.irr-ctrl-dot { width: 8px; height: 8px; border-radius: 50%; background: #666; }
+.irr-ctrl-dot.connected { background: #4caf50; }
+.irr-ctrl-info { display: flex; justify-content: space-between; font-size: 12px; color: var(--ha-text-secondary); padding: 2px 0; }
+
+/* Detail panel */
+.irr-detail-panel {
+    background: var(--ha-card);
+    border-radius: var(--ha-radius);
+    box-shadow: var(--ha-shadow);
+    overflow-y: auto;
+    padding: 0;
+}
+.irr-detail-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 12px; color: var(--ha-text-disabled); }
+.irr-header { display: flex; flex-wrap: wrap; padding: 20px 20px 12px; border-bottom: 1px solid var(--ha-divider); gap: 12px; }
+.irr-header h2 { font-size: 20px; font-weight: 500; margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.irr-header-left { width: 100%; min-width: 0; }
+.irr-desc { font-size: 13px; color: var(--ha-text-secondary); display: block; max-width: 100%; }
+.irr-desc.collapsed { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.irr-desc.expanded { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.irr-desc-toggle { background: none; border: none; color: var(--ha-primary); cursor: pointer; font-size: 12px; font-weight: 600; padding: 2px 0 0; }
+.irr-desc-toggle:hover { text-decoration: underline; }
+.irr-header-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; width: 100%; padding-top: 10px; border-top: 1px solid var(--ha-divider); }
+.irr-header-right .irr-status-badge { margin-right: auto; }
+/* Fixed-width badge: its text swings from "Off" to "Pausing for Schedule" as the
+   automation runs; a constant footprint keeps the Reset/Insights/Edit buttons from
+   shifting when the live state updates. Long labels wrap inside the fixed box. */
+.irr-status-badge { min-width: 128px; width: auto; box-sizing: border-box; flex-shrink: 0; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; text-align: center; display: inline-flex; align-items: center; justify-content: center; min-height: 26px; line-height: 1.2; word-break: break-word; overflow-wrap: break-word; }
+.irr-status-badge.running { background: rgba(76,175,80,.2); color: #4caf50; }
+.irr-status-badge.paused { background: rgba(255,152,0,.2); color: #ff9800; }
+.irr-status-badge.error { background: rgba(244,67,54,.2); color: #f44336; }
+.irr-status-badge.off { background: rgba(158,158,158,.2); color: #9e9e9e; }
+.irr-status-badge.completed { background: rgba(3,169,244,.2); color: #03a9f4; }
+.irr-status-badge.waiting { background: rgba(156,39,176,.2); color: #ce93d8; }
+.irr-status-badge.deinit-waiting { background: rgba(255,152,0,.15); color: #ffb74d; border: 1px solid rgba(255,152,0,.35); animation: deinit-waiting-pulse 1.6s ease-in-out infinite; }
+@keyframes deinit-waiting-pulse { 0%,100% { opacity:1; } 50% { opacity:.55; } }
+.irr-btn-danger { background: rgba(244,67,54,.1); color: #f44336; border: 1px solid rgba(244,67,54,.3); border-radius: var(--ha-radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 4px; transition: background .15s; }
+.irr-btn-danger:hover { background: rgba(244,67,54,.2); }
+
+/* State summary bar */
+.irr-state-bar { display: grid; grid-template-columns: repeat(4,1fr); gap: 1px; background: var(--ha-divider); border-bottom: 1px solid var(--ha-divider); }
+.irr-state-cell { background: var(--ha-card); padding: 16px 20px; display: flex; flex-direction: row; justify-content: space-between; align-items: center; position: relative; gap: 10px; min-height: 92px; box-sizing: border-box; }
+.irr-state-cell.flex-col { flex-direction: column; align-items: flex-start; justify-content: center; }
+.irr-cell-content { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; }
+.irr-label { font-size: 12px; color: var(--ha-text-primary); font-weight: 500; }
+#irr-sched-body .irr-label {
+  display: inline-block;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--ha-primary, #03a9f4);
+  background: rgba(3, 169, 244, 0.1);
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+.irr-state-value { font-size: 15px; font-weight: 600; color: var(--ha-text-primary); overflow-wrap: anywhere; line-height: 1.25; }
+.irr-cell-sub { font-size: 12px; color: var(--ha-text-secondary); overflow-wrap: anywhere; line-height: 1.25; }
+/* Keep the Current State / Next Step blocks at a constant height so the label, value
+   and icon never shift up/down as the text changes (reserve 2 lines for the value and
+   1 line for the sub; values are vertically centered within their reserved space). */
+.irr-cell-content { justify-content: center; }
+/* Reserve a constant 2 lines for the value and 1 for the sub, clamping longer text
+   so the cell height never changes as the live state updates. */
+.irr-cell-content .irr-state-value { height: 2.5em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.irr-cell-content .irr-cell-sub { height: 1.25em; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.irr-cell-icon { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.irr-cell-icon span { font-size: 28px; }
+.irr-cell-icon.blue-bg { background: rgba(3,169,244,.1); color: #03a9f4; }
+.irr-cell-icon.green-bg { background: rgba(76,175,80,.1); color: #4caf50; }
+.irr-progress-wrap { width: 100%; height: 6px; background: var(--ha-divider); border-radius: 3px; overflow: hidden; margin: 4px 0; }
+.irr-progress-bar { height: 100%; background: #03a9f4; border-radius: 3px; transition: width .5s ease; width: 0%; }
+.irr-progress-pct { font-size: 16px; font-weight: 700; color: var(--ha-text-primary); }
+.irr-state-cell:nth-child(2) { flex-direction: column; align-items: stretch; justify-content: center; gap: 2px; }
+
+/* Status cell: keep the toggle + description compact so it doesn't grow tall.
+   The "Automation Enabled/Disabled" description never wraps, and is hidden once the
+   state bar collapses to 2 columns (narrow) so the cell stays short. */
+.irr-status-cell { flex-direction: column; text-align: center; gap: 2px; }
+.irr-status-desc { white-space: nowrap; }
+@media (max-width: 1024px) {
+    .irr-status-desc { display: none; }
+}
+
+/* Custom toggle */
+.irr-custom-toggle { width: 60px !important; height: 28px !important; display: inline-block; vertical-align: middle; }
+.irr-custom-toggle .ha-toggle-track { width: 100% !important; height: 100% !important; border-radius: 14px; position: relative; }
+.irr-custom-toggle input:checked + .ha-toggle-track { background: #1b8a34; }
+.irr-custom-toggle .ha-toggle-thumb { width: 22px !important; height: 22px !important; left: 3px !important; top: 3px !important; transform: none !important; }
+.irr-custom-toggle input:checked ~ .ha-toggle-thumb { left: calc(100% - 25px) !important; transform: none !important; }
+.irr-custom-toggle .toggle-text-on { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; font-weight: 700; color: white; opacity: 0; transition: opacity .2s; }
+.irr-custom-toggle input:checked + .ha-toggle-track .toggle-text-on { opacity: 1; }
+
+/* Sections */
+.irr-sections-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 16px; padding: 16px 20px; }
+.irr-section { background: var(--ha-surface); border-radius: 12px; padding: 20px; border: 1px solid var(--ha-divider); }
+.irr-section h3 { font-size: 14px; font-weight: 700; letter-spacing: .3px; color: var(--ha-primary, #03a9f4); margin-bottom: 12px; }
+.irr-section h3 small { font-weight: 400; font-size: 12px; color: var(--ha-text-secondary); letter-spacing: 0; }
+.irr-section-wide { grid-column: span 2; }
+.irr-bottom-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 20px 20px; }
+
+/* Init / Error state rows */
+.irr-sw-row { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 13px; }
+.irr-sw-row:last-child { border-bottom: none; }
+.irr-sw-state { font-weight: 600; padding: 2px 10px; border-radius: 4px; font-size: 12px; }
+.irr-sw-state.on { background: rgba(76,175,80,.15); color: #4caf50; }
+.irr-sw-state.off { background: rgba(244,67,54,.15); color: #f44336; }
+.irr-sw-check { color: #4caf50; font-size: 16px; }
+.irr-sw-fail { color: #f44336; font-size: 16px; }
+.irr-section-footer { margin-top: 8px; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+.irr-section-footer.ok { color: #4caf50; }
+.irr-section-footer.warn { color: #ff9800; }
+
+/* Condition rows */
+.irr-cond-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,.04); flex-wrap: wrap; }
+.irr-cond-row:last-child { border-bottom: none; }
+.irr-cond-sensor { font-weight: 500; color: var(--ha-text); }
+.irr-cond-op { color: var(--ha-text-secondary); }
+.irr-cond-val { font-weight: 600; }
+.irr-cond-logic { background: var(--ha-primary); color: #fff; padding: 1px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+
+/* Actions table */
+.irr-actions-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.irr-actions-table th { text-align: left; font-size: 11px; font-weight: 500; color: var(--ha-text-secondary); padding: 6px 8px; border-bottom: 1px solid var(--ha-divider); }
+.irr-actions-table td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,.04); }
+.irr-actions-table tr.active-action { background: rgba(3,169,244,.08); }
+.irr-actions-table tr.conflict { border: 2px solid var(--ha-red); }
+.irr-action-status { display: flex; align-items: center; gap: 4px; font-size: 12px; }
+
+/* Scheduler */
+.irr-sched-grid { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; padding: 0 20px 16px; }
+.irr-day-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.irr-day-chip { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; border: 2px solid var(--ha-divider); color: var(--ha-text-secondary); }
+.irr-day-chip.active { background: #4caf50; border-color: #4caf50; color: #fff; }
+.irr-time-display { font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.irr-next-activation { font-size: 12px; color: var(--ha-text-secondary); display: flex; align-items: center; gap: 4px; }
+
+/* Live switches */
+/* Uniform, equal-size cards: a grid of identical cells (same in the switch and
+   sensor sections) on desktop and mobile. Long names clamp to 2 lines + ellipsis
+   with word-break so the card never grows to fit the text. */
+.irr-live-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 10px; }
+.irr-live-sw { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 10px 8px; min-height: 92px; background: var(--ha-card); border-radius: var(--ha-radius-sm); min-width: 0; border: 1px solid var(--ha-divider); overflow: hidden; }
+.irr-live-sw-name { font-size: 11px; color: var(--ha-text-secondary); text-align: center; width: 100%; line-height: 1.2; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.irr-live-sw-icon { font-size: 28px; color: var(--ha-text-disabled); }
+.irr-live-sw-icon.on { color: #4caf50; }
+.irr-live-sw-state { font-size: 11px; font-weight: 700; }
+
+/* Activity log */
+.irr-log-list { max-height: 200px; overflow-y: auto; }
+.irr-log-entry { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 12px; }
+.irr-log-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
+.irr-log-dot.info { background: #03a9f4; }
+.irr-log-dot.warning { background: #ff9800; }
+.irr-log-dot.error { background: #f44336; }
+.irr-log-time { color: var(--ha-text-secondary); min-width: 80px; font-family: 'Roboto Mono', monospace; }
+
+/* Modal */
+.irr-modal { width: 640px; max-width: 95vw; max-height: 90vh; background: var(--ha-card); border-radius: var(--ha-radius); display: flex; flex-direction: column; margin: auto; box-shadow: 0 8px 48px rgba(0,0,0,.5); animation: slideIn .2s ease; }
+.irr-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 20px; border-bottom: 1px solid var(--ha-divider); }
+.irr-modal-header h2 { font-size: 18px; font-weight: 500; }
+.irr-modal-body { flex: 1; overflow-y: auto; padding: 20px; }
+.irr-modal-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--ha-divider); }
+/* Inline validation banner shown just above the Save button when a switch is
+   already used by another automation during an overlapping time window. */
+.irr-modal-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 20px;
+  padding: 10px 12px;
+  background: rgba(244, 67, 54, 0.12);
+  border: 1px solid var(--ha-red);
+  border-radius: var(--ha-radius-sm, 8px);
+  color: var(--ha-red);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.irr-modal-warning.hidden { display: none; }
+.irr-modal-warning .material-symbols-outlined { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+/* Red outline on a switch <select> that conflicts with another automation. */
+.irr-form-row select.f-switch.conflict {
+  border-color: var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+}
+/* Orange outline for edit-time warnings */
+.irr-form-row select.f-switch.warning-conflict {
+  border-color: var(--ha-warning, #ff9800);
+  box-shadow: 0 0 0 1px var(--ha-warning, #ff9800);
+}
+/* Red outline for action vs enforcement errors */
+.irr-form-row select.f-switch.error-conflict,
+.irr-form-row select.f-state.error-conflict {
+  border-color: var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+}
+.irr-form-row select.f-state.error-conflict {
+  color: var(--ha-red);
+}
+.irr-form-row select.f-state.error-conflict option {
+  color: var(--ha-text);
+}
+.irr-form-row select.f-state.error-conflict option:checked {
+  color: var(--ha-red);
+}
+.irr-modal-warning.warning {
+  background: rgba(255, 152, 0, 0.1);
+  color: var(--ha-warning, #ff9800);
+  border: 1px solid rgba(255, 152, 0, 0.2);
+}
+.irr-modal-warning.error {
+  background: rgba(244, 67, 54, 0.1);
+  color: var(--ha-red);
+  border: 1px solid rgba(244, 67, 54, 0.2);
+  margin-bottom: 8px;
+}
+.irr-run-error-banner {
+  background: rgba(244, 67, 54, 0.1);
+  color: var(--ha-red);
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  border: 1px solid rgba(244, 67, 54, 0.2);
+}
+.irr-run-error-banner .material-symbols-outlined { font-size: 18px; flex: 0 0 auto; margin-top: 1px; }
+.irr-sw-row.conflict {
+  border: 1px solid var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+  border-radius: 4px;
+}
+/* Modal Card Layout */
+.irr-modal-card {
+  background: var(--ha-surface, #1c2333);
+  border: 1px solid var(--ha-divider, #2a3345);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.irr-modal-card-heading {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ha-primary, #03a9f4);
+  margin: 0 0 4px 0;
+  letter-spacing: 0.3px;
+}
+.irr-modal-card-desc {
+  font-size: 12px;
+  color: var(--ha-text-secondary, #8b95a5);
+  margin: 0 0 16px 0;
+  line-height: 1.4;
+}
+.irr-modal-card-subheading {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ha-text-secondary, #8b95a5);
+  margin: 0 0 10px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.irr-modal-card-divider {
+  height: 1px;
+  background: var(--ha-divider, #2a3345);
+  margin: 16px 0;
+}
+.irr-form-heading { font-size: 13px; font-weight: 600; color: var(--ha-primary); margin: 20px 0 10px; text-transform: uppercase; letter-spacing: .5px; }
+.irr-form-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* Builder rows wrap within the card in EVERY viewport so no control (especially the
+   × remove button or the h/m/s timer) ever spills outside the card frame. */
+.irr-form-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; row-gap: 6px; min-width: 0; }
+/* Base styling for every select/number input inside a row (incl. nested operator/state). */
+.irr-form-row select,
+.irr-form-row .f-cond-value-cell select { padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; box-sizing: border-box; }
+.irr-form-row select:focus { border-color: var(--ha-primary); outline: none; }
+.irr-form-row input[type="number"] { width: 80px; padding: 8px 10px; background: var(--ha-surface); color: var(--ha-text); border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 13px; font-family: inherit; box-sizing: border-box; }
+.irr-form-row .irr-remove-btn { background: none; border: none; color: var(--ha-red); cursor: pointer; padding: 4px; font-size: 18px; flex: 0 0 auto; margin-left: auto; }
+
+/* Only the PRIMARY device/sensor selects (direct children) grow to fill the row.
+   Nested operator/value selects keep their natural width so rows stay aligned. */
+.irr-form-row > .f-switch,
+.irr-form-row > .f-sensor { flex: 1 1 140px; min-width: 0; max-width: 100%; }
+/* Compact fixed-width selects (ON/OFF, AND/OR) — same size in every row for a tidy column. */
+.irr-form-row > .f-state,
+.irr-form-row > .f-logic { flex: 0 0 auto; min-width: 72px; }
+/* Grouped cells (condition operator+value, duration h/m/s) stay together and drop onto
+   their own line when the row runs out of horizontal space. */
+.irr-form-row > .f-cond-value-cell,
+.irr-form-row > .f-dur-group { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+.irr-form-row .f-cond-value-cell > .f-op { min-width: 64px; }
+/* AND/OR connector sits centered (blue) on its own line between two condition rows. */
+.irr-cond-connector { display: flex; justify-content: center; padding: 2px 0; }
+.irr-cond-connector .f-logic { min-width: 76px; text-align: center; text-align-last: center; padding: 6px 10px; background: var(--ha-surface); color: var(--ha-primary); font-weight: 600; border: 1px solid var(--ha-divider); border-radius: var(--ha-radius-sm); font-size: 12px; font-family: inherit; }
+.irr-cond-connector .f-logic:focus { border-color: var(--ha-primary); outline: none; }
+
+/* Scheduler time-range rows: the .ha-field floating-label inputs are tall and carry a
+   bottom margin, so center everything and drop that margin so the Start/End inputs,
+   the → arrow, and the × button line up on one baseline. Keep the row on a single line
+   so the × stays to the right like the other builder rows instead of wrapping down. */
+.irr-form-row-time { align-items: center; flex-wrap: nowrap; }
+.irr-form-row-time .ha-field { flex: 1 1 0; min-width: 0; margin-bottom: 0; }
+.irr-form-row-time .irr-time-arrow { flex: 0 0 auto; color: var(--ha-text-secondary); }
+.irr-form-row-time .irr-remove-btn { flex: 0 0 auto; margin-left: 4px; }
+/* iOS Safari sizes input[type=time] to an intrinsic min-width that ignores the
+   flex container, so the End field overflows and hides the arrow + × (Android is
+   fine). Force the time inputs to shrink to fit and stop iOS padding the value. */
+.irr-form-row-time .ha-field input[type="time"] {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+}
+.irr-form-row-time .ha-field input[type="time"]::-webkit-date-and-time-value {
+    text-align: left;
+    margin: 0;
+}
+/* iOS Safari only (@supports -webkit-touch-callout targets iOS, not Android/desktop):
+   the native time control keeps its intrinsic width and ignores width:100% unless
+   appearance is stripped. This lets it actually shrink so the arrow + × stay visible. */
+@supports (-webkit-touch-callout: none) {
+    .irr-form-row-time .ha-field input[type="time"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+    .irr-form-row-time { column-gap: 6px; }
+    .irr-form-row-time .ha-field { padding: 0; }
+}
+
+/* Day picker in form */
+.irr-day-picker { display: flex; gap: 6px; margin-bottom: 12px; }
+.irr-day-btn { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; border: 2px solid var(--ha-divider); background: transparent; color: var(--ha-text-secondary); cursor: pointer; transition: all .15s; font-family: inherit; }
+.irr-day-btn.active { background: #4caf50; border-color: #4caf50; color: #fff; }
+.irr-time-range { display: flex; align-items: center; gap: 12px; }
+.irr-time-range .ha-field { flex: 1; }
+
+/* Responsive */
+@media (max-width: 1024px) {
+    .irr-workspace { grid-template-columns: 1fr; height: auto; }
+    /* Let the list panel grow to fit the search + filter chips, and cap the
+       automation list to ~2 items on mobile so it scrolls instead of growing. */
+    .irr-list-panel { max-height: none; }
+    .irr-auto-list { max-height: 200px; overflow-y: auto; }
+    .irr-sections-grid { grid-template-columns: 1fr; }
+    .irr-section-wide { grid-column: span 1; }
+    /* Mobile only: move Error State below Actions (it's the last item in the grid,
+       so a higher order pushes it after Actions). Desktop keeps its DOM order. */
+    #irr-error-section { order: 1; }
+    /* Keep Live Switches | Live Sensors equally split on mobile too (Recent
+       Activity still spans both columns via its inline grid-column: span 2). */
+    .irr-bottom-grid { grid-template-columns: 1fr 1fr; }
+    .irr-section { padding: 14px 12px; }
+    .irr-state-bar { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 768px) {
+    .irr-workspace { gap: 8px; }
+    .irr-header { padding: 14px; }
+    .irr-header h2 { font-size: 18px; }
+    .irr-header-right .ha-btn-text,
+    .irr-header-right .irr-status-badge,
+    .irr-detail-footer .irr-btn-danger {
+        font-size: 12px;
+        padding: 5px 10px;
+    }
+    .irr-header-right .material-symbols-outlined { font-size: 16px !important; }
+    /* Keep the status badge + Reset / Insights / Edit on ONE row on mobile. */
+    .irr-header-right { flex-wrap: nowrap; gap: 5px; }
+    .irr-header-right .irr-status-badge { width: auto; min-width: 74px; max-width: 100%; padding: 4px 8px; font-size: 10px; letter-spacing: .3px; word-break: break-word; overflow-wrap: break-word; }
+    .irr-header-right .ha-btn-text { flex-shrink: 0; padding: 5px 6px; }
+    .irr-sections-grid { padding: 8px 14px; gap: 8px; }
+    .irr-bottom-grid { padding: 0 14px 14px; gap: 8px; }
+    .irr-state-bar { grid-template-columns: 1fr 1fr; }
+    /* Fixed-height cells on mobile so the 2x2 grid (and its divider borders) never
+       resize as the live state text changes. Content is clipped to the box. */
+    .irr-state-bar .irr-state-cell { height: 104px; min-height: 104px; padding: 12px 12px; overflow: hidden; }
+    .irr-sched-grid { padding: 0 14px 12px; }
+}
+
+/* Insights Page */
+.insights-stats-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 24px;
+}
+.insights-chart-wrap {
+    position: relative;
+    width: 100%;
+    height: 250px;
+    background: var(--ha-surface);
+    border-radius: 8px;
+    padding: 12px;
+    box-sizing: border-box;
+    border: 1px solid var(--ha-divider);
+}
+
+@media (max-width: 768px) {
+    /* Insights modal goes full-screen */
+    #auto-analytics-modal .irr-modal {
+        max-width: 100vw !important;
+        max-height: 100vh !important;
+        width: 100vw;
+        height: 100vh;
+        border-radius: 0;
+    }
+    #auto-analytics-modal .irr-modal-body {
+        padding: 12px;
+    }
+    /* Stats: 2x2 grid */
+    .insights-stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        margin-bottom: 16px;
+    }
+    .insights-stats-grid .ha-plan-card {
+        padding: 12px !important;
+    }
+    .insights-stats-grid .ha-plan-card h3 {
+        font-size: 12px !important;
+    }
+    .insights-stats-grid .ha-plan-card div[id] {
+        font-size: 18px !important;
+    }
+    .insights-stats-grid .material-symbols-outlined {
+        font-size: 22px !important;
+        margin-bottom: 4px !important;
+    }
+    /* Timeline scroll */
+    #auto-analytics-timeline {
+        padding: 12px !important;
+        gap: 4px !important;
+        -webkit-overflow-scrolling: touch;
+    }
+    /* Charts: shorter on mobile */
+    .insights-chart-wrap,
+    #auto-analytics-modal .irr-modal-body > div[style*="height: 250px"] {
+        height: 180px !important;
+    }
+    /* AI report */
+    #ai-agronomist-report-container {
+        padding: 12px !important;
+    }
+    #ai-agronomist-report-container h3 {
+        font-size: 14px !important;
+    }
+    #ai-agronomist-report-text {
+        font-size: 13px !important;
+    }
+}
+
+@media (max-width: 400px) {
+    .insights-stats-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+    }
+    .insights-stats-grid .ha-plan-card div[id] {
+        font-size: 16px !important;
+    }
+}
+
+/* ==========================================
+   Toast Notifications System
+   ========================================== */
+#toast-container {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    z-index: 9999;
+    max-width: 380px;
+    width: calc(100vw - 48px);
+    pointer-events: none;
+}
+
+.ha-toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px;
+    border-radius: var(--ha-radius);
+    background: rgba(30, 30, 30, 0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: var(--ha-text);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35), 
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    pointer-events: auto;
+    transform: translateX(120%);
+    opacity: 0;
+    transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s ease;
+}
+
+.ha-toast.show {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.ha-toast-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.ha-toast-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.ha-toast-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: #fff;
+    line-height: 1.2;
+}
+
+.ha-toast-message {
+    font-size: 13px;
+    color: var(--ha-text-secondary);
+    line-height: 1.4;
+}
+
+.ha-toast-close {
+    background: none;
+    border: none;
+    color: var(--ha-text-secondary);
+    cursor: pointer;
+    padding: 2px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    transition: background 0.2s;
+}
+
+.ha-toast-close:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+/* Toast types with custom glows */
+.ha-toast-info {
+    border-left: 4px solid var(--ha-blue);
+}
+.ha-toast-info .ha-toast-icon {
+    color: var(--ha-blue);
+}
+
+.ha-toast-success {
+    border-left: 4px solid var(--ha-green);
+}
+.ha-toast-success .ha-toast-icon {
+    color: var(--ha-green);
+}
+
+.ha-toast-warning {
+    border-left: 4px solid var(--ha-yellow);
+}
+.ha-toast-warning .ha-toast-icon {
+    color: var(--ha-yellow);
+}
+
+.ha-toast-error {
+    border-left: 4px solid var(--ha-red);
+}
+.ha-toast-error .ha-toast-icon {
+    color: var(--ha-red);
+}
+
+@media (max-width: 600px) {
+    #toast-container {
+        top: 16px;
+        right: 16px;
+        left: 16px;
+        width: auto;
+    }
+    .ha-toast {
+        transform: translateY(-50px);
+    }
+    .ha-toast.show {
+        transform: translateY(0);
+    }
+}
+
+.irr-ai-calculating {
+    animation: irrPulse 1.5s infinite ease-in-out;
+}
+@keyframes irrPulse {
+    0% { opacity: 0.45; }
+    50% { opacity: 1.0; }
+    100% { opacity: 0.45; }
+}
+
+.irr-detail-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 16px 20px;
+    border-top: 1px solid var(--ha-divider);
+    background: var(--ha-card);
+}
+
+/* ==========================================
+   Watchdog Selector — matches automation dropdown design
+   ========================================== */
+.ha-watchdog-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px 12px 16px;
+    font-size: 13px;
+}
+.ha-watchdog-selector .wd-icon {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    flex-shrink: 0;
+}
+.ha-watchdog-selector .wd-icon--offline {
+    color: var(--ha-red);
+    border: 2px solid var(--ha-red);
+    border-radius: 50%;
+    padding: 1px;
+    font-size: 14px;
+}
+.ha-watchdog-selector .wd-label {
+    color: var(--ha-text-secondary);
+    font-size: 13px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.ha-watchdog-selector .watchdog-select {
+    padding: 8px 10px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    box-sizing: border-box;
+    min-width: 100px;
+    flex: 1 1 auto;
+    max-width: 200px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--ha-transition);
+}
+.ha-watchdog-selector .watchdog-select:focus {
+    border-color: var(--ha-primary);
+}
+.ha-watchdog-selector .watchdog-select option {
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    padding: 6px 10px;
+}
+.ha-watchdog-selector .wd-countdown {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    margin-left: auto;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
