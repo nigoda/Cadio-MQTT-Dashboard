@@ -58,7 +58,13 @@
     if (!auto) return "off";
     const s = auto.status;
     const rs = auto.runtime?.state || "IDLE";
-    if (s !== "ON") return "off";
+    if (s !== "ON") {
+      // OFF but waiting in the deinit queue
+      if (auto.runtime?._deinit_waiting) return "deinit-waiting";
+      // OFF but actively deiniting
+      if (rs.startsWith("DEINIT_")) return "running";
+      return "off";
+    }
     if (rs === "ERROR") return "error";
     if (rs === "PAUSED_NETWORK") return "error";
     if (rs.startsWith("PAUSED")) return "paused";
@@ -79,7 +85,8 @@
       case "running": return isOn && stateClass(auto) === "running";
       case "idle": return isOn && ["IDLE", "WAIT_CONDITION", "COMPLETED"].includes(rs);
       case "paused": return isOn && rs.startsWith("PAUSED");
-      case "error": return isOn && rs.startsWith("ERROR");
+      case "scheduler": return (!auto.actions || auto.actions.length === 0);
+      case "error": return isOn && (rs.startsWith("ERROR") || rs === "PAUSED_NETWORK" || auto.runtime?.isNetworkRetry);
       default: return true;
     }
   }
@@ -97,7 +104,17 @@
   function stateLabel(auto) {
     if (!auto) return "Off";
     const rs = auto.runtime?.state || "IDLE";
-    if (auto.status !== "ON") return "Off";
+    const waiting = auto.runtime?._deinit_waiting;
+
+    // DEINIT WAITING — queued behind an earlier automation
+    if (waiting) return "Deinit Waiting";
+
+    // Status OFF means it's off, unless it's running a DEINIT or in a network pause for DEINIT
+    if (auto.status !== "ON" && !rs.startsWith("DEINIT_") && rs !== "PAUSED_NETWORK") return "Off";
+
+    // If the backend is actively retrying a failed network command, keep showing the error state to avoid flicker
+    if (auto.runtime?.isNetworkRetry) return "Network Error Paused";
+
     const map = {
       IDLE: "Off", WAIT_CONDITION: "Waiting", INIT_SET: "Initializing", INIT_VERIFY: "Verifying Init",
       INIT_VERIFY_INDIVIDUAL: "Verify Init", INIT_VERIFY_ALL: "Verify Init All",
@@ -107,11 +124,17 @@
       OVERLAP_NEXT_VERIFY: auto.runtime?.loopingToFirst ? "Verify Init & Next" : "Verifying Next",
       ACTION_REVERT: "Reverting", ACTION_VERIFY_REVERT: "Verifying Revert", BUFFER: "Buffer",
       PAUSED_CONDITION: "Paused (Condition)", PAUSED_SCHEDULE: "Paused (Schedule)", PAUSED_USER: "Paused (User)", PAUSED_ENFORCE: "Pausing for Schedule",
-      PAUSED_NETWORK: "Network Error Paused",
+      PAUSED_NETWORK: "Network Error Paused", SCHEDULER_PING_VERIFY: "Ping Check",
+      DEINIT_SET: "Deinitializing", DEINIT_VERIFY_INDIVIDUAL: "Verify Deinit",
       COMPLETED: "Completed", ERROR_SET: "Error Recovery", ERROR_VERIFY: "Error Verify", ERROR: "Error"
     };
     if (rs === "PAUSED_NETWORK") {
       return "Network Error Paused";
+    }
+    if (rs === "ACTION_PING_VERIFY" || rs === "SCHEDULER_PING_VERIFY") {
+      const pre = auto.runtime?.prePingState;
+      if (pre === "PAUSED_NETWORK") return "Network Error Paused";
+      return map[pre] || (pre || "Running");
     }
     if (rs.startsWith("ERROR") && auto.runtime?.errorReason === "missing") {
       return "Error (Device Not Found)";
@@ -124,7 +147,13 @@
     if (window._dashboardEntities) {
       for (const eid in window._dashboardEntities) {
         const e = window._dashboardEntities[eid];
-        if (e.type === "switch" && e.cmdTopic) ents.push(e);
+        if (e.type === "switch" && e.cmdTopic) {
+           const wd = (window.watchdogs || {})[e.deviceSerial];
+           if (wd && (e.cmdTopic === wd || e.stateTopic === wd)) {
+             continue; // Skip watchdog switches
+           }
+           ents.push(e);
+        }
       }
     }
     return ents;
@@ -139,6 +168,28 @@
       }
     }
     return ents;
+  }
+
+  function getDynamicSwitchName(cmdTopic, fallbackName) {
+    if (!cmdTopic) return fallbackName || "Switch";
+    const e = getSwitchEntities().find(x => x.cmdTopic === cmdTopic || x.stateTopic === cmdTopic);
+    if (e) {
+      const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
+      return `${e.name} (${devName})`;
+    }
+    return fallbackName || cmdTopic || "Switch";
+  }
+
+  function getDynamicSensorName(stateTopic, fallbackName) {
+    if (!stateTopic) return fallbackName || "Sensor";
+    if (window._dashboardEntities) {
+      const e = Object.values(window._dashboardEntities).find(x => x.stateTopic === stateTopic && (x.type === "sensor" || x.type === "binary_sensor"));
+      if (e) {
+        const devName = window._dashboardDevices && window._dashboardDevices[e.deviceSerial] ? window._dashboardDevices[e.deviceSerial].name : "Unknown";
+        return `${e.name} (${devName})`;
+      }
+    }
+    return fallbackName || stateTopic || "Sensor";
   }
 
   function switchOptions(selectedCmd) {
@@ -224,7 +275,16 @@
     if (rt.state === "ACTION_RUN") {
       const timerStart = rt.timerStart || (Date.now() / 1000);
       const elapsedSec = Math.max(0, (Date.now() / 1000) - timerStart);
-      elapsedCurSec = Math.min(dur, elapsedSec);
+      if (rt.remainingTime !== undefined && rt.remainingTime !== null) {
+        const currentRemaining = Math.max(0, rt.remainingTime - elapsedSec);
+        elapsedCurSec = Math.max(0, dur - currentRemaining);
+      } else {
+        elapsedCurSec = Math.min(dur, elapsedSec);
+      }
+    } else if (rt.state && (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY" || rt.state === "ACTION_DRIFT_VERIFY")) {
+      if (rt.remainingTime !== undefined && rt.remainingTime !== null) {
+        elapsedCurSec = Math.max(0, dur - rt.remainingTime);
+      }
     } else if (rt.state === "BUFFER") {
       const bufStart = rt.bufferStart || (Date.now() / 1000);
       const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
@@ -255,7 +315,7 @@
     // a fresh startup (state INIT_SET) and when looping back for another cycle, where the
     // backend jumps straight to ACTION_SET (skipping INIT_SET). Reset the high-water-mark
     // in both cases so the bar restarts from 0% instead of sticking at 100%.
-    const isFreshCycleStart = (rt.state === "INIT_SET" || rt.state === "ACTION_SET") && idx === 0 && !rt.loopingToFirst;
+    const isFreshCycleStart = (rt.state === "INIT_SET" || rt.state === "ACTION_SET" || (rt.state === "ACTION_RUN" && idx === 0)) && !rt.loopingToFirst;
     if (rt.state === "IDLE" || rt.state === "COMPLETED" || !rt.state || isFreshCycleStart) {
       // Reset high-water-mark when cycle ends, automation is idle, or fresh startup/reset
       delete _lastProgress[autoId];
@@ -349,6 +409,31 @@
         }
 
         inp.disabled = true; // disable while checking
+        
+        // Check if automation uses any switch that is currently a watchdog
+        let conflictWatchdog = null;
+        const allItems = [...(a.actions||[]), ...(a.initialization||[]), ...(a.deinitialization||[]), ...(a.schedule?.setIfTrue||[]), ...(a.schedule?.setIfFalse||[])];
+        for (const i of allItems) {
+            const topic = i.switchCmdTopic || i.switchStateTopic || "";
+            if (!topic) continue;
+            for (const [unit, wdTopic] of Object.entries(window.watchdogs || {})) {
+                if (wdTopic && topic === wdTopic) {
+                    conflictWatchdog = wdTopic;
+                    break;
+                }
+            }
+            if (conflictWatchdog) break;
+        }
+        
+        if (conflictWatchdog) {
+            inp.disabled = false;
+            inp.checked = false; // revert visual toggle
+            const msg = "Cannot turn ON: this automation uses a switch that is currently set as a Watchdog. Please change the watchdog switch first.";
+            if (window.showToastNotification) window.showToastNotification("Watchdog Conflict", msg, "error");
+            else alert(msg);
+            return;
+        }
+        
         const conflictsMap = validateRunConflicts(a);
         inp.disabled = false;
 
@@ -385,7 +470,7 @@
     }
 
     // State bar
-    $("#irr-cur-state").textContent = rt.state === "PAUSED_NETWORK"
+    $("#irr-cur-state").textContent = (rt.state === "PAUSED_NETWORK" || rt.isNetworkRetry)
       ? "NETWORK ERROR PAUSED"
       : (rt.state || "IDLE").replace(/_/g, " ");
 
@@ -404,22 +489,38 @@
       const curAction = idx < actions.length ? actions[idx] : actions[actions.length - 1];
       const dur = curAction.duration || 0;
       
-      if (rt.state === "ACTION_RUN") {
+      if (rt.state === "ACTION_RUN" || (rt.state && (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY" || rt.state === "ACTION_DRIFT_VERIFY"))) {
         const timerStart = rt.timerStart || (Date.now() / 1000);
-        const elapsedSec = Math.max(0, (Date.now() / 1000) - timerStart);
-        const remainingCurSec = Math.max(0, dur - elapsedSec);
-        curSub = `${curAction.switchName || 'Switch'} ${curAction.state} for ${formatTime(elapsedSec)}`;
+        const elapsedSecSinceResume = Math.max(0, (Date.now() / 1000) - timerStart);
+        
+        let remainingCurSec = Math.max(0, dur - elapsedSecSinceResume);
+        let trueElapsedSec = elapsedSecSinceResume;
+        
+        if (rt.remainingTime !== undefined && rt.remainingTime !== null) {
+          if (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY" || rt.state === "ACTION_DRIFT_VERIFY") {
+            remainingCurSec = rt.remainingTime;
+          } else {
+            remainingCurSec = Math.max(0, rt.remainingTime - elapsedSecSinceResume);
+          }
+          trueElapsedSec = Math.max(0, dur - remainingCurSec);
+        }
+        
+        let actionStr = 'for';
+        if (rt.state.startsWith("PAUSED_") || rt.state === "ACTION_PING_VERIFY" || rt.state === "SCHEDULER_PING_VERIFY") actionStr = 'Paused at';
+        if (rt.state === "ACTION_DRIFT_VERIFY") actionStr = 'Verifying at';
+        
+        curSub = `${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)} ${curAction.state} ${actionStr} ${formatTime(trueElapsedSec)}`;
 
         if (idx + 1 < actions.length) {
           const nextAction = actions[idx + 1];
-          nextStep = `${nextAction.switchName || 'Switch'} ${nextAction.state}`;
+          nextStep = `${getDynamicSwitchName(nextAction.switchCmdTopic, nextAction.switchName)} ${nextAction.state}`;
         } else {
           if (rt.loopingToFirst || (rt.state === "ACTION_RUN" && !rt.pauseReason)) {
             const nextAction = actions[0];
-            nextStep = `Initialization & ${nextAction.switchName || 'Switch'} ${nextAction.state}`;
+            nextStep = `Initialization & ${getDynamicSwitchName(nextAction.switchCmdTopic, nextAction.switchName)} ${nextAction.state}`;
           } else {
             const revertState = curAction.state === "ON" ? "OFF" : "ON";
-            nextStep = `${curAction.switchName || 'Switch'} ${revertState}`;
+            nextStep = `${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)} ${revertState}`;
           }
         }
         nextSub = `In ${formatTime(remainingCurSec)}`;
@@ -430,12 +531,12 @@
         const bufElapsed = Math.max(0, Math.min(bufTime, (Date.now() / 1000) - bufStart));
         curSub = `Waiting for buffer`;
         nextSub = `In ${formatTime(Math.max(0, bufTime - bufElapsed))}`;
-        nextStep = `Revert ${curAction.switchName || 'Switch'}`;
+        nextStep = `Revert ${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)}`;
 
       } else if (rt.state === "IDLE" || rt.state === "COMPLETED") {
         curSub = rt.state === "COMPLETED" ? "Finished cycle" : "Waiting for start";
       } else {
-        curSub = `Action ${Math.min(idx + 1, actions.length)}: ${curAction.switchName || 'Switch'} ${curAction.state}`;
+        curSub = `Action ${Math.min(idx + 1, actions.length)}: ${getDynamicSwitchName(curAction.switchCmdTopic, curAction.switchName)} ${curAction.state}`;
         if (rt.loopingToFirst && rt.state.includes("OVERLAP")) {
           curSub = `Looping: Initialization & Action 1`;
         }
@@ -505,7 +606,8 @@
     if (liveSw) {
       const switchMap = new Map();
       [...inits, ...actions, ...errs, ...schedTrue, ...schedFalse].forEach(s => {
-        if (s.switchName) switchMap.set(s.switchName, s.switchStateTopic || s.switchCmdTopic);
+        const t = s.switchStateTopic || s.switchCmdTopic;
+        if (t) switchMap.set(getDynamicSwitchName(s.switchCmdTopic, s.switchName), t);
       });
       if (switchMap.size > 0) {
         liveSw.innerHTML = `<div class="irr-live-grid">${Array.from(switchMap.entries()).map(([name, topic]) => {
@@ -533,7 +635,7 @@
     if (liveSen) {
       const sensorMap = new Map();
       conds.forEach(c => {
-        if (c.sensorName || c.sensorStateTopic) sensorMap.set(c.sensorName || "Sensor", c.sensorStateTopic);
+        if (c.sensorStateTopic) sensorMap.set(getDynamicSensorName(c.sensorStateTopic, c.sensorName), c.sensorStateTopic);
       });
       if (sensorMap.size > 0) {
         liveSen.innerHTML = `<div class="irr-live-grid">${Array.from(sensorMap.entries()).map(([name, topic]) => {
@@ -685,22 +787,30 @@
     const toggle = $("#irr-status-toggle");
     toggle.checked = auto.status === "ON";
     $(".toggle-text-on").textContent = auto.status === "ON" ? "ON" : "OFF";
-    
     // Clear previous errors/highlights
     const errEl = $("#irr-run-error");
     if (errEl) errEl.style.display = "none";
     document.querySelectorAll(".irr-sw-row.conflict").forEach(el => el.classList.remove("conflict"));
 
+    const loadingEl = $("#irr-status-loading");
+    if (loadingEl) {
+      const rs = auto.runtime?.state || "";
+      const isDeinit = rs.startsWith("DEINIT_") || (rs === "PAUSED_NETWORK" && auto.runtime?.prePauseNetwork?.startsWith("DEINIT_"));
+      loadingEl.style.display = isDeinit ? "block" : "none";
+    }
+
     toggle.onchange = (e) => {
       const isTurningOn = toggle.checked;
       if (!isTurningOn) {
         // Turning OFF is always safe
+        if (auto.deinitialization && auto.deinitialization.length > 0 && loadingEl) {
+          loadingEl.style.display = "block";
+        }
         socket.emit("toggle_automation", { id: auto.id, status: "OFF" });
         return;
       }
 
       // Turning ON - run validation
-      const loadingEl = $("#irr-status-loading");
       if (loadingEl) loadingEl.style.display = "block";
       toggle.disabled = true;
 
@@ -722,7 +832,7 @@
         
         // Apply red borders to the rows
         switchTopics.forEach(t => {
-            document.querySelectorAll(`.irr-sw-row[data-topic="${t}"]`).forEach(el => el.classList.add("conflict"));
+            document.querySelectorAll(`.irr-sw-row[data-topic="${t}"], tr[data-topic="${t}"]`).forEach(el => el.classList.add("conflict"));
         });
         
       } else {
@@ -735,13 +845,19 @@
     // Init
     const initBody = $("#irr-init-body");
     const inits = auto.initialization || [];
-    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    initBody.innerHTML = inits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(getDynamicSwitchName(i.switchCmdTopic, i.switchName))} <span class="irr-init-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
 
     // Deinit
     const deinitBody = $("#irr-deinit-body");
     if (deinitBody) {
       const deinits = auto.deinitialization || [];
-      deinitBody.innerHTML = deinits.map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")} <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+      deinitBody.innerHTML = deinits.map(i => {
+        const topic = i.switchCmdTopic || "";
+        const isDeinitPhase = (rt.state || "").startsWith("DEINIT_");
+        const isYielded = isDeinitPhase && (auto.runtime?.yielded_switches || []).includes(topic);
+        const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
+        return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span><span style="display:inline-flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, i.switchName))}${yieldIcon}</span> <span class="irr-deinit-live" style="margin-left:12px; font-size:12px; color:var(--ha-text-secondary);"></span></span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+      }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
     }
 
     // Condition
@@ -749,7 +865,7 @@
     const conds = auto.condition || [];
     condBody.innerHTML = conds.map((c, i) => {
       const logicBadge = c.logic && i < conds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row"><span class="irr-cond-sensor">${escHtml(getDynamicSensorName(c.sensorStateTopic, c.sensorName))}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-cond-live"></span>${logicBadge}</div>`;
     }).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">No conditions (always true)</span>';
 
     // Actions
@@ -765,13 +881,18 @@
       let status = "⏳ Pending";
       if (i < idx) status = "✔ Done";
       if (isActive) status = "▶ " + (rt.state === "ACTION_RUN" ? "Running" : "Processing");
-      return `<tr class="${isActive ? "active-action irr-sw-row" : "irr-sw-row"}" data-topic="${escHtml(a.switchCmdTopic || "")}"><td>${i + 1}</td><td>${escHtml(a.switchName || "Switch")}</td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
+      const topic = a.switchCmdTopic || "";
+      const isActionPhase = (rt.state || "").startsWith("ACTION_") || (rt.state || "").startsWith("OVERLAP_");
+      const isYielded = isActionPhase && (auto.runtime?.yielded_switches || []).includes(topic);
+      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
+
+      return `<tr class="${isActive ? "active-action" : ""}" data-topic="${escHtml(topic)}"><td>${i + 1}</td><td><span style="display:inline-flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, a.switchName))}${yieldIcon}</span></td><td><span class="irr-sw-state ${a.state === 'ON' ? 'on' : 'off'}">${a.state}</span></td><td>${durStr}</td><td class="irr-action-status">${status}</td></tr>`;
     }).join("")}</tbody></table>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No actions configured</span>';
 
     // Error state
     const errBody = $("#irr-error-body");
     const errs = auto.errorState || [];
-    errBody.innerHTML = errs.map(e => `<div class="irr-sw-row"><span>${escHtml(e.switchName || "Switch")}</span><span class="irr-sw-state off">${e.state || "OFF"}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
+    errBody.innerHTML = errs.map(e => `<div class="irr-sw-row"><span>${escHtml(getDynamicSwitchName(e.switchCmdTopic, e.switchName))}</span><span class="irr-sw-state off">${e.state || "OFF"}</span></div>`).join("") || '<span style="color:var(--ha-text-disabled);font-size:12px">None configured</span>';
 
     // Scheduler
     const schedBody = $("#irr-sched-body");
@@ -801,7 +922,7 @@
     const schedConds = sched.conditions || [];
     const schedCondHTML = schedConds.length > 0 ? `<div style="margin-top:12px;"><span class="irr-label">Conditions</span><div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">${schedConds.map((c, i) => {
       const logicBadge = c.logic && i < schedConds.length - 1 ? `<span class="irr-cond-logic">${c.logic}</span>` : "";
-      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(c.sensorName || c.sensorStateTopic || "Sensor")}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
+      return `<div class="irr-cond-row" style="margin:0;"><span class="irr-cond-sensor">${escHtml(getDynamicSensorName(c.sensorStateTopic, c.sensorName))}</span><span class="irr-cond-op">${escHtml(condOpDisplay(c))}</span><span class="irr-cond-val">${escHtml(c.value || "")}</span><span class="irr-sched-cond-live"></span>${logicBadge}</div>`;
     }).join("")}</div></div>` : '';
 
     schedBody.innerHTML = `<div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;width:100%;">
@@ -821,12 +942,16 @@
       </div>
     </div>${schedCondHTML}`;
 
-    const setTrueHTML = (sched.setIfTrue || []).map(i => `<div class="irr-sw-row" data-topic="${escHtml(i.switchCmdTopic || "")}"><span>${escHtml(i.switchName || i.switchCmdTopic || "Switch")}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`).join("");
+    const setTrueHTML = (sched.setIfTrue || []).map(i => {
+      const topic = i.switchCmdTopic || "";
+      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, i.switchName))}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+    }).join("");
+    
     const setFalseHTML = (sched.setIfFalse || []).map(i => {
       const topic = i.switchCmdTopic || "";
-      const isYielded = (auto.runtime?.yielded_switches || []).includes(topic);
-      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active automation">warning</span>` : "";
-      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(i.switchName || topic || "Switch")}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
+      const isYielded = (auto.runtime?.sched_yielded_switches || []).includes(topic);
+      const yieldIcon = isYielded ? `<span class="material-symbols-outlined" style="font-size:14px;color:var(--ha-yellow);margin-left:4px;vertical-align:middle;" title="Yielding priority to another active sequence/schedule">warning</span>` : "";
+      return `<div class="irr-sw-row" data-topic="${escHtml(topic)}"><span style="display:flex;align-items:center;">${escHtml(getDynamicSwitchName(topic, i.switchName))}${yieldIcon}</span><span class="irr-sw-state ${i.state === 'ON' ? 'on' : 'off'}">${i.state}</span></div>`;
     }).join("");
 
     if (setTrueHTML || setFalseHTML) {
@@ -896,7 +1021,30 @@
     const logEl = $("#irr-activity-log");
     const logs = auto.logs || [];
     logEl.innerHTML = logs.length > 0 ? `<div class="irr-log-list">${logs.slice(0, 15).map(l => {
-      const t = l.ts ? new Date(l.ts).toLocaleTimeString() : "";
+      let t = "";
+      if (l.ts) {
+        // Parse the timestamp. If the backend sent a naive string, append 'Z' so JS treats it as absolute UTC.
+        // If it already has a Z or offset, it will parse correctly.
+        let tsStr = l.ts;
+        if (!tsStr.endsWith("Z") && !tsStr.includes("+") && !tsStr.includes("-", 10)) {
+            tsStr += "Z"; 
+        }
+        const utcMs = new Date(tsStr).getTime();
+        
+        if (!isNaN(utcMs)) {
+            // Apply the automation's timezone offset
+            const offsetMins = auto?.schedule?.utcOffset ?? new Date().getTimezoneOffset();
+            const targetMs = utcMs - (offsetMins * 60000);
+            const d = new Date(targetMs);
+            
+            let h = d.getUTCHours();
+            let m = d.getUTCMinutes();
+            let s = d.getUTCSeconds();
+            const ampm = h >= 12 ? 'pm' : 'am';
+            h = h % 12 || 12;
+            t = `${h}:${m < 10 ? '0'+m : m}:${s < 10 ? '0'+s : s} ${ampm}`;
+        }
+      }
       return `<div class="irr-log-entry"><span class="irr-log-dot ${l.level || 'info'}"></span><span class="irr-log-time">${escHtml(t)}</span><span>${escHtml(l.msg || "")}</span></div>`;
     }).join("")}</div>` : '<span style="color:var(--ha-text-disabled);font-size:12px">No activity yet</span>';
 
@@ -1072,7 +1220,12 @@
 
   function refreshSwitchOptions(container) {
     if (!container || !container.id) return;
-    if (container.id !== "auto-f-init" && container.id !== "auto-f-deinit") return;
+    if (container.id !== "auto-f-init" && 
+        container.id !== "auto-f-deinit" && 
+        container.id !== "auto-f-set-true" && 
+        container.id !== "auto-f-set-false") {
+      return;
+    }
 
     const selects = [...container.querySelectorAll(".f-switch")];
     const used = new Set();
@@ -1184,6 +1337,8 @@
     $("#auto-f-th-wind").value = th.wind_kmh !== undefined ? th.wind_kmh : "";
     $("#auto-f-ai-rules").value = auto.schedule?.ai_custom_rules || "";
     
+    // Farm Area
+    $("#auto-f-farm-area").value = auto.schedule?.farmArea !== undefined ? auto.schedule.farmArea : "";
     $("#ai-rules-modal").classList.remove("hidden");
   }
 
@@ -1216,6 +1371,15 @@
       wind_kmh: $("#auto-f-th-wind").value !== "" ? parseFloat($("#auto-f-th-wind").value) : 20.0
     };
     auto.schedule.ai_custom_rules = $("#auto-f-ai-rules").value.trim();
+    
+    if ($("#auto-f-farm-area")) {
+      const areaVal = parseFloat($("#auto-f-farm-area").value);
+      if (!isNaN(areaVal)) {
+          auto.schedule.farmArea = areaVal;
+      } else {
+          delete auto.schedule.farmArea;
+      }
+    }
     
     socket.emit("update_automation", auto);
     closeAiRulesModal();
@@ -1412,7 +1576,7 @@
     const set = new Set();
     const add = (arr) => (arr || []).forEach(x => { if (x && x.switchCmdTopic) set.add(x.switchCmdTopic); });
     add(auto.initialization);
-    add(auto.deinitialization);
+    // intentional: deinitialization is excluded from schedule conflicts
     add(auto.actions);
     add(auto.schedule?.setIfTrue);
     add(auto.schedule?.setIfFalse);
@@ -1432,12 +1596,112 @@
     return { days, is24hr, timeRanges, utcOffset };
   }
 
+  // Validates that Action Sequence switches don't overlap with During Enforcement (setIfTrue) switches
+  // Returns false if there's a conflict, true if valid.
+  function validateActionConflicts() {
+    const errorEl = $("#auto-modal-error");
+    // Clear old errors
+    $("#auto-f-actions")?.querySelectorAll(".f-switch.error-conflict").forEach(el => el.classList.remove("error-conflict"));
+    
+    // Collect all topics used in setIfTrue (During Enforcement)
+    const setIfTrueTopics = new Set();
+    $("#auto-f-set-true")?.querySelectorAll(".f-switch").forEach(sel => {
+      const topic = sel.value;
+      if (topic) setIfTrueTopics.add(topic);
+    });
+
+    const conflicts = new Set();
+    
+    // Check Action Sequence (auto-f-actions) against setIfTrueTopics
+    $("#auto-f-actions")?.querySelectorAll(".f-switch").forEach(sel => {
+      const topic = sel.value;
+      if (topic && setIfTrueTopics.has(topic)) {
+        sel.classList.add("error-conflict");
+        const swName = sel.selectedOptions[0]?.dataset.name || topic;
+        conflicts.add(swName);
+      }
+    });
+
+    if (!errorEl) return true;
+    if (conflicts.size === 0) {
+      errorEl.classList.add("hidden");
+      errorEl.classList.remove("error", "error-action");
+      errorEl.innerHTML = "";
+      return true;
+    }
+    
+    const parts = [...conflicts].map(sw => `“${escHtml(sw)}”`);
+    errorEl.classList.add("error", "error-action");
+    errorEl.classList.remove("hidden");
+    errorEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>Error: ${parts.join(", ")} cannot be used in the Action Sequence because they are also used in During Enforcement.</span>`;
+    return false;
+  }
+
+  // Validates that switches in Outside Enforcement (setIfFalse) do not conflict with the state enforced by other automations.
+  // Returns false if there's a conflict, true if valid.
+  function validateOutsideEnforcementConflicts() {
+    const errorEl = $("#auto-modal-error");
+    // Clear old errors and injected icons
+    $("#auto-f-set-false")?.querySelectorAll(".f-switch.error-conflict, .f-state.error-conflict").forEach(el => el.classList.remove("error-conflict"));
+    
+    // Map of topic -> { state, autoName } from other automations' setIfFalse
+    const globalEnforceMap = new Map();
+    for (const id in _autos) {
+      if (id === _editId) continue;
+      const other = _autos[id];
+      const outsideList = other.schedule?.setIfFalse || [];
+      outsideList.forEach(item => {
+        if (item.switchCmdTopic) {
+          globalEnforceMap.set(item.switchCmdTopic, { state: item.state, autoName: other.name });
+        }
+      });
+    }
+
+    const conflicts = new Set();
+    
+    $("#auto-f-set-false")?.querySelectorAll(".irr-form-row").forEach(row => {
+      const sel = row.querySelector(".f-switch");
+      const stateSel = row.querySelector(".f-state");
+      const topic = sel?.value;
+      const myState = stateSel?.value || "OFF";
+      
+      if (topic && globalEnforceMap.has(topic)) {
+        const globalData = globalEnforceMap.get(topic);
+        if (globalData.state !== myState) {
+          sel.classList.add("error-conflict");
+          if (stateSel) stateSel.classList.add("error-conflict");
+          
+          const swName = sel.selectedOptions[0]?.dataset.name || topic;
+          conflicts.add(`“${escHtml(swName)}” (you set ${myState}, but “${escHtml(globalData.autoName || "Unnamed")}” enforces ${globalData.state})`);
+        }
+      }
+    });
+
+    if (!errorEl) return true;
+    if (conflicts.size === 0) {
+      // Don't clear errorEl if it's already showing an error from validateActionConflicts
+      if (!errorEl.classList.contains("error-action")) {
+        errorEl.classList.add("hidden");
+        errorEl.classList.remove("error");
+        errorEl.innerHTML = "";
+      }
+      return true;
+    }
+    
+    errorEl.classList.add("error");
+    errorEl.classList.remove("error-action"); // Clear any specific tag from the other validator
+    errorEl.classList.remove("hidden");
+    const parts = [...conflicts];
+    errorEl.innerHTML = `<span class="material-symbols-outlined">error</span><span>Error: ${parts.join("; ")}. All automations must agree on the same Outside Enforcement state!</span>`;
+    return false;
+  }
+
   // Highlight conflicting switch selects, toggle the warning banner, and return true.
   // Saving is always allowed, this is just a warning.
   function validateSwitchConflicts() {
     const warnEl = $("#auto-modal-warning");
     SWITCH_CONTAINERS.forEach(cid => {
-      $(`#${cid}`)?.querySelectorAll(".f-switch.warning-conflict").forEach(el => el.classList.remove("warning-conflict"));
+      $(`#${cid}`)?.querySelectorAll(".f-switch.conflict").forEach(el => el.classList.remove("conflict"));
     });
 
     const sched = _collectScheduleLite();
@@ -1456,10 +1720,11 @@
 
     const conflicts = new Map(); // switchName -> Set(other automation names)
     SWITCH_CONTAINERS.forEach(cid => {
+      if (cid === "auto-f-deinit") return; // Ignore deinit for conflict checks
       $(`#${cid}`)?.querySelectorAll(".f-switch").forEach(sel => {
         const topic = sel.value;
         if (topic && topicToAutos.has(topic)) {
-          sel.classList.add("warning-conflict");
+          sel.classList.add("conflict");
           const swName = sel.selectedOptions[0]?.dataset.name || topic;
           if (!conflicts.has(swName)) conflicts.set(swName, new Set());
           topicToAutos.get(topic).forEach(n => conflicts.get(swName).add(n));
@@ -1488,8 +1753,6 @@
   function validateRunConflicts(autoToRun) {
     const conflicts = new Map();
     // Re-use the existing logic to calculate its schedule
-    // The auto obj might not have timeRanges formatted exactly like the modal's DOM extraction,
-    // but _weeklyUtcIntervals expects the raw backend auto.schedule object!
     const schedToRun = autoToRun.schedule || {};
     
     // switchCmdTopic -> Set of other automation names overlapping in schedule
@@ -1511,40 +1774,28 @@
       }
     }
     
-    // We want to map topics to names, or map switchNames to names?
-    // In updateCardDetails we use topics to find DOM nodes, and we map to names for the error string.
-    // We can just return a Map of switchNames -> Set(other names), AND return the topics.
-    // Let's return a Map of switchName -> Set(other names).
     const conflictsByName = new Map();
     for (const t of conflicts.keys()) {
-      // Find the name of this switch from autoToRun
-      let swName = t;
-      const check = (arr) => (arr||[]).forEach(x => { if (x.switchCmdTopic === t && x.switchName) swName = x.switchName; });
-      check(autoToRun.initialization);
-      check(autoToRun.deinitialization);
-      check(autoToRun.actions);
-      check(autoToRun.schedule?.setIfTrue);
-      check(autoToRun.schedule?.setIfFalse);
-      
-      if (!conflictsByName.has(swName)) conflictsByName.set(swName, new Set());
-      conflicts.get(t).forEach(n => conflictsByName.get(swName).add(n));
+      let swName = getDynamicSwitchName(t, t);
+      conflictsByName.set(swName, conflicts.get(t));
     }
     
-    return {
-       size: conflicts.size,
-       topics: Array.from(conflicts.keys()),
-       entries: () => conflictsByName.entries()
-    };
+    conflictsByName.topics = Array.from(conflicts.keys());
+    return conflictsByName;
   }
 
   // Keep the highlights/banner in sync as the user edits switches, days, times or the 24-hour toggle.
-  const _maybeLiveValidate = () => { validateSwitchConflicts(); };
+  const _maybeLiveValidate = () => { 
+    validateActionConflicts();
+    validateOutsideEnforcementConflicts();
+    validateSwitchConflicts(); 
+  };
   modalOverlay?.addEventListener("change", _maybeLiveValidate);
   modalOverlay?.addEventListener("input", _maybeLiveValidate);
   modalOverlay?.addEventListener("click", (e) => {
     if (e.target.classList?.contains("irr-day-btn") || e.target.closest(".irr-remove-btn") || e.target.closest(".irr-add-btn")) {
       // Small timeout to allow DOM changes (like adding a row or toggling a class) to settle
-      setTimeout(validateSwitchConflicts, 0);
+      setTimeout(_maybeLiveValidate, 0);
     }
   });
 
@@ -1552,7 +1803,13 @@
   $("#auto-modal-save")?.addEventListener("click", () => {
     const data = collectFormData();
     if (!data) return;
-    if (!validateSwitchConflicts()) { return; }
+    
+    // Check for hard errors (blocks saving)
+    if (!validateActionConflicts()) { return; }
+    if (!validateOutsideEnforcementConflicts()) { return; }
+    // Check for soft warnings (allows saving)
+    validateSwitchConflicts();
+    
     if (_editId) {
       data.id = _editId;
       socket.emit("update_automation", data);
@@ -1679,6 +1936,7 @@
   socket.on("automations_list", (list) => {
     _autos = {};
     (list || []).forEach(a => { _autos[a.id] = a; });
+    window.automations = _autos;
     renderList();
     renderDetail();
   });
@@ -1688,6 +1946,7 @@
     if (!auto) return;
     auto.logs = data.logs || [];
     _autos[auto.id] = auto;
+    window.automations = _autos;
     renderList();
     if (_selectedId === auto.id) renderDetail();
   });
@@ -1702,6 +1961,14 @@
     if (_selectedId === data.id) { _selectedId = null; }
     renderList();
     renderDetail();
+  });
+
+  socket.on("automation_error", (data) => {
+    if (window.showToastNotification) {
+      window.showToastNotification("Automation Conflict", data.error, "error");
+    } else {
+      alert(data.error);
+    }
   });
 
   socket.on("suggested_ai_settings_response", (res) => {
@@ -2114,5 +2381,11 @@
 
   // Start live timer loop
   setInterval(updateLiveTimers, 1000);
+
+  // Expose global render function for dashboard.js to trigger on device rename
+  window._renderAutomationUI = function() {
+    renderList();
+    if (_selectedId) renderDetail();
+  };
   });
 })();

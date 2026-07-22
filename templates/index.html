@@ -274,6 +274,7 @@
                                     <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="running"><span>Running</span></label>
                                     <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="idle"><span>Idle</span></label>
                                     <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="paused"><span>Paused</span></label>
+                                    <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="scheduler"><span>Scheduler</span></label>
                                     <label class="irr-filter-dd-opt"><input type="checkbox" class="irr-filter-dd-cb" value="error"><span>Error</span></label>
                                 </div>
                             </div>
@@ -541,6 +542,7 @@
                         </div>
 
                     </div>
+                    <div id="auto-modal-error" class="irr-modal-warning hidden" role="alert"></div>
                     <div id="auto-modal-warning" class="irr-modal-warning hidden" role="alert"></div>
                     <div class="irr-modal-footer">
                         <button id="auto-modal-cancel" class="ha-btn-secondary"
@@ -648,6 +650,10 @@
                                 <input type="number" step="1" id="auto-f-th-wind" placeholder=" ">
                                 <label>Max Wind (km/h)</label>
                             </div>
+                        </div>
+                        <div class="ha-field" style="margin-top: 16px;">
+                            <input type="number" step="0.1" id="auto-f-farm-area" placeholder="e.g. 5 (Default)">
+                            <label>Farm Area (Acres)</label>
                         </div>
                         <div class="ha-field" style="margin-top: 16px;">
                             <textarea id="auto-f-ai-rules" rows="3" placeholder="e.g. Bermuda grass: water deeply, allow dry days. Clay soil: drains slowly." style="width: 100%; box-sizing: border-box; background: transparent; border: none; color: white; outline: none; font-family: inherit; font-size: 14px; padding-top: 8px; resize: vertical;"></textarea>

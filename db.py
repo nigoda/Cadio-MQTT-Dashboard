@@ -72,7 +72,8 @@ def init_db():
             last_login    TEXT,
             blocked       INTEGER DEFAULT 0,
             failed_reconnects INTEGER DEFAULT 0,
-            blocked_at    TEXT
+            blocked_at    TEXT,
+            watchdogs     TEXT DEFAULT '{}'
         );
 
         CREATE TABLE IF NOT EXISTS admins (
@@ -162,6 +163,7 @@ def _migrate_columns(conn):
         ("users", "api_key_b64", "TEXT DEFAULT ''"),
         # Automations AI priority
         ("automations", "ai_priority", "INTEGER DEFAULT 99999"),
+        ("users", "watchdogs", "TEXT DEFAULT '{}'"),
     ]
     for table, column, col_type in migrations:
         try:
@@ -506,9 +508,12 @@ def _auto_to_row(user_email, auto):
     """Convert an in-memory automation dict to DB row values."""
     # Separate runtime from config
     runtime = auto.get("runtime", {})
+    # Keys that are runtime-only and must never be persisted to DB
+    _TRANSIENT_KEYS = {"id", "name", "description", "status", "runtime", "logs", "ai_priority",
+                       "_session_automations", "_owner_email", "ai_running"}
     config = {}
     for k, v in auto.items():
-        if k not in ("id", "name", "description", "status", "runtime", "logs", "ai_priority"):
+        if k not in _TRANSIENT_KEYS:
             config[k] = v
     return (
         auto["id"],
@@ -661,8 +666,8 @@ def get_users_with_active_automations():
     rows = conn.execute(
         """SELECT DISTINCT u.email, u.password_enc
            FROM users u
-           JOIN automations a ON a.user_email = u.email
-           WHERE a.status = 'ON' AND u.blocked = 0"""
+           LEFT JOIN automations a ON a.user_email = u.email
+           WHERE (a.status = 'ON' OR (u.watchdogs IS NOT NULL AND u.watchdogs != '{}')) AND u.blocked = 0"""
     ).fetchall()
     result = []
     for row in rows:
@@ -801,6 +806,28 @@ def get_push_subscriptions(user_email=None):
             "SELECT endpoint, p256dh, auth FROM push_subscriptions"
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_watchdogs(email):
+    """Retrieve watchdogs configuration for a user."""
+    conn = _get_conn()
+    row = conn.execute("SELECT watchdogs FROM users WHERE email = ?", (email,)).fetchone()
+    if row and row["watchdogs"]:
+        try:
+            return json.loads(row["watchdogs"])
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def set_watchdogs(email, watchdogs_dict):
+    """Update watchdogs configuration for a user."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE users SET watchdogs = ? WHERE email = ?",
+        (json.dumps(watchdogs_dict), email)
+    )
+    conn.commit()
 
 
 def delete_push_subscription(endpoint):

@@ -18,6 +18,8 @@
             --ha-divider: #3a3a3a;
         }
 
+        * { box-sizing: border-box; }
+        
         body {
             font-family: 'Roboto', sans-serif;
             background: var(--ha-bg);
@@ -59,6 +61,8 @@
         input:focus { border-color: var(--ha-primary); }
 
         .btn {
+            display: block;
+            margin: 0;
             width: 100%;
             padding: 14px;
             background: var(--ha-primary);

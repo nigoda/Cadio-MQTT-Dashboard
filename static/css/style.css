@@ -524,6 +524,35 @@ body {
     border: none;
 }
 
+/* Settings modal slider */
+.ha-settings-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: var(--ha-divider);
+    outline: none;
+    cursor: pointer;
+    margin: 10px 0;
+}
+.ha-settings-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--ha-primary);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+.ha-settings-slider::-moz-range-thumb {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--ha-primary);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0,0,0,.4);
+    border: none;
+}
+
 /* Color picker */
 .ha-color-picker {
     -webkit-appearance: none;
@@ -1440,6 +1469,8 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-status-badge.off { background: rgba(158,158,158,.2); color: #9e9e9e; }
 .irr-status-badge.completed { background: rgba(3,169,244,.2); color: #03a9f4; }
 .irr-status-badge.waiting { background: rgba(156,39,176,.2); color: #ce93d8; }
+.irr-status-badge.deinit-waiting { background: rgba(255,152,0,.15); color: #ffb74d; border: 1px solid rgba(255,152,0,.35); animation: deinit-waiting-pulse 1.6s ease-in-out infinite; }
+@keyframes deinit-waiting-pulse { 0%,100% { opacity:1; } 50% { opacity:.55; } }
 .irr-btn-danger { background: rgba(244,67,54,.1); color: #f44336; border: 1px solid rgba(244,67,54,.3); border-radius: var(--ha-radius-sm); padding: 6px 12px; font-size: 12px; font-weight: 500; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 4px; transition: background .15s; }
 .irr-btn-danger:hover { background: rgba(244,67,54,.2); }
 
@@ -1530,6 +1561,7 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
 .irr-actions-table th { text-align: left; font-size: 11px; font-weight: 500; color: var(--ha-text-secondary); padding: 6px 8px; border-bottom: 1px solid var(--ha-divider); }
 .irr-actions-table td { padding: 8px; border-bottom: 1px solid rgba(255,255,255,.04); }
 .irr-actions-table tr.active-action { background: rgba(3,169,244,.08); }
+.irr-actions-table tr.conflict { border: 2px solid var(--ha-red); }
 .irr-action-status { display: flex; align-items: center; gap: 4px; font-size: 12px; }
 
 /* Scheduler */
@@ -1593,10 +1625,31 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
   border-color: var(--ha-warning, #ff9800);
   box-shadow: 0 0 0 1px var(--ha-warning, #ff9800);
 }
+/* Red outline for action vs enforcement errors */
+.irr-form-row select.f-switch.error-conflict,
+.irr-form-row select.f-state.error-conflict {
+  border-color: var(--ha-red);
+  box-shadow: 0 0 0 1px var(--ha-red);
+}
+.irr-form-row select.f-state.error-conflict {
+  color: var(--ha-red);
+}
+.irr-form-row select.f-state.error-conflict option {
+  color: var(--ha-text);
+}
+.irr-form-row select.f-state.error-conflict option:checked {
+  color: var(--ha-red);
+}
 .irr-modal-warning.warning {
   background: rgba(255, 152, 0, 0.1);
   color: var(--ha-warning, #ff9800);
   border: 1px solid rgba(255, 152, 0, 0.2);
+}
+.irr-modal-warning.error {
+  background: rgba(244, 67, 54, 0.1);
+  color: var(--ha-red);
+  border: 1px solid rgba(244, 67, 54, 0.2);
+  margin-bottom: 8px;
 }
 .irr-run-error-banner {
   background: rgba(244, 67, 54, 0.1);
@@ -1991,3 +2044,62 @@ tr.ha-dev-sub td:nth-child(3) { color: var(--ha-on); }
     background: var(--ha-card);
 }
 
+/* ==========================================
+   Watchdog Selector — matches automation dropdown design
+   ========================================== */
+.ha-watchdog-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px 12px 16px;
+    font-size: 13px;
+}
+.ha-watchdog-selector .wd-icon {
+    font-size: 18px;
+    color: var(--ha-text-secondary);
+    flex-shrink: 0;
+}
+.ha-watchdog-selector .wd-icon--offline {
+    color: var(--ha-red);
+    border: 2px solid var(--ha-red);
+    border-radius: 50%;
+    padding: 1px;
+    font-size: 14px;
+}
+.ha-watchdog-selector .wd-label {
+    color: var(--ha-text-secondary);
+    font-size: 13px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.ha-watchdog-selector .watchdog-select {
+    padding: 8px 10px;
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    border: 1px solid var(--ha-divider);
+    border-radius: var(--ha-radius-sm);
+    font-size: 13px;
+    font-family: inherit;
+    box-sizing: border-box;
+    min-width: 100px;
+    flex: 1 1 auto;
+    max-width: 200px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color var(--ha-transition);
+}
+.ha-watchdog-selector .watchdog-select:focus {
+    border-color: var(--ha-primary);
+}
+.ha-watchdog-selector .watchdog-select option {
+    background: var(--ha-surface);
+    color: var(--ha-text);
+    padding: 6px 10px;
+}
+.ha-watchdog-selector .wd-countdown {
+    font-size: 12px;
+    color: var(--ha-text-secondary);
+    margin-left: auto;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
