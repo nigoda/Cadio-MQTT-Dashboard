@@ -2641,6 +2641,27 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None, session_
             _auto_log(auto_id, "Schedule ended → PAUSED_SCHEDULE")
             _emit_auto_update(auto)
             return
+        
+        # Action Sequence Drift Detection
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        switches_to_verify = []
+        if idx < len(actions):
+            switches_to_verify.append(actions[idx])
+        
+        if not _verify_switches(switches_to_verify, auto):
+            # Freeze timer and correct drift
+            elapsed_run = now - (rt.get("timerStart") or now)
+            rt["remainingTime"] = max(0, (rt.get("remainingTime") or 0) - elapsed_run)
+            rt["timerStart"] = None
+            _mqtt_set_switch(actions[idx].get("switchCmdTopic", ""), actions[idx].get("state", "ON"), auto)
+            rt["driftRetryCount"] = 0
+            rt["verifyStart"] = now
+            rt["state"] = "ACTION_DRIFT_VERIFY"
+            _auto_log(auto_id, f"Drift detected on {actions[idx].get('switchName','')} — correcting", "warning")
+            _emit_auto_update(auto)
+            return
+
         # Check timer
         elapsed = now - (rt.get("timerStart") or now)
         remaining = (rt.get("remainingTime") or 0) - elapsed
@@ -2713,6 +2734,31 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None, session_
             return
         actions = auto.get("actions", [])
         idx = rt.get("currentActionIndex", 0)
+        return
+
+    if state == "ACTION_DRIFT_VERIFY":
+        actions = auto.get("actions", [])
+        idx = rt.get("currentActionIndex", 0)
+        action = actions[idx] if idx < len(actions) else {}
+        if _verify_switches([action], auto):
+            # Switch corrected — resume ACTION_RUN with remaining time
+            rt["timerStart"] = now
+            rt["state"] = "ACTION_RUN"
+            rt["driftRetryCount"] = 0
+            _auto_log(auto_id, f"Drift corrected on {action.get('switchName','')} — resuming")
+            _emit_auto_update(auto)
+        elif now - (rt.get("verifyStart") or now) > DRIFT_VERIFY_TIMEOUT:
+            rt["driftRetryCount"] = rt.get("driftRetryCount", 0) + 1
+            if rt["driftRetryCount"] >= MAX_RETRIES:
+                _enter_network_pause(auto, rt, now, "ACTION_RUN", reason="not_obeying")
+                _auto_log(auto_id, f"Action drift correction failed after {MAX_RETRIES} retries → NETWORK ERROR PAUSED", "error", notify=not rt.get("isNetworkRetry", False))
+                _emit_auto_update(auto)
+            else:
+                # Re-send and try again
+                _mqtt_set_switch(action.get("switchCmdTopic", ""), action.get("state", "ON"), auto)
+                rt["verifyStart"] = now
+                _auto_log(auto_id, f"Drift correction retry {rt['driftRetryCount']}/{MAX_RETRIES} on {action.get('switchName','')}", "warning")
+                _emit_auto_update(auto)
         return
 
     if state == "OVERLAP_NEXT_SET":
@@ -2982,8 +3028,7 @@ def _engine_loop():
                                 if ctrl: sequence_overrides[session.email][auto_id].add(ctrl)
                             
                         # Only claim DEINIT switches if ACTIVELY running DEINIT
-                        # (NOT if waiting for a serialized earlier deinit to finish)
-                        if state.startswith("DEINIT_") and not rt.get("_deinit_waiting"):
+                        if state.startswith("DEINIT_"):
                             for item in auto.get("deinitialization", []):
                                 ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
                                 if ctrl: sequence_overrides[session.email][auto_id].add(ctrl)
