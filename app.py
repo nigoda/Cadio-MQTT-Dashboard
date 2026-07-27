@@ -2827,7 +2827,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None, session_
             switches_to_enforce.append(actions[idx])
         # Next action (overlap — already set ON)
         next_idx = (idx + 1) % len(actions)
-        if next_idx != idx and next_idx < len(actions) and not rt.get("loopingToFirst"):
+        if next_idx != idx and next_idx < len(actions) and not rt.get("stopAfterRevert"):
             switches_to_enforce.append(actions[next_idx])
         for sw in switches_to_enforce:
             if not _verify_switches([sw], auto):
