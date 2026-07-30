@@ -2276,7 +2276,11 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None, session_
         return
 
     bg_unverified = False
-    if state not in ("ERROR", "ERROR_SET", "ERROR_VERIFY", "IDLE", "INIT_SET", "INIT_VERIFY_INDIVIDUAL", "INIT_VERIFY_ALL", "OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY") and not auto.get("isPaused"):
+    # Guard: do NOT enforce setIfTrue until initialization has completed at least once.
+    # This prevents the scheduler from setting switches the moment the automation turns ON,
+    # before the initialization sequence has had a chance to run.
+    init_done = rt.get("init_completed", False)
+    if state not in ("ERROR", "ERROR_SET", "ERROR_VERIFY", "IDLE", "INIT_SET", "INIT_VERIFY_INDIVIDUAL", "INIT_VERIFY_ALL", "OVERLAP_NEXT_SET", "OVERLAP_NEXT_VERIFY") and not auto.get("isPaused") and init_done:
         # --- Background Enforce (Set if True / Set if False) ---
         sched_is_true = check_schedule(auto)
         sched_cfg = auto.get("schedule", {})
