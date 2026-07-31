@@ -1020,7 +1020,7 @@
     // Activity log
     const logEl = $("#irr-activity-log");
     const logs = auto.logs || [];
-    logEl.innerHTML = logs.length > 0 ? `<div class="irr-log-list">${logs.slice(0, 15).map(l => {
+    logEl.innerHTML = logs.length > 0 ? `<div class="irr-log-list">${logs.slice(0, 50).map(l => {
       let t = "";
       if (l.ts) {
         // Parse the timestamp. If the backend sent a naive string, append 'Z' so JS treats it as absolute UTC.
