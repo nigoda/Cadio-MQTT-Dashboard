@@ -1987,9 +1987,9 @@ def _emit_auto_update(auto):
     # Try sess logs first, fallback to global
     sess = session_mgr.get_session(owner_email) if owner_email else None
     if sess and auto_id in sess.automation_logs:
-        logs = sess.automation_logs.get(auto_id, [])[:20]
+        logs = sess.automation_logs.get(auto_id, [])[:50]
     else:
-        logs = automation_logs.get(auto_id, [])[:20]
+        logs = automation_logs.get(auto_id, [])[:50]
     # Emit to user's room if available, otherwise broadcast (legacy)
     if sess:
         socketio.emit("automation_update", {"automation": safe, "logs": logs}, room=sess.room)
