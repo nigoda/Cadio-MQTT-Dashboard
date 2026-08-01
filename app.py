@@ -508,19 +508,25 @@ def on_message(client, userdata, msg):
             _auto_subscribe_from_config(client, owner_email, payload)
             _index_availability_from_config(sess, payload)
             
-            # Auto-assign default watchdog if applicable
-            parts = topic.split("/")
-            if len(parts) >= 4:
-                obj_id = parts[3]
-                unit = obj_id.split("_")[0]
-                if obj_id.endswith("_20") and unit not in sess.watchdogs:
+            # Auto-assign default watchdog ONLY if the user has NEVER set one for this unit.
+            # We check the DB directly to avoid race conditions during MQTT reconnect
+            # where sess.watchdogs might be temporarily empty/reloading,
+            # which was causing user's manual watchdog selection to be silently overwritten.
+            if obj_id.endswith("_20"):
+                import db as _db
+                saved_watchdogs = _db.get_watchdogs(owner_email)
+                # Only auto-assign if neither the in-memory session nor the DB has a saved choice
+                if unit not in sess.watchdogs and unit not in saved_watchdogs:
                     cmd_topic = payload.get("command_topic") or payload.get("state_topic")
                     if cmd_topic:
                         sess.watchdogs[unit] = cmd_topic
-                        import db
-                        db.set_watchdogs(owner_email, sess.watchdogs)
+                        _db.set_watchdogs(owner_email, sess.watchdogs)
                         next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
                         socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
+                elif unit not in sess.watchdogs and unit in saved_watchdogs:
+                    # Session memory is empty but DB has a saved choice — restore it silently
+                    sess.watchdogs[unit] = saved_watchdogs[unit]
+
 
             
         # 3. Unit-Level Liveness: Any message marks the unit as online
