@@ -975,10 +975,10 @@ def api_save_watchdogs():
     if not unit:
         return jsonify({"success": False, "error": "Missing unit"}), 400
     
-    if topic:
+    if topic and topic != "none":
         sess.watchdogs[unit] = topic
     else:
-        sess.watchdogs.pop(unit, None)
+        sess.watchdogs[unit] = "none"
         
     import db
     db.set_watchdogs(email, sess.watchdogs)
@@ -1176,10 +1176,10 @@ def handle_set_watchdog(data):
     topic = data.get("topic")
     if not unit: return
     
-    if topic:
+    if topic and topic != "none":
         sess.watchdogs[unit] = topic
     else:
-        sess.watchdogs.pop(unit, None)
+        sess.watchdogs[unit] = "none"
         
     import db
     db.set_watchdogs(sess.email, sess.watchdogs)
@@ -3126,6 +3126,7 @@ def _engine_loop():
                     state["pending_ping"] = True
                     state["last_ping"] = now
                     state["expected_state"] = toggle_to
+                    state["restore_state"] = "ON" if current_payload == "on" else "OFF"
 
                     if sess.mqtt_client and sess.mqtt_connected:
                         sess.mqtt_client.publish(cmd_topic, json.dumps({"state": toggle_to}))
@@ -3174,6 +3175,16 @@ def _engine_loop():
                     if is_alive:
                         sess.unit_liveness[unit] = True
                         state["retry_count"] = 0
+                        
+                        # Restore original state after ping test so switch is not left in toggled state
+                        restore_to = state.get("restore_state")
+                        if restore_to and sess.mqtt_client and sess.mqtt_connected:
+                            cmd_topic = topic.replace("/state", "/set").replace("/availability", "/set")
+                            if "/set" not in topic:
+                                cmd_topic = topic.rsplit("/", 1)[0] + "/set"
+                            sess.mqtt_client.publish(cmd_topic, json.dumps({"state": restore_to}))
+                            logging.info(f"[WATCHDOG:{email}] Restored original state {restore_to} to {cmd_topic}")
+                        state["restore_state"] = None
                         
                         if not old_liveness:
                             # Unit just came back online via watchdog verification! Resume paused automations
