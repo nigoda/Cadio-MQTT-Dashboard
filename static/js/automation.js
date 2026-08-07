@@ -1032,7 +1032,8 @@
         const utcMs = new Date(tsStr).getTime();
         
         if (!isNaN(utcMs)) {
-            // Apply the automation's timezone offset
+            // Render in the automation's own configured timezone (selected in the edit form),
+            // so the activity log reads consistently regardless of the viewer's location.
             const offsetMins = auto?.schedule?.utcOffset ?? new Date().getTimezoneOffset();
             const targetMs = utcMs - (offsetMins * 60000);
             const d = new Date(targetMs);

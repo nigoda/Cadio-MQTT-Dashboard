@@ -1786,6 +1786,20 @@ def _resume_network_pause(auto, rt, now):
 
 
 
+def _emit_mqtt_tx(sess, topic, payload, source="server"):
+    """Mirror a server-originated MQTT publish (watchdog / automation engine) to the
+    user's Developer live feed and Logbook, so outgoing server traffic is visible too
+    (the browser only self-logs commands it sends itself)."""
+    if not sess or not getattr(sess, "room", None):
+        return
+    socketio.emit("mqtt_tx", {
+        "topic": topic,
+        "payload": payload,
+        "source": source,
+        "ts": datetime.utcnow().isoformat() + "Z",
+    }, room=sess.room)
+
+
 def _mqtt_set_switch(cmd_topic, state, auto=None):
     """Publish a command to set a switch state.
     Routes to the owning sess's MQTT client, falls back to global."""
@@ -1798,6 +1812,7 @@ def _mqtt_set_switch(cmd_topic, state, auto=None):
         if sess and sess.mqtt_client and sess.mqtt_connected:
             sess.mqtt_client.publish(cmd_topic, payload)
             logging.info(f"[ENGINE:{owner}] Published {payload} to {cmd_topic}")
+            _emit_mqtt_tx(sess, cmd_topic, payload, source="automation")
             return
     # Legacy fallback
     if mqtt_client and mqtt_connected:
@@ -3147,6 +3162,7 @@ def _engine_loop():
                     if sess.mqtt_client and sess.mqtt_connected:
                         sess.mqtt_client.publish(cmd_topic, json.dumps({"state": toggle_to}))
                         logging.info(f"[WATCHDOG:{email}] Published {toggle_to} to {cmd_topic}")
+                        _emit_mqtt_tx(sess, cmd_topic, json.dumps({"state": toggle_to}), source="watchdog")
                         if sess.room:
                             next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
                             socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(enabled_units)}, room=sess.room)
@@ -3199,6 +3215,7 @@ def _engine_loop():
                                 cmd_topic = topic.rsplit("/", 1)[0] + "/set"
                             sess.mqtt_client.publish(cmd_topic, json.dumps({"state": restore_to}))
                             logging.info(f"[WATCHDOG:{email}] Restored original state {restore_to} to {cmd_topic}")
+                            _emit_mqtt_tx(sess, cmd_topic, json.dumps({"state": restore_to}), source="watchdog")
                         state["restore_state"] = None
                         
                         # A recovered unit must pass several consecutive pings before it counts as truly

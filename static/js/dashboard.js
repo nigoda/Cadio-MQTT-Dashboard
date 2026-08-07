@@ -324,6 +324,17 @@
     updateEntityCount();
   });
 
+  // Server-originated publishes (watchdog pings, automation engine commands) mirrored
+  // here so outgoing server traffic is visible in the Developer feed and Logbook too.
+  socket.on("mqtt_tx", (msg) => {
+    if (!msg || !msg.topic) return;
+    const payloadStr = typeof msg.payload === "object" ? JSON.stringify(msg.payload) : String(msg.payload ?? "");
+    const src = msg.source ? `[${msg.source}] ` : "";
+    addDevLog("TX", msg.topic, src + payloadStr);
+    const ts = msg.ts ? Date.parse(msg.ts) : Date.now();
+    addLogEntry(msg.topic, msg.payload, isNaN(ts) ? Date.now() : ts);
+  });
+
   // -------------------------------------------------------
   // Discovery config → register entity
   // -------------------------------------------------------
@@ -1200,8 +1211,24 @@
   // -------------------------------------------------------
   // Logbook
   // -------------------------------------------------------
+  // Render a timestamp in the viewer's own local timezone. Accepts epoch ms or an
+  // ISO string; a naive (no-tz) string is treated as UTC so all viewers convert to
+  // their respective local time instead of seeing the server's wall-clock digits.
+  function toLocalTime(ts) {
+    if (ts == null) return new Date().toLocaleTimeString();
+    let d;
+    if (typeof ts === "number") {
+      d = new Date(ts);
+    } else {
+      let s = String(ts);
+      if (!s.endsWith("Z") && !/[+-]\d\d:?\d\d$/.test(s)) s += "Z";
+      d = new Date(s);
+    }
+    return isNaN(d.getTime()) ? String(ts) : d.toLocaleTimeString();
+  }
+
   function addLogEntry(topic, payload, ts) {
-    const time = new Date(ts).toLocaleTimeString();
+    const time = toLocalTime(ts);
     const payloadStr = typeof payload === "object" ? JSON.stringify(payload) : String(payload);
     logEntries.unshift({ time, topic, payload: payloadStr });
     if (logEntries.length > MAX_LOG) logEntries.length = MAX_LOG;
