@@ -251,6 +251,7 @@ MAX_AUTO_LOG = 200
 VERIFY_TIMEOUT = 10             # seconds to wait for switch verification
 DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — device was already responding)
 NETWORK_RETRY_DELAY = 120       # seconds (2 min) to wait before retrying a device that won't obey
+WATCHDOG_STABLE_PINGS = 2       # consecutive good pings before a recovered unit is declared online (rejects flapping)
 DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is judged "missing"
 
 # MQTT Watchdog globals
@@ -2190,7 +2191,7 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None, session_
     # surfacing when the next command is sent and its verify times out.
     owner_sess = session_mgr.get_session(auto.get("_owner_email", ""))
     if owner_sess and not owner_sess.mqtt_connected:
-        if state not in ("IDLE", "PAUSED_NETWORK", "ERROR", "ERROR_SET", "ERROR_VERIFY"):
+        if state not in ("IDLE", "PAUSED_NETWORK", "PAUSED_USER", "ERROR", "ERROR_SET", "ERROR_VERIFY"):
             _enter_network_pause(auto, rt, now, state, reason="offline", retry=False)
             if state == "ACTION_RUN":
                 # Re-confirm the switch state the moment the broker link returns.
@@ -2271,8 +2272,9 @@ def engine_tick(auto, sequence_overrides=None, schedule_overrides=None, session_
         _auto_log(auto_id, f"Device(s) reachable → resuming {rt['state']}", "info")
         _emit_auto_update(auto)
         return
-    elif offline_devices and state != "ACTION_RUN":
+    elif offline_devices and state not in ("ACTION_RUN", "PAUSED_USER"):
         # Enter network pause due to an offline device (resume when it returns).
+        # PAUSED_USER is excluded so a user's explicit pause is never overridden.
         # ACTION_RUN is intentionally excluded: it runs its own interval-based
         # liveness check (5/30/60) so it can roll the timer back to the exact check point
         # instead of freezing at the current (later) tick, avoiding lost irrigation time due to MQTT Keep-Alive delay.
@@ -3174,7 +3176,6 @@ def _engine_loop():
                     old_liveness = sess.unit_liveness.get(unit, True)
                     
                     if is_alive:
-                        sess.unit_liveness[unit] = True
                         state["retry_count"] = 0
                         
                         # Restore original state after ping test so switch is not left in toggled state
@@ -3187,8 +3188,19 @@ def _engine_loop():
                             logging.info(f"[WATCHDOG:{email}] Restored original state {restore_to} to {cmd_topic}")
                         state["restore_state"] = None
                         
+                        # A recovered unit must pass several consecutive pings before it counts as truly
+                        # online. A flapping unit keeps verifying in the background (stays offline /
+                        # PAUSED_NETWORK) instead of resume→re-pause churn and repeated notifications.
                         if not old_liveness:
-                            # Unit just came back online via watchdog verification! Resume paused automations
+                            state["alive_streak"] = state.get("alive_streak", 0) + 1
+                            if state["alive_streak"] < WATCHDOG_STABLE_PINGS:
+                                sess.watchdog_state[unit] = state
+                                continue
+                        state["alive_streak"] = 0
+                        sess.unit_liveness[unit] = True
+                        
+                        if not old_liveness:
+                            # Unit just came back online (confirmed stable)! Resume paused automations
                             # BUT only if ALL units used by the automation are alive
                             for auto_id, auto in list(sess.automations.items()):
                                 if auto.get("status") == "ON" and auto.get("runtime", {}).get("state") == "PAUSED_NETWORK":
@@ -3227,6 +3239,7 @@ def _engine_loop():
                             # Unit is DEAD!
                             sess.unit_liveness[unit] = False
                             state["retry_count"] = 0
+                            state["alive_streak"] = 0
                             
                     if old_liveness != sess.unit_liveness[unit] and sess.room:
                         # Liveness changed, broadcast update
@@ -3239,7 +3252,8 @@ def _engine_loop():
                             if auto.get("status") != "ON": continue
                             rt = auto.get("runtime", {})
                             auto_state = rt.get("state", "IDLE")
-                            if auto_state in ("IDLE", "PAUSED_NETWORK", "ERROR", "ERROR_SET", "ERROR_VERIFY"): continue
+                            # PAUSED_USER excluded: a user pause outranks watchdog auto-pause.
+                            if auto_state in ("IDLE", "PAUSED_NETWORK", "PAUSED_USER", "ERROR", "ERROR_SET", "ERROR_VERIFY"): continue
                             
                             # Check if automation uses this unit
                             uses_unit = False
