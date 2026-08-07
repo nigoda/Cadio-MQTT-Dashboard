@@ -60,6 +60,7 @@
   const sensorCharts      = $("#sensor-charts");
   
   window.watchdogs = {};
+  window.watchdogsLoaded = false;   // true once the server has sent the saved watchdogs
   window.unitLiveness = {};
   window.enabledUnits = [];
 
@@ -116,6 +117,7 @@
     } else {
       window.watchdogs = data || {};
     }
+    window.watchdogsLoaded = true;
     renderAll();
   });
   
@@ -646,22 +648,29 @@
       if (switches.length > 0) {
         let currentWatchdog = window.watchdogs[serial];
         
-        // Auto-select the switch ending with _20 if no watchdog is explicitly set
+        // Auto-select the switch ending with _20 ONLY after the server's saved watchdogs
+        // have loaded. Before that, `undefined` doesn't mean "user never set one" — emitting
+        // a default here would overwrite the user's saved choice on reconnect.
         if (currentWatchdog === undefined) {
-          const defaultSwitch = switches.find(s => {
-            const topic = s.cmdTopic || s.stateTopic || "";
-            return topic.endsWith("_20/set") || topic.endsWith("_20");
-          });
-          if (defaultSwitch) {
-            currentWatchdog = defaultSwitch.cmdTopic || defaultSwitch.stateTopic;
-            // Save it back to backend automatically so it persists
-            window.watchdogs[serial] = currentWatchdog;
-            if (window.socket && window.socket.connected) {
-              window.socket.emit("set_watchdog", { unit: serial, topic: currentWatchdog });
+          if (window.watchdogsLoaded) {
+            const defaultSwitch = switches.find(s => {
+              const topic = s.cmdTopic || s.stateTopic || "";
+              return topic.endsWith("_20/set") || topic.endsWith("_20");
+            });
+            if (defaultSwitch) {
+              currentWatchdog = defaultSwitch.cmdTopic || defaultSwitch.stateTopic;
+              // Save it back to backend automatically so it persists
+              window.watchdogs[serial] = currentWatchdog;
+              if (window.socket && window.socket.connected) {
+                window.socket.emit("set_watchdog", { unit: serial, topic: currentWatchdog });
+              }
+            } else {
+               currentWatchdog = 'none';
+               window.watchdogs[serial] = 'none';
             }
           } else {
-             currentWatchdog = 'none';
-             window.watchdogs[serial] = 'none';
+            // Server watchdogs not loaded yet — show 'none' without persisting/emitting.
+            currentWatchdog = 'none';
           }
         }
         
