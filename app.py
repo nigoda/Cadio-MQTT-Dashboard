@@ -541,16 +541,26 @@ def on_message(client, userdata, msg):
             unit = obj_id.split("_")[0]
             
             # Mark unit as online whenever ANY device (including watchdog devices) sends a message
-            was_offline = sess.unit_liveness.get(unit, True) is False
-            sess.unit_liveness[unit] = True
-            
-            if unit in sess.watchdogs and sess.watchdogs[unit] and sess.watchdogs[unit] != 'none':
+            has_watchdog = (unit in sess.watchdogs and sess.watchdogs[unit]
+                            and sess.watchdogs[unit] != 'none')
+
+            if has_watchdog:
+                # Liveness (offline→online) for a watchdog-monitored unit is owned SOLELY by the
+                # active ping/verify cycle (send /set → matching /state). Passive traffic
+                # (/state, /availability, birth msgs) must NOT flip it online or resume
+                # automations, otherwise a flapping unit's stray messages resume between pings.
+                if unit not in sess.unit_liveness:
+                    sess.unit_liveness[unit] = True  # first sighting defaults online
+
                 wd_cmd_topic = sess.watchdogs[unit]
                 wd_parts = wd_cmd_topic.split("/")
                 wd_obj_id = wd_parts[3] if len(wd_parts) >= 4 else ""
-                
-                # Only reset idle timer & update next_pings for non-watchdog messages
-                if obj_id != wd_obj_id and topic.endswith("/state"):
+
+                # Idle optimisation: defer the next active ping while the device is already
+                # chatting — but only when it's currently online. While offline, let the ping
+                # fire promptly so the stability debounce can confirm real recovery.
+                if (obj_id != wd_obj_id and topic.endswith("/state")
+                        and sess.unit_liveness.get(unit, True) is not False):
                     if hasattr(sess, "watchdog_state") and unit in sess.watchdog_state:
                         wd_state = sess.watchdog_state[unit]
                         if not wd_state.get("pending_ping", False):
@@ -558,38 +568,41 @@ def on_message(client, userdata, msg):
                             if sess.room:
                                 next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
                                 socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
-                    
-            if was_offline:
-                # Unit just came back online! Resume paused automations
-                # BUT only if ALL units used by the automation are alive
-                now_ts = time.time()
-                for auto_id, auto in sess.automations.items():
-                    if auto.get("status") == "ON" and auto.get("runtime", {}).get("state") == "PAUSED_NETWORK":
-                        # Check if automation uses this unit
-                        uses_unit = False
-                        all_items = auto.get("actions", []) + auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("schedule", {}).get("setIfTrue", []) + auto.get("schedule", {}).get("setIfFalse", [])
-                        for item in all_items:
-                            ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                            if ctrl and unit in ctrl:
-                                uses_unit = True
-                                break
-                        if not uses_unit:
-                            continue
-                        # Check ALL units used by this automation are alive
-                        all_units_alive = True
-                        for item in all_items:
-                            ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
-                            if ctrl:
-                                ctrl_parts = ctrl.split("/")
-                                if len(ctrl_parts) >= 4:
-                                    other_unit = ctrl_parts[3].split("_")[0]
-                                    if sess.unit_liveness.get(other_unit, True) is False:
-                                        all_units_alive = False
-                                        break
-                        if all_units_alive:
-                            _resume_network_pause(auto, auto["runtime"], now_ts)
-                            _auto_log(auto_id, f"Unit {unit} recovered. Resuming automation \u2192 {auto['runtime']['state']}", "info")
-                            _emit_auto_update(auto)
+            else:
+                # No watchdog configured: passive traffic is the only liveness signal we have.
+                was_offline = sess.unit_liveness.get(unit, True) is False
+                sess.unit_liveness[unit] = True
+                if was_offline:
+                    # Unit just came back online! Resume paused automations
+                    # BUT only if ALL units used by the automation are alive
+                    now_ts = time.time()
+                    for auto_id, auto in sess.automations.items():
+                        if auto.get("status") == "ON" and auto.get("runtime", {}).get("state") == "PAUSED_NETWORK":
+                            # Check if automation uses this unit
+                            uses_unit = False
+                            all_items = auto.get("actions", []) + auto.get("initialization", []) + auto.get("deinitialization", []) + auto.get("schedule", {}).get("setIfTrue", []) + auto.get("schedule", {}).get("setIfFalse", [])
+                            for item in all_items:
+                                ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                if ctrl and unit in ctrl:
+                                    uses_unit = True
+                                    break
+                            if not uses_unit:
+                                continue
+                            # Check ALL units used by this automation are alive
+                            all_units_alive = True
+                            for item in all_items:
+                                ctrl = item.get("switchCmdTopic", "") or item.get("switchStateTopic", "")
+                                if ctrl:
+                                    ctrl_parts = ctrl.split("/")
+                                    if len(ctrl_parts) >= 4:
+                                        other_unit = ctrl_parts[3].split("_")[0]
+                                        if sess.unit_liveness.get(other_unit, True) is False:
+                                            all_units_alive = False
+                                            break
+                            if all_units_alive:
+                                _resume_network_pause(auto, auto["runtime"], now_ts)
+                                _auto_log(auto_id, f"Unit {unit} recovered. Resuming automation \u2192 {auto['runtime']['state']}", "info")
+                                _emit_auto_update(auto)
 
         # 3. Handle Sensor History (if payload is numeric)
         if isinstance(payload, (int, float)):
