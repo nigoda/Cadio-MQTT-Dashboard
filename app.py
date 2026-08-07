@@ -253,6 +253,8 @@ DRIFT_VERIFY_TIMEOUT = 3        # seconds for drift correction (shorter — devi
 NETWORK_RETRY_DELAY = 120       # seconds (2 min) to wait before retrying a device that won't obey
 WATCHDOG_STABLE_PINGS = 2       # consecutive good pings before a recovered unit is declared online (rejects flapping)
 DISCOVERY_GRACE = 45            # seconds after MQTT connect before a device is judged "missing"
+# How often the watchdog pings each enabled unit. Change here (or set WATCHDOG_PING_INTERVAL in .env) to use something other than 60s.
+WATCHDOG_PING_INTERVAL = int(os.getenv("WATCHDOG_PING_INTERVAL", 60))  # seconds between watchdog pings
 
 # MQTT Watchdog globals
 _mqtt_last_connected_time = time.time()
@@ -522,7 +524,7 @@ def on_message(client, userdata, msg):
                     if cmd_topic:
                         sess.watchdogs[unit] = cmd_topic
                         _db.set_watchdogs(owner_email, sess.watchdogs)
-                        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+                        next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
                         socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
                 elif unit not in sess.watchdogs and unit in saved_watchdogs:
                     # Session memory is empty but DB has a saved choice — restore it silently
@@ -566,7 +568,7 @@ def on_message(client, userdata, msg):
                         if not wd_state.get("pending_ping", False):
                             wd_state["last_ping"] = time.time()
                             if sess.room:
-                                next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                                next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
                                 socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
             else:
                 # No watchdog configured: passive traffic is the only liveness signal we have.
@@ -1132,7 +1134,7 @@ def handle_login(data):
         for auto in db.load_automations(email):
             logs = getattr(existing_sess, "auto_logs", {}).get(auto["id"], [])
             emit("automation_update", {"automation": auto, "logs": logs})
-        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(existing_sess, "watchdog_state", {}).items() if existing_sess.watchdogs.get(u) != 'none'}
+        next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in getattr(existing_sess, "watchdog_state", {}).items() if existing_sess.watchdogs.get(u) != 'none'}
         emit("watchdogs_update", {"watchdogs": existing_sess.watchdogs, "liveness": getattr(existing_sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(existing_sess))})
         _emit_admin_stats()
         return
@@ -1178,7 +1180,7 @@ def handle_login(data):
     for auto in db.load_automations(email):
         logs = getattr(sess, "auto_logs", {}).get(auto["id"], [])
         emit("automation_update", {"automation": auto, "logs": logs})
-    next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+    next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
     emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))})
 
     _emit_admin_stats()
@@ -1198,7 +1200,7 @@ def handle_set_watchdog(data):
         
     import db
     db.set_watchdogs(sess.email, sess.watchdogs)
-    next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+    next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
     socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
 
 
@@ -3111,7 +3113,7 @@ def _engine_loop():
             # If enabled_units changed (e.g. an automation finished deinit and went IDLE), notify frontend
             last_enabled = getattr(sess, "last_enabled_units", None)
             if last_enabled is not None and enabled_units != last_enabled and sess.room:
-                next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
                 socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(enabled_units)}, room=sess.room)
             sess.last_enabled_units = set(enabled_units)
                 
@@ -3129,7 +3131,7 @@ def _engine_loop():
                     sess.watchdog_state[unit] = state
                 last_ping = state.get("last_ping", 0)
                 
-                if now - last_ping >= 60 and not state.get("pending_ping", False):
+                if now - last_ping >= WATCHDOG_PING_INTERVAL and not state.get("pending_ping", False):
                     # Time to ping this unit
                     # Toggle state ON -> OFF -> ON based on last known payload
                     current_payload = "off"
@@ -3164,7 +3166,7 @@ def _engine_loop():
                         logging.info(f"[WATCHDOG:{email}] Published {toggle_to} to {cmd_topic}")
                         _emit_mqtt_tx(sess, cmd_topic, json.dumps({"state": toggle_to}), source="watchdog")
                         if sess.room:
-                            next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                            next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
                             socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(enabled_units)}, room=sess.room)
                             logging.info(f"[WATCHDOG:{email}] Emitted next_pings to room {sess.room}")
                         else:
@@ -3273,7 +3275,7 @@ def _engine_loop():
                             
                     if old_liveness != sess.unit_liveness[unit] and sess.room:
                         # Liveness changed, broadcast update
-                        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
+                        next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in sess.watchdog_state.items() if sess.watchdogs.get(u) != 'none'}
                         socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(enabled_units)}, room=sess.room)
                         
                     if not sess.unit_liveness[unit]:
@@ -3984,7 +3986,7 @@ def handle_toggle_automation(data):
     
     # Notify frontend about changed enabled_units so watchdog UI updates immediately
     if sess.room:
-        next_pings = {u: s.get("last_ping", 0) + 60 for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
+        next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
         socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
 
 
