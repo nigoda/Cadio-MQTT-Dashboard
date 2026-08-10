@@ -6,10 +6,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Nivixsa — Home</title>
     <link rel="stylesheet" href="/static/css/style.css?v={{ cache_bust }}">
-    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-    <script
-        src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <!-- Vendored locally (was cdn.socket.io / cdn.jsdelivr.net). Some networks
+         cannot reach those CDNs; socket.io stalling leaves the whole app dead,
+         because the login -> dashboard flow runs entirely on Socket.IO. -->
+    <script src="/static/vendor/socket.io.min.js"></script>
+    <script src="/static/vendor/chart.umd.min.js"></script>
+    <script src="/static/vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Symbols+Outlined" rel="stylesheet">
     <link rel="icon" type="image/png" href="/static/logo_new.png">

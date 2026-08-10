@@ -1,5 +1,7 @@
 // Nivixsa PWA Service Worker
-const CACHE_NAME = 'nivixsa-v3';
+// Bumped to v4: vendor JS moved from external CDNs to /static/vendor/, so the
+// old cached shell (which pointed at cdn.socket.io) must be discarded.
+const CACHE_NAME = 'nivixsa-v4';
 
 // Assets to cache for offline shell
 const PRECACHE_ASSETS = [
