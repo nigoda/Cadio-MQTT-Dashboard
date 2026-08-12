@@ -30,13 +30,61 @@
   const loginPass    = $("#login-password");
   const loginError   = $("#login-error");
   const appEl        = $("#app");
+  const bootOverlay  = $("#boot-overlay");
+  const bootStatus   = $("#boot-status");
+
+  let authResolved = false;
+  let loginAttempted = false;
+
+  const hideBootOverlay = () => {
+    if (bootOverlay) bootOverlay.classList.add("hidden");
+  };
+
+  const showBootOverlay = (message) => {
+    if (bootStatus && message) bootStatus.textContent = message;
+    if (bootOverlay) bootOverlay.classList.remove("hidden");
+  };
+
+  const revealLoginOverlay = (errorMessage = "") => {
+    authResolved = true;
+    hideBootOverlay();
+    if (appEl) appEl.classList.add("hidden");
+    if (loginOverlay) loginOverlay.classList.remove("hidden");
+    if (errorMessage && loginError) {
+      loginError.textContent = errorMessage;
+      loginError.style.color = "";
+      loginError.classList.remove("hidden");
+    }
+    const loginBtn = document.getElementById("login-submit-btn");
+    if (loginBtn) {
+      loginBtn.disabled = false;
+      loginBtn.textContent = "Log In";
+    }
+  };
+
+  const getPreferredCredentials = () => {
+    // Priority 1: server-provided credentials (admin impersonation)
+    const formEmail = (loginEmail && loginEmail.value ? loginEmail.value.trim() : "");
+    const formPass = (loginPass && loginPass.value ? loginPass.value : "");
+    if (formEmail && formPass) {
+      return { email: formEmail, pass: formPass, source: "form" };
+    }
+
+    // Priority 2: previously saved local credentials
+    const savedEmail = localStorage.getItem("cadio_email") || "";
+    const savedPass = localStorage.getItem("cadio_pass") || "";
+    if (savedEmail && savedPass) {
+      if (loginEmail) loginEmail.value = savedEmail;
+      return { email: savedEmail, pass: savedPass, source: "local" };
+    }
+    return null;
+  };
 
   // Parse redirect messages (e.g. from global logout redirect)
   const urlParams = new URLSearchParams(window.location.search);
   const msg = urlParams.get("msg");
   if (msg && loginError) {
-    loginError.textContent = msg;
-    loginError.classList.remove("hidden");
+    revealLoginOverlay(msg);
     // Clean up url parameters
     window.history.replaceState({}, document.title, window.location.pathname);
   }
@@ -94,12 +142,23 @@
 
   // Re-login automatically on connection or re-connection
   socket.on("connect", () => {
-    console.log("[SOCKET] Connected/Reconnected. Sending login authentication...");
-    const savedEmail = localStorage.getItem("cadio_email") || loginEmail.value;
-    const savedPass = localStorage.getItem("cadio_pass") || loginPass.value;
-    if (savedEmail && savedPass) {
-      socket.emit("login", { email: savedEmail, password: savedPass, auto: true, token: localStorage.getItem("cadio_session_token") });
+    const creds = getPreferredCredentials();
+    if (!creds) {
+      if (!authResolved) revealLoginOverlay();
+      return;
     }
+
+    loginAttempted = true;
+    if (!authResolved || (loginOverlay && !loginOverlay.classList.contains("hidden"))) {
+      showBootOverlay("Signing in securely...");
+    }
+    console.log("[SOCKET] Connected/Reconnected. Sending login authentication...");
+    socket.emit("login", {
+      email: creds.email,
+      password: creds.pass,
+      auto: true,
+      token: localStorage.getItem("cadio_session_token")
+    });
   });
 
   // Store the per-device session token so refreshes/reconnects reuse the same
@@ -166,34 +225,11 @@
     // Store credentials for auto-reconnect on page refresh
     localStorage.setItem("cadio_email", email);
     localStorage.setItem("cadio_pass", pass);
+    loginAttempted = true;
+    showBootOverlay("Signing in securely...");
+    if (loginOverlay) loginOverlay.classList.add("hidden");
     socket.emit("login", { email, password: pass, token: localStorage.getItem("cadio_session_token") });
   });
-
-  // Auto-login from localStorage on page load / reconnect
-  (function autoLogin() {
-    // Priority 1: pre-filled fields (impersonation)
-    if (loginEmail.value && loginPass.value) {
-      console.log("[DASHBOARD] Auto-logging in via impersonation...");
-      if (loginSubmitBtn) {
-        loginSubmitBtn.disabled = true;
-        loginSubmitBtn.textContent = "Logging In...";
-      }
-      socket.emit("login", { email: loginEmail.value, password: loginPass.value, token: localStorage.getItem("cadio_session_token") });
-      return;
-    }
-    // Priority 2: saved credentials
-    const savedEmail = localStorage.getItem("cadio_email");
-    const savedPass = localStorage.getItem("cadio_pass");
-    if (savedEmail && savedPass) {
-      console.log("[DASHBOARD] Auto-logging in from saved session...");
-      loginEmail.value = savedEmail;
-      if (loginSubmitBtn) {
-        loginSubmitBtn.disabled = true;
-        loginSubmitBtn.textContent = "Logging In...";
-      }
-      socket.emit("login", { email: savedEmail, password: savedPass, auto: true, token: localStorage.getItem("cadio_session_token") });
-    }
-  })();
 
   // -------------------------------------------------------
   // Security Handshake
@@ -206,6 +242,8 @@
 
   socket.on("force_logout", (data) => {
     // 1. Instantly hide app dashboard and show login overlay
+    authResolved = true;
+    hideBootOverlay();
     if (appEl) appEl.classList.add("hidden");
     if (loginOverlay) loginOverlay.classList.remove("hidden");
 
@@ -241,6 +279,9 @@
     if (statusText) statusText.textContent = data.message || (connected ? "Connected" : "Disconnected");
 
     if (connected && data.message === "Connected") {
+      authResolved = true;
+      loginAttempted = false;
+      hideBootOverlay();
       loginOverlay.classList.add("hidden");
       appEl.classList.remove("hidden");
 
@@ -270,9 +311,16 @@
         setTimeout(() => { try { requestUserSessions(); } catch (e) {} }, 300);
       }
     }
-    if (!connected && data.message && !loginOverlay.classList.contains("hidden")) {
+    if (!connected && data.message) {
       const msg = data.message.toLowerCase();
-      if (msg === "not connected") return; // Ignore initial socket handshake on login screen
+      if (msg === "not connected") {
+        // Initial handshake: if we have no credentials, show login immediately.
+        // If login was attempted in the background, keep loader visible.
+        if (!loginAttempted && !getPreferredCredentials()) {
+          revealLoginOverlay();
+        }
+        return;
+      }
 
       const loginBtn = document.getElementById("login-submit-btn");
       if (loginBtn) {
@@ -281,20 +329,20 @@
       }
 
       if (msg.includes("account blocked")) {
-        loginError.textContent = "⚠️ Your CADIO account has been temporarily blocked. Please wait and try again later.";
+        revealLoginOverlay("⚠️ Your CADIO account has been temporarily blocked. Please wait and try again later.");
         loginError.style.color = "#e67e22";
         localStorage.removeItem("cadio_email");
         localStorage.removeItem("cadio_pass");
       } else if (msg.includes("bad credentials") || msg.includes("not authorised") || msg.includes("cadio login failed")) {
-        loginError.textContent = "❌ Invalid email or password. Please check your CADIO credentials.";
+        revealLoginOverlay("❌ Invalid email or password. Please check your CADIO credentials.");
         loginError.style.color = "";
         localStorage.removeItem("cadio_email");
         localStorage.removeItem("cadio_pass");
       } else {
-        loginError.textContent = data.message;
+        revealLoginOverlay(data.message);
         loginError.style.color = "";
       }
-      loginError.classList.remove("hidden");
+      loginAttempted = false;
     }
   });
 

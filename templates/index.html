@@ -93,6 +93,18 @@
     <!-- Toast container for PWA/system notifications -->
     <div id="toast-container"></div>
 
+    <!-- Startup overlay shown while checking saved credentials in the background -->
+    <div id="boot-overlay" class="ha-boot-overlay">
+        <div class="ha-boot-card">
+            <img src="/static/logo_new.png" alt="Nivixsa" class="ha-boot-logo">
+            <h1>Nivixsa</h1>
+            <p id="boot-status" class="ha-boot-status">Checking your session...</p>
+            <div class="ha-boot-progress-track">
+                <div class="ha-boot-progress-bar"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Custom Confirmation Modal -->
     <div id="ha-confirm-modal" class="ha-modal-overlay" style="display:none">
         <div class="ha-modal-content">
@@ -115,7 +127,7 @@
     </div>
 
     <!-- ===== Login Overlay ===== -->
-    <div id="login-overlay" class="ha-login-overlay">
+    <div id="login-overlay" class="ha-login-overlay hidden">
         <div class="ha-login-card">
             <div class="ha-login-icon">
                 <img src="/static/logo_new.png" alt="Nivixsa" class="ha-logo-img">
