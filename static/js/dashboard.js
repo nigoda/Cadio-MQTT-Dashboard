@@ -32,6 +32,9 @@
   const appEl        = $("#app");
   const bootOverlay  = $("#boot-overlay");
   const bootStatus   = $("#boot-status");
+  const networkNotice = $("#network-notice");
+  const networkNoticeText = $("#network-notice-text");
+  const networkRefreshBtn = $("#network-refresh-btn");
 
   let authResolved = false;
   let loginAttempted = false;
@@ -54,7 +57,11 @@
     if (!startupTimeoutId) {
       startupTimeoutId = setTimeout(() => {
         if (!authResolved) {
-          revealLoginOverlay("Unable to reach the server. Please check your connection and try again.");
+          if (isOffline()) {
+            showNoInternetState();
+          } else {
+            revealLoginOverlay("Unable to reach the server. Please check your connection and try again.");
+          }
         }
       }, STARTUP_TIMEOUT_MS);
     }
@@ -95,6 +102,25 @@
     return null;
   };
 
+  const showNetworkNotice = (text) => {
+    if (networkNoticeText && text) networkNoticeText.textContent = text;
+    if (networkNotice) networkNotice.classList.remove("hidden");
+  };
+
+  const hideNetworkNotice = () => {
+    if (networkNotice) networkNotice.classList.add("hidden");
+  };
+
+  const isOffline = () => (typeof navigator !== "undefined" && navigator.onLine === false);
+
+  const showNoInternetState = () => {
+    showNetworkNotice("No internet connection. Please reconnect and refresh.");
+    revealLoginOverlay("No internet connection. Please reconnect and try again.");
+    if (loginError) {
+      loginError.style.color = "#e67e22";
+    }
+  };
+
   // Safety net: if all layers are hidden, recover to login instead of blank page.
   const ensureVisibleScreen = () => {
     const bootHidden = !bootOverlay || bootOverlay.classList.contains("hidden");
@@ -105,6 +131,19 @@
     }
   };
   setInterval(ensureVisibleScreen, 1500);
+
+  if (networkRefreshBtn) {
+    networkRefreshBtn.addEventListener("click", () => {
+      window.location.reload();
+    });
+  }
+
+  // Initialize a visible startup state even before socket callbacks fire.
+  if (isOffline()) {
+    showNoInternetState();
+  } else {
+    showBootOverlay("Checking your session...");
+  }
 
   // Parse redirect messages (e.g. from global logout redirect)
   const urlParams = new URLSearchParams(window.location.search);
@@ -168,13 +207,42 @@
 
   socket.on("connect_error", () => {
     if (!authResolved) {
-      revealLoginOverlay("Connection error. Please refresh or try again.");
+      if (isOffline()) {
+        showNoInternetState();
+      } else {
+        revealLoginOverlay("Connection error. Please refresh or try again.");
+      }
+    } else if (isOffline()) {
+      showNetworkNotice("No internet connection. Live updates are paused.");
     }
   });
 
   socket.on("reconnect_error", () => {
     if (!authResolved) {
-      revealLoginOverlay("Reconnection failed. Please refresh or log in again.");
+      if (isOffline()) {
+        showNoInternetState();
+      } else {
+        revealLoginOverlay("Reconnection failed. Please refresh or log in again.");
+      }
+    } else if (isOffline()) {
+      showNetworkNotice("No internet connection. Live updates are paused.");
+    }
+  });
+
+  window.addEventListener("offline", () => {
+    if (authResolved) {
+      showNetworkNotice("No internet connection. Live updates are paused.");
+    } else {
+      showNoInternetState();
+    }
+  });
+
+  window.addEventListener("online", () => {
+    hideNetworkNotice();
+    if (!authResolved && loginError) {
+      loginError.textContent = "Back online. You can log in now.";
+      loginError.style.color = "#4caf50";
+      loginError.classList.remove("hidden");
     }
   });
 
@@ -254,6 +322,11 @@
     loginError.classList.add("hidden");
     const email = loginEmail.value;
     const pass = loginPass.value;
+
+    if (isOffline()) {
+      showNoInternetState();
+      return;
+    }
     
     if (loginSubmitBtn) {
       loginSubmitBtn.disabled = true;
@@ -320,6 +393,7 @@
       authResolved = true;
       loginAttempted = false;
       hideBootOverlay();
+      hideNetworkNotice();
       loginOverlay.classList.add("hidden");
       appEl.classList.remove("hidden");
 

@@ -93,6 +93,12 @@
     <!-- Toast container for PWA/system notifications -->
     <div id="toast-container"></div>
 
+    <!-- Global network notice (used before and after login) -->
+    <div id="network-notice" class="ha-network-notice hidden" role="status" aria-live="polite">
+        <div class="ha-network-notice-text" id="network-notice-text">No internet connection.</div>
+        <button id="network-refresh-btn" type="button" class="ha-network-refresh-btn">Refresh</button>
+    </div>
+
     <!-- Startup overlay shown while checking saved credentials in the background -->
     <div id="boot-overlay" class="ha-boot-overlay">
         <div class="ha-boot-card">

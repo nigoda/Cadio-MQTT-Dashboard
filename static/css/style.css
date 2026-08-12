@@ -42,6 +42,42 @@ body {
 
 .hidden { display: none !important; }
 
+.ha-network-notice {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2300;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: #ffe7c2;
+    color: #3a2605;
+    border: 1px solid #f0b35d;
+    border-radius: 10px;
+    padding: 10px 12px;
+    box-shadow: 0 8px 22px rgba(0,0,0,.25);
+    width: min(94vw, 560px);
+}
+.ha-network-notice-text {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 500;
+}
+.ha-network-refresh-btn {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    background: #0f5f81;
+    color: #fff;
+}
+.ha-network-refresh-btn:hover {
+    background: #0b4f6c;
+}
+
 /* ===========================
    Startup Session Check
    =========================== */
