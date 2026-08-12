@@ -35,14 +35,29 @@
 
   let authResolved = false;
   let loginAttempted = false;
+  let startupTimeoutId = null;
+  const STARTUP_TIMEOUT_MS = 12000;
 
   const hideBootOverlay = () => {
     if (bootOverlay) bootOverlay.classList.add("hidden");
+    if (startupTimeoutId) {
+      clearTimeout(startupTimeoutId);
+      startupTimeoutId = null;
+    }
   };
 
   const showBootOverlay = (message) => {
     if (bootStatus && message) bootStatus.textContent = message;
     if (bootOverlay) bootOverlay.classList.remove("hidden");
+
+    // Never allow the startup UI to hang forever if socket/auth is unreachable.
+    if (!startupTimeoutId) {
+      startupTimeoutId = setTimeout(() => {
+        if (!authResolved) {
+          revealLoginOverlay("Unable to reach the server. Please check your connection and try again.");
+        }
+      }, STARTUP_TIMEOUT_MS);
+    }
   };
 
   const revealLoginOverlay = (errorMessage = "") => {
@@ -79,6 +94,17 @@
     }
     return null;
   };
+
+  // Safety net: if all layers are hidden, recover to login instead of blank page.
+  const ensureVisibleScreen = () => {
+    const bootHidden = !bootOverlay || bootOverlay.classList.contains("hidden");
+    const loginHidden = !loginOverlay || loginOverlay.classList.contains("hidden");
+    const appHidden = !appEl || appEl.classList.contains("hidden");
+    if (bootHidden && loginHidden && appHidden) {
+      revealLoginOverlay("Please log in to continue.");
+    }
+  };
+  setInterval(ensureVisibleScreen, 1500);
 
   // Parse redirect messages (e.g. from global logout redirect)
   const urlParams = new URLSearchParams(window.location.search);
@@ -139,6 +165,18 @@
   // strands clients on WS-hostile networks with no fallback. See docs/HANDOFF.md.
   const socket = io();
   window.socket = socket; // Expose for other JS files (automation.js, settings.js)
+
+  socket.on("connect_error", () => {
+    if (!authResolved) {
+      revealLoginOverlay("Connection error. Please refresh or try again.");
+    }
+  });
+
+  socket.on("reconnect_error", () => {
+    if (!authResolved) {
+      revealLoginOverlay("Reconnection failed. Please refresh or log in again.");
+    }
+  });
 
   // Re-login automatically on connection or re-connection
   socket.on("connect", () => {

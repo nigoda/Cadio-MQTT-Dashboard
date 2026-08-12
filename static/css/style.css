@@ -48,7 +48,7 @@ body {
 .ha-boot-overlay {
     position: fixed;
     inset: 0;
-    background: radial-gradient(circle at 20% 20%, #232323 0%, var(--ha-bg) 55%);
+    background: radial-gradient(circle at 18% 20%, #103a4d 0%, #0d2430 45%, #0b1820 100%);
     display: flex;
     align-items: center;
     justify-content: center;
