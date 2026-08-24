@@ -515,20 +515,29 @@ def on_message(client, userdata, msg):
             # We check the DB directly to avoid race conditions during MQTT reconnect
             # where sess.watchdogs might be temporarily empty/reloading,
             # which was causing user's manual watchdog selection to be silently overwritten.
-            if obj_id.endswith("_20"):
+            # obj_id/unit are parsed further down (section 3), which is AFTER this
+            # block -- referencing them here raised UnboundLocalError on every
+            # discovery /config message, aborting the handler before liveness was
+            # updated and meaning this auto-assignment never actually ran.
+            # Derive them locally from the config topic instead.
+            _cfg_parts = topic.split("/")
+            _cfg_obj_id = _cfg_parts[3] if len(_cfg_parts) >= 4 else ""
+            _cfg_unit = _cfg_obj_id.split("_")[0]
+
+            if _cfg_obj_id.endswith("_20"):
                 import db as _db
                 saved_watchdogs = _db.get_watchdogs(owner_email)
                 # Only auto-assign if neither the in-memory session nor the DB has a saved choice
-                if unit not in sess.watchdogs and unit not in saved_watchdogs:
+                if _cfg_unit not in sess.watchdogs and _cfg_unit not in saved_watchdogs:
                     cmd_topic = payload.get("command_topic") or payload.get("state_topic")
                     if cmd_topic:
-                        sess.watchdogs[unit] = cmd_topic
+                        sess.watchdogs[_cfg_unit] = cmd_topic
                         _db.set_watchdogs(owner_email, sess.watchdogs)
                         next_pings = {u: s.get("last_ping", 0) + WATCHDOG_PING_INTERVAL for u, s in getattr(sess, "watchdog_state", {}).items() if sess.watchdogs.get(u) != 'none'}
                         socketio.emit("watchdogs_update", {"watchdogs": sess.watchdogs, "liveness": getattr(sess, "unit_liveness", {}), "next_pings": next_pings, "enabled_units": list(_get_enabled_auto_units(sess))}, room=sess.room)
-                elif unit not in sess.watchdogs and unit in saved_watchdogs:
+                elif _cfg_unit not in sess.watchdogs and _cfg_unit in saved_watchdogs:
                     # Session memory is empty but DB has a saved choice — restore it silently
-                    sess.watchdogs[unit] = saved_watchdogs[unit]
+                    sess.watchdogs[_cfg_unit] = saved_watchdogs[_cfg_unit]
 
 
             
