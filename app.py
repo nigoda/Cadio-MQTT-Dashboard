@@ -1778,6 +1778,16 @@ def _resume_network_pause(auto, rt, now):
     else:
         rt.pop("isNetworkRetry", None)
         
+    # _enter_network_pause() cleared verifyStart. Every *_VERIFY handler gates its
+    # timeout on `now - (rt.get("verifyStart") or now) > TIMEOUT`, which evaluates
+    # to 0 forever while verifyStart is None -- so a verify state resumed from a
+    # network pause could never time out, never retry and never re-pause. The
+    # automation sat silently in that state until the user toggled it off and on.
+    # Restart the verify window from the moment we resume.
+    if "VERIFY" in resume_state:
+        rt["verifyStart"] = now
+        rt["retryCount"] = 0
+
     if rt.get("remainingTime") is not None:
         rt["timerStart"] = now
     if rt.get("remainingBuffer") is not None:
